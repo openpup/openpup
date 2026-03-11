@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>openpup console</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; }
+      header { padding: 12px 16px; border-bottom: 1px solid rgba(127,127,127,.3); display:flex; gap:12px; align-items:center; }
+      header .spacer { flex: 1; }
+      main { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 54px); }
+      .panel { padding: 12px 16px; border-right: 1px solid rgba(127,127,127,.2); overflow: auto; }
+      .panel:last-child { border-right: none; }
+      label { display:block; font-size: 12px; opacity:.8; margin-top: 10px; }
+      input, textarea, button { width: 100%; box-sizing: border-box; padding: 8px; margin-top: 6px; border-radius: 8px; border: 1px solid rgba(127,127,127,.35); background: transparent; }
+      textarea { min-height: 90px; resize: vertical; }
+      button { cursor: pointer; }
+      .row { display:flex; gap:10px; }
+      .row > * { flex:1; }
+      .log { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+      .event { padding: 10px 12px; border: 1px solid rgba(127,127,127,.25); border-radius: 10px; margin-bottom: 10px; }
+      .event .meta { font-size: 11px; opacity: .75; margin-bottom: 6px; }
+      .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; border:1px solid rgba(127,127,127,.35); margin-right:8px; font-size: 11px; }
+      .muted { opacity:.75; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>openpup console</strong>
+      <span class="muted" id="connStatus">disconnected</span>
+      <span class="spacer"></span>
+      <button id="btnConnect" style="width:auto;padding:8px 12px;">Connect</button>
+    </header>
+    <main>
+      <section class="panel">
+        <div class="row">
+          <div>
+            <label>Gateway URL (WS)</label>
+            <input id="wsUrl" value="ws://127.0.0.1:8787/ws" />
+          </div>
+        </div>
+
+        <label>Auth token (optional)</label>
+        <input id="authToken" placeholder="Only needed if gateway requires auth" />
+
+        <label>Session ID</label>
+        <input id="sessionId" value="cli" />
+
+        <label>Topics (comma-separated)</label>
+        <input id="topics" value="session/cli" />
+
+        <div class="row" style="margin-top:10px;">
+          <button id="btnSubscribe">Subscribe</button>
+          <button id="btnClear">Clear</button>
+        </div>
+
+        <label>SendMessage input</label>
+        <textarea id="msgInput" placeholder="Type a message for the kernel..."></textarea>
+        <button id="btnSend">SendMessage</button>
+
+        <label>Orchestrate goal</label>
+        <textarea id="goalInput" placeholder="Describe a goal for Planner-Executor..."></textarea>
+        <label>Agents (comma-separated; empty = all registered)</label>
+        <input id="agents" placeholder="researcher,writer" />
+        <button id="btnOrchestrate">Orchestrate</button>
+      </section>
+
+      <section class="panel">
+        <div class="row" style="align-items:center;">
+          <div class="badge">Events</div>
+          <div class="muted" id="lastEvent">—</div>
+        </div>
+        <div id="events" class="log" style="margin-top:12px;"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+

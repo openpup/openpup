@@ -1,0 +1,26 @@
+[package]
+name = "openpup"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "openpup – your open little pup, created by you"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting", "macros"] }
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros", "sync", "net"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
+rss = "2"
+imap = "2"
+native-tls = "0.2"
+ical = "0.11"
+rusqlite = "0.31"
+axum = { version = "0.7", features = ["json", "ws"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
