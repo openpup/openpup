@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::config::{OpenpupConfig, ToolExposeConfig};
 use crate::core::memory;
-use crate::core::runtime_audit;
 use crate::core::registry;
+use crate::core::runtime_audit;
 use crate::core::workspace;
 use crate::tools::integrations::{caldav, email_imap, home_assistant, market};
 use anyhow::{Context, Result};
@@ -368,7 +368,12 @@ pub fn execute_tool(
                     error: Some("spawn.mode is disabled; cannot register sub-agent from agent. Set autonomy.spawn.mode in config to allow.".to_string()),
                 };
             }
-            let name = call.args.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let name = call
+                .args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
             if name.is_empty() {
                 return ToolResult {
                     ok: false,
@@ -378,8 +383,16 @@ pub fn execute_tool(
             }
             let spec = registry::SubAgentSpec {
                 name,
-                model: call.args.get("model").and_then(|v| v.as_str()).map(String::from),
-                persona: call.args.get("persona").and_then(|v| v.as_str()).map(String::from),
+                model: call
+                    .args
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                persona: call
+                    .args
+                    .get("persona")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             };
             match registry::register_sub_agent(spec) {
                 Ok(()) => {
@@ -429,7 +442,12 @@ pub fn execute_tool(
                     error: Some("spawn.mode is disabled; cannot register node from agent. Set autonomy.spawn.mode in config to allow.".to_string()),
                 };
             }
-            let name = call.args.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let name = call
+                .args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
             if name.is_empty() {
                 return ToolResult {
                     ok: false,
@@ -439,7 +457,11 @@ pub fn execute_tool(
             }
             let info = registry::NodeInfo {
                 name,
-                host: call.args.get("host").and_then(|v| v.as_str()).map(String::from),
+                host: call
+                    .args
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 tags: Vec::new(),
                 last_seen_ts: memory::now_unix_ts(),
                 status: "registered".to_string(),
@@ -489,7 +511,9 @@ pub fn execute_tool(
             ToolResult {
                 ok: false,
                 value: None,
-                error: Some("invoke_sub_agent must be dispatched by agent runtime (internal)".to_string()),
+                error: Some(
+                    "invoke_sub_agent must be dispatched by agent runtime (internal)".to_string(),
+                ),
             }
         }
         ToolKind::InvokeNodeTool => {
@@ -505,9 +529,21 @@ pub fn execute_tool(
                     };
                 }
             };
-            let node_name = call.args.get("node").and_then(|v| v.as_str()).unwrap_or_default();
-            let tool_name = call.args.get("tool").and_then(|v| v.as_str()).unwrap_or_default();
-            let tool_args = call.args.get("args").cloned().unwrap_or_else(|| serde_json::json!({}));
+            let node_name = call
+                .args
+                .get("node")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let tool_name = call
+                .args
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let tool_args = call
+                .args
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
             if node_name.is_empty() {
                 return ToolResult {
                     ok: false,
@@ -600,7 +636,11 @@ pub fn execute_tool(
             ev.tools.push(runtime_audit::RuntimeAuditToolCall {
                 name: "l3_log_decision".to_string(),
                 level: "L3".to_string(),
-                args_digest: Some(format!("summary_len={},details={}", summary.len(), details.is_some())),
+                args_digest: Some(format!(
+                    "summary_len={},details={}",
+                    summary.len(),
+                    details.is_some()
+                )),
             });
             ev.risk = runtime_audit::RuntimeAuditRisk::default();
 
@@ -651,7 +691,9 @@ pub fn execute_tool(
                 return ToolResult {
                     ok: false,
                     value: None,
-                    error: Some("args.key and args.status are required for l3_update_progress".to_string()),
+                    error: Some(
+                        "args.key and args.status are required for l3_update_progress".to_string(),
+                    ),
                 };
             }
 
@@ -666,7 +708,12 @@ pub fn execute_tool(
             ev.tools.push(runtime_audit::RuntimeAuditToolCall {
                 name: "l3_update_progress".to_string(),
                 level: "L3".to_string(),
-                args_digest: Some(format!("key={},status_len={},meta={}", key, status.len(), meta.is_some())),
+                args_digest: Some(format!(
+                    "key={},status_len={},meta={}",
+                    key,
+                    status.len(),
+                    meta.is_some()
+                )),
             });
             ev.risk = runtime_audit::RuntimeAuditRisk::default();
 
@@ -800,7 +847,8 @@ pub fn execute_tool(
                     ok: false,
                     value: None,
                     error: Some(
-                        "args.id and args.status are required for l3_update_todo_status".to_string(),
+                        "args.id and args.status are required for l3_update_todo_status"
+                            .to_string(),
                     ),
                 };
             }
@@ -895,7 +943,9 @@ pub fn execute_tool(
                         value: None,
                         error: Some(format!(
                             "composite tool {} step {} failed: {:?}",
-                            id, idx + 1, sub_res.error
+                            id,
+                            idx + 1,
+                            sub_res.error
                         )),
                     };
                 }
@@ -958,7 +1008,11 @@ pub fn execute_tool(
                 Some(entity_id.to_string()),
             ));
             ev.result = runtime_audit::RuntimeAuditResult {
-                status: if res.ok { "success".to_string() } else { "error".to_string() },
+                status: if res.ok {
+                    "success".to_string()
+                } else {
+                    "error".to_string()
+                },
                 error: res.error.clone(),
             };
             ev.risk = runtime_audit::RuntimeAuditRisk::default();
@@ -1015,10 +1069,16 @@ pub fn execute_tool(
                 "tool_market_quote",
                 format!("Read market quote for {}.", symbol),
             );
-            ev.tools
-                .push(runtime_audit::tool_call("market_quote", Some(symbol.to_string())));
+            ev.tools.push(runtime_audit::tool_call(
+                "market_quote",
+                Some(symbol.to_string()),
+            ));
             ev.result = runtime_audit::RuntimeAuditResult {
-                status: if res.ok { "success".to_string() } else { "error".to_string() },
+                status: if res.ok {
+                    "success".to_string()
+                } else {
+                    "error".to_string()
+                },
                 error: res.error.clone(),
             };
             ev.risk = runtime_audit::RuntimeAuditRisk::default();
@@ -1045,7 +1105,8 @@ pub fn execute_tool(
                         ok: false,
                         value: None,
                         error: Some(
-                            "news_rss is not configured. Run `openpup add-tool news-rss`.".to_string(),
+                            "news_rss is not configured. Run `openpup add-tool news-rss`."
+                                .to_string(),
                         ),
                     };
                 }
@@ -1169,7 +1230,11 @@ pub fn execute_tool(
                 Some(format!("mailbox={},limit={}", mailbox, limit)),
             ));
             ev.result = runtime_audit::RuntimeAuditResult {
-                status: if res.ok { "success".to_string() } else { "error".to_string() },
+                status: if res.ok {
+                    "success".to_string()
+                } else {
+                    "error".to_string()
+                },
                 error: res.error.clone(),
             };
             ev.risk = runtime_audit::RuntimeAuditRisk::default();
@@ -1434,9 +1499,10 @@ fn update_l3_progress(key: &str, status: &str, meta: Option<Value>) -> Result<Pa
         entry.insert("meta".to_string(), m);
     }
     current.insert(key.to_string(), Value::Object(entry));
-    let s = serde_json::to_string_pretty(&current)
-        .context("failed to serialize L3 progress map")?;
-    fs::write(&path, s).with_context(|| format!("failed to write L3 progress file at {:?}", path))?;
+    let s =
+        serde_json::to_string_pretty(&current).context("failed to serialize L3 progress map")?;
+    fs::write(&path, s)
+        .with_context(|| format!("failed to write L3 progress file at {:?}", path))?;
     Ok(path)
 }
 
@@ -1445,12 +1511,7 @@ fn l3_todo_path() -> Result<PathBuf> {
     Ok(dir.join("l3-todos.json"))
 }
 
-fn add_l3_todo(
-    id: &str,
-    title: &str,
-    status: &str,
-    tags: Vec<String>,
-) -> Result<PathBuf> {
+fn add_l3_todo(id: &str, title: &str, status: &str, tags: Vec<String>) -> Result<PathBuf> {
     let path = l3_todo_path()?;
     let mut todos: Vec<Value> = if path.exists() {
         let s = fs::read_to_string(&path)
@@ -1501,5 +1562,3 @@ fn update_l3_todo_status(id: &str, status: &str) -> Result<PathBuf> {
     fs::write(&path, s).with_context(|| format!("failed to write L3 todo file at {:?}", path))?;
     Ok(path)
 }
-
-

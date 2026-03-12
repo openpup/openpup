@@ -53,8 +53,10 @@ pub fn get_state(entity_id: &str, ha: &HomeAssistantConfig) -> Result<Value> {
             anyhow::bail!("Home Assistant API returned {}", resp.status());
         }
 
-        let v: Value = resp.json().await.context("failed to parse Home Assistant JSON")?;
+        let v: Value = resp
+            .json()
+            .await
+            .context("failed to parse Home Assistant JSON")?;
         Ok(v)
     })
 }
-

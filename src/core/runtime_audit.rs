@@ -153,4 +153,3 @@ pub fn tool_call(name: &str, args_digest: Option<String>) -> RuntimeAuditToolCal
         args_digest,
     }
 }
-

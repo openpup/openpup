@@ -10,5 +10,3 @@ fn main() -> Result<()> {
 
     openpup::cli::commands::dispatch(&cli)
 }
-
-

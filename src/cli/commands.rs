@@ -75,9 +75,7 @@ pub fn dispatch(cli: &OpenpupCli) -> Result<()> {
         super::Command::Tool(t) => match &t.sub {
             ToolSub::HaGetState { entity_id } => cmd_tool_ha_get_state(entity_id)?,
             ToolSub::MarketQuote { symbol } => cmd_tool_market_quote(symbol)?,
-            ToolSub::NewsRssHeadlines { limit } => {
-                cmd_tool_news_rss_headlines(*limit)?
-            }
+            ToolSub::NewsRssHeadlines { limit } => cmd_tool_news_rss_headlines(*limit)?,
             ToolSub::EmailUnreadSubjects { mailbox, limit } => {
                 cmd_tool_email_unread_subjects(mailbox.as_deref(), *limit)?
             }
@@ -141,7 +139,10 @@ fn cmd_memory_list(kind: Option<&str>, limit: Option<usize>) -> Result<()> {
         return Ok(());
     }
 
-    println!("Recent semantic items (kind = {:?}, limit = {}):", kind, limit);
+    println!(
+        "Recent semantic items (kind = {:?}, limit = {}):",
+        kind, limit
+    );
     for it in items {
         println!(
             "- id={} kind={} ts={} tags={:?}",
@@ -366,9 +367,10 @@ fn cmd_tool_ha_get_state(entity_id: &str) -> Result<()> {
         "tool_ha_get_state",
         format!("Read Home Assistant state for {}.", entity_id),
     );
-    event
-        .tools
-        .push(runtime_audit::tool_call("home_assistant_get_state", Some(entity_id.to_string())));
+    event.tools.push(runtime_audit::tool_call(
+        "home_assistant_get_state",
+        Some(entity_id.to_string()),
+    ));
 
     let v = home_assistant::get_state(entity_id, &ha)?;
     event.result = runtime_audit::RuntimeAuditResult {
@@ -468,9 +470,10 @@ fn cmd_tool_market_quote(symbol: &str) -> Result<()> {
         "tool_market_quote",
         format!("Read market quote for {}.", symbol),
     );
-    event
-        .tools
-        .push(runtime_audit::tool_call("market_quote", Some(symbol.to_string())));
+    event.tools.push(runtime_audit::tool_call(
+        "market_quote",
+        Some(symbol.to_string()),
+    ));
 
     let v = market_news::stooq_quote_daily(symbol)?;
     event.result = runtime_audit::RuntimeAuditResult {
@@ -702,10 +705,7 @@ fn cmd_add_agent(cmd: &AddAgentCmd) -> Result<()> {
     }
 
     if cmd.model.is_none() {
-        println!(
-            "Model name/alias (default {}):",
-            llm_cfg.model
-        );
+        println!("Model name/alias (default {}):", llm_cfg.model);
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         let v = line.trim();
@@ -915,13 +915,19 @@ fn cmd_dashboard() -> Result<()> {
     println!("--- Loops (file-based) ---");
     for &lid in LOOP_IDS {
         if let Some(stat) = loop_stats.get(lid) {
-            println!("  {:20} count = {:4}, last = {}", lid, stat.count, stat.last_ts);
+            println!(
+                "  {:20} count = {:4}, last = {}",
+                lid, stat.count, stat.last_ts
+            );
         }
     }
 
     println!();
     println!("--- Tool calls (from audit) ---");
-    println!("  success = {}, failed = {}", tool_call_success, tool_call_fail);
+    println!(
+        "  success = {}, failed = {}",
+        tool_call_success, tool_call_fail
+    );
 
     println!();
     println!("--- All activity (by trigger_kind) ---");
@@ -984,15 +990,23 @@ Available tools:\n",
         tools_section.push_str("\n");
     }
     if let Some(s) = &cmd.subagents {
-        let names: Vec<&str> = s.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+        let names: Vec<&str> = s
+            .split(',')
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .collect();
         if !names.is_empty() {
             let agents_file = registry::load_agents().unwrap_or_default();
-            let mut sub = String::from("\n\n### Available sub-agents (you may delegate or refer to them):\n");
+            let mut sub =
+                String::from("\n\n### Available sub-agents (you may delegate or refer to them):\n");
             for name in names {
                 if let Some(spec) = agents_file.agents.get(name) {
                     let persona = spec.persona.as_deref().unwrap_or("(none)");
                     let model = spec.model.as_deref().unwrap_or("(default)");
-                    sub.push_str(&format!("- {}: model={}, persona={}\n", name, model, persona));
+                    sub.push_str(&format!(
+                        "- {}: model={}, persona={}\n",
+                        name, model, persona
+                    ));
                 }
             }
             system.push_str(&sub);
@@ -1074,7 +1088,10 @@ fn cmd_spawn(cmd: &SpawnCmd) -> Result<()> {
         persona: cmd.persona.clone(),
     };
     registry::register_sub_agent(spec)?;
-    println!("openpup spawn: sub-agent {:?} registered (~/.openpup/agents.toml).", cmd.name);
+    println!(
+        "openpup spawn: sub-agent {:?} registered (~/.openpup/agents.toml).",
+        cmd.name
+    );
     Ok(())
 }
 
@@ -1087,7 +1104,10 @@ fn cmd_node_spawn(name: &str, host: Option<&str>) -> Result<()> {
         status: "registered".to_string(),
     };
     registry::register_node(info)?;
-    println!("openpup node spawn: node {:?} registered (~/.openpup/nodes.toml).", name);
+    println!(
+        "openpup node spawn: node {:?} registered (~/.openpup/nodes.toml).",
+        name
+    );
     Ok(())
 }
 
@@ -1098,10 +1118,16 @@ fn cmd_node_list() -> Result<()> {
         return Ok(());
     }
     println!("openpup node list:");
-    println!("  {:<20} {:<24} {:<12} {}", "name", "host", "status", "last_seen");
+    println!(
+        "  {:<20} {:<24} {:<12} {}",
+        "name", "host", "status", "last_seen"
+    );
     for n in nodes {
         let host = n.host.as_deref().unwrap_or("-");
-        println!("  {:<20} {:<24} {:<12} {}", n.name, host, n.status, n.last_seen_ts);
+        println!(
+            "  {:<20} {:<24} {:<12} {}",
+            n.name, host, n.status, n.last_seen_ts
+        );
     }
     Ok(())
 }
@@ -1181,7 +1207,9 @@ fn cmd_plan(cmd: &PlanCmd) -> Result<()> {
                 s.push_str("Your task is to plan a small sequence of local tool calls to help with the given goal.\n");
                 s.push_str("Respond ONLY with a JSON array, no extra text. Example:\n");
                 s.push_str("[\n  {\"tool\": \"email_unread_subjects\", \"args\": {\"limit\": 5}},\n  {\"tool\": \"news_rss_headlines\", \"args\": {\"limit\": 3}}\n]\n\n");
-                s.push_str("Wrong: text before/after the array. Wrong: object instead of array.\n\n");
+                s.push_str(
+                    "Wrong: text before/after the array. Wrong: object instead of array.\n\n",
+                );
                 s.push_str("Available tools:\n");
                 for t in &exposed {
                     s.push_str(&format!(
@@ -1262,9 +1290,7 @@ fn cmd_plan(cmd: &PlanCmd) -> Result<()> {
 
             let summary = format!(
                 "plan_run goal={} steps={} success={}",
-                goal,
-                step_count,
-                success_count
+                goal, step_count, success_count
             );
             let _ = memory::add_semantic_item("plan_run", &summary, Some(goal));
             Ok(())
@@ -1283,4 +1309,3 @@ fn cmd_plan(cmd: &PlanCmd) -> Result<()> {
         }
     }
 }
-

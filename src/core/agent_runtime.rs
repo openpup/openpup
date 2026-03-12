@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::config::OpenpupConfig;
-use crate::llm::{self, OpenpupLlmConfig};
 use crate::core::registry;
+use crate::llm::{self, OpenpupLlmConfig};
 use crate::tools::{self, ExposedTool, ToolCall, ToolResult};
 
 /// 单次会话的配置与状态（无状态：每轮只读配置，不持久化多轮历史）。
@@ -138,10 +138,7 @@ pub async fn run_sub_agent_turn(
         .get(agent_name)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("sub-agent {:?} not found in registry", agent_name))?;
-    let system_body = spec
-        .persona
-        .as_deref()
-        .unwrap_or("(no persona)");
+    let system_body = spec.persona.as_deref().unwrap_or("(no persona)");
     let system_prompt = format!("You are {}.\n\n{}", spec.name, system_body);
     let exposed_tools = tools::exposed_tools_from_config(cfg);
     let mut llm_cfg = llm::load_openai_from_config(cfg).context("load LLM config for sub-agent")?;
@@ -271,4 +268,3 @@ where
     }
     Ok(())
 }
-

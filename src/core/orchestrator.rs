@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::config::OpenpupConfig;
 use crate::core::agent_runtime;
+use crate::core::gateway::events::GatewayToClient;
 use crate::core::kernel::{AgentRequest, DefaultKernel};
 use crate::core::registry;
-use crate::core::gateway::events::GatewayToClient;
 
 #[derive(Debug, Clone)]
 pub struct OrchestrationRun {
@@ -49,7 +49,9 @@ where
         run.agents.clone()
     };
     if resolved_agents.is_empty() {
-        return Err(anyhow!("no sub-agents available (register via `openpup spawn <name>` first)"));
+        return Err(anyhow!(
+            "no sub-agents available (register via `openpup spawn <name>` first)"
+        ));
     }
     if cfg.autonomy.spawn.mode == "disabled" {
         return Err(anyhow!(
@@ -221,4 +223,3 @@ Produce a concise final answer for the user (plain text).",
 
     Ok((run, sum_turn.reply_text))
 }
-

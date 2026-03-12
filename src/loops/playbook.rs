@@ -84,9 +84,11 @@ fn builtin_default(loop_id: &str) -> FileLoopPlaybook {
             input: "today_tasks.md".to_string(),
             semantic_kind: Some("work_log".to_string()),
             empty_message:
-                "（暂无今日任务，请编辑 workspace/today_tasks.md，以便生成今日计划草稿）".to_string(),
+                "（暂无今日任务，请编辑 workspace/today_tasks.md，以便生成今日计划草稿）"
+                    .to_string(),
             header: "--- 今日计划草稿（待你确认） ---".to_string(),
-            footer: "(Phase 2：草稿 Loop，已写入 runtime-audit.log，source=work_plan_draft)".to_string(),
+            footer: "(Phase 2：草稿 Loop，已写入 runtime-audit.log，source=work_plan_draft)"
+                .to_string(),
             // 草稿模式下保留全部非空行，由上层选择如何转化为具体执行项或对外输出。
             join_separator: Some("\n".to_string()),
             max_lines: Some(0),
@@ -154,4 +156,3 @@ fn builtin_default(loop_id: &str) -> FileLoopPlaybook {
         },
     }
 }
-

@@ -134,7 +134,14 @@ where
     pub audit: A,
 }
 
-impl KernelEnv<DefaultToolRegistry, DefaultToolExecutor, DefaultMemoryStore, DefaultPersonaProvider, DefaultAuditSink>
+impl
+    KernelEnv<
+        DefaultToolRegistry,
+        DefaultToolExecutor,
+        DefaultMemoryStore,
+        DefaultPersonaProvider,
+        DefaultAuditSink,
+    >
 {
     /// 构建一个使用全部默认实现的内核环境。
     pub fn new_default(cfg: OpenpupConfig) -> Self {
@@ -203,9 +210,8 @@ CompositeToolFile TOML must follow this schema: top-level `id` (string, required
             tools_section.push_str(
                 "- register_sub_agent (management): {\"name\": string, \"model\": optional, \"persona\": optional}\n",
             );
-            tools_section.push_str(
-                "- register_node (management): {\"name\": string, \"host\": optional}\n",
-            );
+            tools_section
+                .push_str("- register_node (management): {\"name\": string, \"host\": optional}\n");
             tools_section.push_str(
                 "- invoke_sub_agent (multi-agent): {\"name\": string, \"input\": string}\n",
             );
@@ -243,20 +249,26 @@ CompositeToolFile TOML must follow this schema: top-level `id` (string, required
 
         // 3. 记忆写入与审计经 trait 完成，再返回结果。
         let kind = req.semantic_kind.as_deref().unwrap_or("loop_log");
-        let _ = self.env.memory.add_semantic_item(
-            kind,
-            &result.reply_text,
-            Some(&req.session_id),
-        );
+        let _ = self
+            .env
+            .memory
+            .add_semantic_item(kind, &result.reply_text, Some(&req.session_id));
         let mut audit_ev = runtime_audit_core::new_event(
             runtime_audit_core::REALM_DEFAULT,
             runtime_audit_core::AGENT_CORE,
             "event",
             "agent_request",
-            format!("session={} reply_len={}", req.session_id, result.reply_text.len()),
+            format!(
+                "session={} reply_len={}",
+                req.session_id,
+                result.reply_text.len()
+            ),
         );
         audit_ev.decision_summary = if result.reply_text.len() > 300 {
-            format!("{}...", result.reply_text.chars().take(300).collect::<String>())
+            format!(
+                "{}...",
+                result.reply_text.chars().take(300).collect::<String>()
+            )
         } else {
             result.reply_text.clone()
         };

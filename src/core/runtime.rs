@@ -64,10 +64,7 @@ pub enum RuntimeEvent {
         source: TriggerSource,
     },
     /// 单次 Agent 请求（CLI/HTTP 等上层封装使用）。
-    AgentRequest {
-        session_id: String,
-        input: String,
-    },
+    AgentRequest { session_id: String, input: String },
     /// Planner-Executor 编排请求（供网关/通道/未来调度触发）。
     Orchestrate {
         session_id: String,
@@ -81,10 +78,7 @@ pub enum RuntimeEvent {
         persona: Option<String>,
     },
     /// 节点心跳或状态上报（multi-node 预留）。
-    NodeHeartbeat {
-        node_id: String,
-        status: String,
-    },
+    NodeHeartbeat { node_id: String, status: String },
 }
 
 impl RuntimeEvent {
@@ -122,12 +116,8 @@ use crate::loops;
 pub async fn handle_event(ev: &RuntimeEvent) -> anyhow::Result<()> {
     match ev {
         RuntimeEvent::Loop { loop_id, .. } => match loop_id.as_str() {
-            "work_morning"
-            | "work_plan_draft"
-            | "invest_morning"
-            | "invest_close"
-            | "life_morning"
-            | "life_evening" => loops::run(loop_id),
+            "work_morning" | "work_plan_draft" | "invest_morning" | "invest_close"
+            | "life_morning" | "life_evening" => loops::run(loop_id),
             _ => Ok(()),
         },
         RuntimeEvent::AgentRequest { session_id, input } => {
@@ -142,19 +132,22 @@ pub async fn handle_event(ev: &RuntimeEvent) -> anyhow::Result<()> {
             // 审计已在内核 run_turn 内经 AuditSink trait 完成，此处不再直写。
             Ok(())
         }
-        RuntimeEvent::Orchestrate { session_id, goal, agents } => {
+        RuntimeEvent::Orchestrate {
+            session_id,
+            goal,
+            agents,
+        } => {
             let cfg = config::load_or_init()?;
             // runtime 入口不负责事件流输出；如需事件流由网关层注入 emitter。
-            orchestrator::run_planner_executor(
-                &cfg,
-                session_id,
-                goal,
-                agents.clone(),
-                |_| {},
-            ).await?;
+            orchestrator::run_planner_executor(&cfg, session_id, goal, agents.clone(), |_| {})
+                .await?;
             Ok(())
         }
-        RuntimeEvent::SpawnRequest { name, model, persona } => {
+        RuntimeEvent::SpawnRequest {
+            name,
+            model,
+            persona,
+        } => {
             let spec = registry::SubAgentSpec {
                 name: name.clone(),
                 model: model.clone(),

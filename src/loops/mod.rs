@@ -82,10 +82,7 @@ pub fn run(loop_id: &str) -> Result<()> {
         Some(path.display().to_string()),
     ));
 
-    let semantic_kind = pb
-        .semantic_kind
-        .as_deref()
-        .unwrap_or("loop_log");
+    let semantic_kind = pb.semantic_kind.as_deref().unwrap_or("loop_log");
     let _ = memory::add_semantic_item(semantic_kind, &result.summary, Some(loop_id));
 
     event.result = RuntimeAuditResult {
@@ -121,4 +118,3 @@ fn summarize(content: &str, pb: &FileLoopPlaybook) -> String {
     }
     lines.join("\n")
 }
-

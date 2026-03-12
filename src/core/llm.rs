@@ -177,8 +177,7 @@ pub async fn openai_complete_with_memory(
     let mut extended_system = system_prompt.to_string();
 
     if memory_limit > 0 {
-        if let Ok(items) =
-            memory::search_semantic_items(semantic_kind, user_message, memory_limit)
+        if let Ok(items) = memory::search_semantic_items(semantic_kind, user_message, memory_limit)
         {
             if !items.is_empty() {
                 let mut buf = String::new();
@@ -255,4 +254,3 @@ pub async fn tool_planner(
     }
     Ok(v)
 }
-

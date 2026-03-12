@@ -103,4 +103,3 @@ fn extract_envelope(f: &Fetch) -> Option<(String, String, String)> {
         .unwrap_or_default();
     Some((subject, from, date))
 }
-

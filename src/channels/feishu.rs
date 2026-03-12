@@ -24,21 +24,15 @@ struct SendMessageResponse {
 fn load_feishu_config() -> Result<FeishuChannelConfig> {
     let cfg = config::load_or_init()?;
     let channels: ChannelsConfig = cfg.channels.unwrap_or_default();
-    let feishu = channels
-        .feishu
-        .context("feishu channel is not configured. Add [channels.feishu] to ~/.openpup/config.toml first.")?;
+    let feishu = channels.feishu.context(
+        "feishu channel is not configured. Add [channels.feishu] to ~/.openpup/config.toml first.",
+    )?;
     Ok(feishu)
 }
 
 fn feishu_app_from_env(feishu_cfg: &FeishuChannelConfig) -> Result<(String, String)> {
-    let app_id_var = feishu_cfg
-        .app_id_env
-        .trim()
-        .to_string();
-    let app_secret_var = feishu_cfg
-        .app_secret_env
-        .trim()
-        .to_string();
+    let app_id_var = feishu_cfg.app_id_env.trim().to_string();
+    let app_secret_var = feishu_cfg.app_secret_env.trim().to_string();
 
     let app_id_name = if app_id_var.is_empty() {
         "FEISHU_APP_ID"
@@ -85,8 +79,10 @@ async fn get_tenant_access_token(
         ));
     }
 
-    let body: TenantAccessTokenResponse =
-        resp.json().await.context("parse feishu tenant_access_token response")?;
+    let body: TenantAccessTokenResponse = resp
+        .json()
+        .await
+        .context("parse feishu tenant_access_token response")?;
     if body.code != 0 {
         return Err(anyhow::anyhow!(
             "feishu tenant_access_token error: code={} msg={}",
@@ -127,8 +123,10 @@ async fn send_text_message(
         ));
     }
 
-    let body: SendMessageResponse =
-        resp.json().await.context("parse feishu send message response")?;
+    let body: SendMessageResponse = resp
+        .json()
+        .await
+        .context("parse feishu send message response")?;
     if body.code != 0 {
         return Err(anyhow::anyhow!(
             "feishu send message error: code={} msg={}",
@@ -162,4 +160,3 @@ pub async fn send_text_to_chat(chat_id: &str, text: &str) -> Result<()> {
     let token = get_tenant_access_token(&client, &app_id, &app_secret).await?;
     send_text_message(&client, &token, chat_id, text).await
 }
-

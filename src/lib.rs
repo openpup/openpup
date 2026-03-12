@@ -3,12 +3,12 @@
 //! 该 crate 复用核心模块给多个二进制（openpup CLI / gateway / node_worker 等）。
 
 pub mod audit;
+pub mod channels;
 pub mod cli;
 pub mod config;
-pub mod loops;
-pub mod channels;
-pub mod tools;
 pub mod core;
+pub mod loops;
+pub mod tools;
 
 // 兼容：原顶层模块现位于 core，供其他模块使用
 pub use crate::core::agent_runtime;
@@ -20,4 +20,3 @@ pub use crate::core::runtime;
 pub use crate::core::runtime_audit;
 pub use crate::core::scheduler;
 pub use crate::core::workspace;
-

@@ -13,7 +13,9 @@ use self::feishu as feishu_mod;
 
 /// 运行 Telegram 通道事件循环（长轮询），通常由 `openpup up` 在 Tokio runtime 中以后台任务形式启动。
 pub async fn run_telegram_channel() -> Result<()> {
-    println!("openpup telegram: starting polling loop (managed by `openpup up`). Use Ctrl+C to stop.");
+    println!(
+        "openpup telegram: starting polling loop (managed by `openpup up`). Use Ctrl+C to stop."
+    );
     telegram_mod::run_bot_loop().await
 }
 

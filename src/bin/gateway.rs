@@ -3,18 +3,18 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use axum::http::{header, HeaderMap};
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::{State},
+    extract::State,
     response::{Html, IntoResponse},
     routing::{get, post},
-    Router,
-    Json,
+    Json, Router,
 };
-use axum::http::{header, HeaderMap};
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 
+use openpup::channels;
 use openpup::config;
 use openpup::core::gateway::events::{ClientToGateway, GatewayEnvelope, GatewayToClient};
 use openpup::core::kernel::{
@@ -22,7 +22,6 @@ use openpup::core::kernel::{
     KernelEnv, ToolExecutor,
 };
 use openpup::tools::{ToolCall, ToolKind, ToolResult};
-use openpup::channels;
 
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +51,10 @@ impl Hub {
             })
             .to_string()
         });
-        let _ = self.tx.send(HubMsg { topic, payload_json });
+        let _ = self.tx.send(HubMsg {
+            topic,
+            payload_json,
+        });
     }
 }
 
@@ -73,7 +75,10 @@ async fn index() -> impl IntoResponse {
 
 async fn app_js() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/javascript; charset=utf-8".parse().unwrap());
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/javascript; charset=utf-8".parse().unwrap(),
+    );
     (headers, include_str!("../web/app.js"))
 }
 
@@ -128,7 +133,11 @@ async fn feishu_events(Json(payload): Json<FeishuCallback>) -> axum::Json<serde_
                             // content 是 JSON 字符串，如 {"text":"..."}
                             let text = serde_json::from_str::<serde_json::Value>(&msg.content)
                                 .ok()
-                                .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()))
+                                .and_then(|v| {
+                                    v.get("text")
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string())
+                                })
                                 .unwrap_or_else(|| msg.content.clone());
 
                             let session_id = format!("feishu:{}", msg.chat_id);
@@ -138,7 +147,8 @@ async fn feishu_events(Json(payload): Json<FeishuCallback>) -> axum::Json<serde_
                                     let _ = channels::send_feishu_text_to_chat(
                                         &msg.chat_id,
                                         &format!("openpup: failed to load config: {e:#}"),
-                                    ).await;
+                                    )
+                                    .await;
                                     return;
                                 }
                             };
@@ -164,13 +174,15 @@ async fn feishu_events(Json(payload): Json<FeishuCallback>) -> axum::Json<serde_
                                     let _ = channels::send_feishu_text_to_chat(
                                         &msg.chat_id,
                                         &turn.reply_text,
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
                                     let _ = channels::send_feishu_text_to_chat(
                                         &msg.chat_id,
                                         &format!("openpup: chat error: {e:#}"),
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                             }
                         });
@@ -186,10 +198,7 @@ async fn feishu_events(Json(payload): Json<FeishuCallback>) -> axum::Json<serde_
     }))
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -350,7 +359,8 @@ async fn handle_inbound_message(
                 *authed = true;
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Authed)).unwrap(),
+                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Authed))
+                            .unwrap(),
                     ))
                     .await;
             } else {
@@ -380,7 +390,10 @@ async fn handle_inbound_message(
                 topics.insert(x);
             }
         }
-        ClientToGateway::ApprovalResponse { approval_id, approve } => {
+        ClientToGateway::ApprovalResponse {
+            approval_id,
+            approve,
+        } => {
             let tx = {
                 let mut map = state.approvals.lock().unwrap();
                 map.remove(&approval_id)
@@ -389,15 +402,22 @@ async fn handle_inbound_message(
                 let _ = tx.send(approve);
             }
         }
-        ClientToGateway::SendMessage { session_id, input, semantic_kind } => {
+        ClientToGateway::SendMessage {
+            session_id,
+            input,
+            semantic_kind,
+        } => {
             let cfg = match config::load_or_init() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = socket.send(Message::Text(
-                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
-                            message: format!("failed to load config: {e:#}"),
-                        })).unwrap()
-                    )).await;
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
+                                message: format!("failed to load config: {e:#}"),
+                            }))
+                            .unwrap(),
+                        ))
+                        .await;
                     return true;
                 }
             };
@@ -428,10 +448,12 @@ async fn handle_inbound_message(
             });
             match result {
                 Ok(result) => {
-                    let tool_call = result.tool_call.as_ref().map(|(call, res)| serde_json::json!({
-                        "call": call,
-                        "result": res
-                    }));
+                    let tool_call = result.tool_call.as_ref().map(|(call, res)| {
+                        serde_json::json!({
+                            "call": call,
+                            "result": res
+                        })
+                    });
                     state.hub.publish(
                         format!("session/{}", session_id),
                         GatewayEnvelope::v1(GatewayToClient::KernelReply {
@@ -442,33 +464,46 @@ async fn handle_inbound_message(
                     );
                 }
                 Err(e) => {
-                    let _ = socket.send(Message::Text(
-                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
-                            message: format!("kernel error: {e:#}"),
-                        })).unwrap()
-                    )).await;
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
+                                message: format!("kernel error: {e:#}"),
+                            }))
+                            .unwrap(),
+                        ))
+                        .await;
                 }
             }
         }
         ClientToGateway::RunLoop { loop_id } => {
             let ev = openpup::core::runtime::RuntimeEvent::manual(&loop_id);
             if let Err(e) = openpup::core::runtime::handle_event(&ev).await {
-                let _ = socket.send(Message::Text(
-                    serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
-                        message: format!("loop error: {e:#}"),
-                    })).unwrap()
-                )).await;
+                let _ = socket
+                    .send(Message::Text(
+                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
+                            message: format!("loop error: {e:#}"),
+                        }))
+                        .unwrap(),
+                    ))
+                    .await;
             }
         }
-        ClientToGateway::Orchestrate { session_id, goal, agents } => {
+        ClientToGateway::Orchestrate {
+            session_id,
+            goal,
+            agents,
+        } => {
             let cfg = match config::load_or_init() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = socket.send(Message::Text(
-                        serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
-                            message: format!("failed to load config: {e:#}"),
-                        })).unwrap()
-                    )).await;
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::to_string(&GatewayEnvelope::v1(GatewayToClient::Error {
+                                message: format!("failed to load config: {e:#}"),
+                            }))
+                            .unwrap(),
+                        ))
+                        .await;
                     return true;
                 }
             };
@@ -497,12 +532,15 @@ async fn handle_inbound_message(
                     &goal,
                     agents,
                     |evt| publish(evt),
-                ).await;
+                )
+                .await;
 
                 if let Err(e) = res {
                     hub.publish(
                         topic_session,
-                        GatewayEnvelope::v1(GatewayToClient::Error { message: format!("orchestrate error: {e:#}") }),
+                        GatewayEnvelope::v1(GatewayToClient::Error {
+                            message: format!("orchestrate error: {e:#}"),
+                        }),
                     );
                 }
             });
@@ -513,7 +551,9 @@ async fn handle_inbound_message(
 }
 
 fn load_auth_token() -> Option<String> {
-    std::env::var("OPENPUP_GATEWAY_TOKEN").ok().filter(|s| !s.trim().is_empty())
+    std::env::var("OPENPUP_GATEWAY_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 #[tokio::main]
@@ -540,7 +580,11 @@ async fn main() -> Result<()> {
     let hub = Hub::new(512);
     let state = AppState {
         hub,
-        auth_token: if gateway_cfg.require_auth { token } else { None },
+        auth_token: if gateway_cfg.require_auth {
+            token
+        } else {
+            None
+        },
         approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
 
@@ -556,7 +600,8 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .context("failed to bind TCP listener")?;
-    axum::serve(listener, app).await.context("gateway server error")?;
+    axum::serve(listener, app)
+        .await
+        .context("gateway server error")?;
     Ok(())
 }
-

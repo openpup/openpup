@@ -113,4 +113,3 @@ pub fn fetch_ics_blobs(cfg: &CaldavConfig, limit_urls: usize) -> Result<Vec<Stri
     }
     Ok(out)
 }
-

@@ -10,12 +10,7 @@ use crate::tools::{NodeTransport, ToolResult};
 pub struct HttpNodeTransport;
 
 impl NodeTransport for HttpNodeTransport {
-    fn invoke_tool(
-        &self,
-        node: &NodeInfo,
-        tool: &str,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    fn invoke_tool(&self, node: &NodeInfo, tool: &str, args: &Value) -> Result<ToolResult> {
         let host = node
             .host
             .as_deref()
@@ -33,7 +28,10 @@ impl NodeTransport for HttpNodeTransport {
                 .await
                 .context("node request failed")?;
             let status = resp.status();
-            let text = resp.text().await.context("failed to read node response body")?;
+            let text = resp
+                .text()
+                .await
+                .context("failed to read node response body")?;
             Ok::<(reqwest::StatusCode, String), anyhow::Error>((status, text))
         })?;
         let status = resp.0;

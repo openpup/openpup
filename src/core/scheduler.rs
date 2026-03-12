@@ -28,10 +28,10 @@ pub async fn run_scheduler_loop() -> Result<()> {
         let minute = now.minute();
 
         for job in &jobs {
-                let key = (job.hour, job.minute, job.loop_id.clone());
-                if job.hour == hour && job.minute == minute && !last_tick.contains(&key) {
-                    last_tick.insert(key);
-                    run_loop_by_id(&job.loop_id).await?;
+            let key = (job.hour, job.minute, job.loop_id.clone());
+            if job.hour == hour && job.minute == minute && !last_tick.contains(&key) {
+                last_tick.insert(key);
+                run_loop_by_id(&job.loop_id).await?;
             }
         }
         // 每分钟清掉已执行过的 (hour, minute, id)，避免下一小时同分钟重复

@@ -43,4 +43,3 @@ pub fn ensure_workspace_and_logs() -> Result<()> {
     }
     Ok(())
 }
-

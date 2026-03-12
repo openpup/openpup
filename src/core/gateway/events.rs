@@ -44,10 +44,7 @@ pub enum ClientToGateway {
     },
 
     /// 对审批请求的响应。
-    ApprovalResponse {
-        approval_id: String,
-        approve: bool,
-    },
+    ApprovalResponse { approval_id: String, approve: bool },
 }
 
 /// 网关 -> 客户端（事件流）。
@@ -112,4 +109,3 @@ pub enum GatewayToClient {
         context: Option<Value>,
     },
 }
-

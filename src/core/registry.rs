@@ -123,4 +123,3 @@ pub fn update_node_heartbeat(node_id: &str, status: &str) -> Result<()> {
     }
     save_nodes(&file)
 }
-

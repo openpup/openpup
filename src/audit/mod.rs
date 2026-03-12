@@ -40,4 +40,3 @@ pub fn record_invocation(cli: &OpenpupCli) -> Result<()> {
     writeln!(file, "{line}").context("failed to write audit log line")?;
     Ok(())
 }
-

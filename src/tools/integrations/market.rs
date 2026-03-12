@@ -65,4 +65,3 @@ pub fn rss_headlines(feed_url: &str, limit: usize) -> Result<Vec<Value>> {
     }
     Ok(out)
 }
-

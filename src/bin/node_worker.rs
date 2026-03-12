@@ -62,4 +62,3 @@ async fn main() {
         .await
         .expect("node-worker server error");
 }
-

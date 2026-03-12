@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{self, ChannelsConfig, TelegramChannelConfig};
+use crate::core::gateway::events::{ClientToGateway, GatewayEnvelope, GatewayToClient};
 use crate::core::kernel;
 use crate::tools::net;
-use crate::core::gateway::events::{ClientToGateway, GatewayEnvelope, GatewayToClient};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -73,17 +73,14 @@ fn load_telegram_config() -> Result<TelegramChannelConfig> {
 }
 
 fn telegram_token_from_env(tg_cfg: &TelegramChannelConfig) -> Result<String> {
-    let var = tg_cfg
-        .bot_token_env
-        .trim()
-        .to_string();
+    let var = tg_cfg.bot_token_env.trim().to_string();
     let name = if var.is_empty() {
         "TELEGRAM_BOT_TOKEN"
     } else {
         var.as_str()
     };
-    let token =
-        std::env::var(name).with_context(|| format!("missing Telegram bot token in env {}", name))?;
+    let token = std::env::var(name)
+        .with_context(|| format!("missing Telegram bot token in env {}", name))?;
     Ok(token)
 }
 
@@ -113,7 +110,10 @@ async fn send_message(
             body
         ));
     }
-    let body: SendMessageResponse = resp.json().await.unwrap_or(SendMessageResponse { ok: true });
+    let body: SendMessageResponse = resp
+        .json()
+        .await
+        .unwrap_or(SendMessageResponse { ok: true });
     if !body.ok {
         return Err(anyhow::anyhow!("telegram sendMessage returned ok=false"));
     }
@@ -183,10 +183,14 @@ async fn answer_callback_query(
             body
         ));
     }
-    let body: AnswerCallbackQueryResponse =
-        resp.json().await.unwrap_or(AnswerCallbackQueryResponse { ok: true });
+    let body: AnswerCallbackQueryResponse = resp
+        .json()
+        .await
+        .unwrap_or(AnswerCallbackQueryResponse { ok: true });
     if !body.ok {
-        return Err(anyhow::anyhow!("telegram answerCallbackQuery returned ok=false"));
+        return Err(anyhow::anyhow!(
+            "telegram answerCallbackQuery returned ok=false"
+        ));
     }
     Ok(())
 }
@@ -219,11 +223,7 @@ fn parse_approval_callback(data: &str) -> Option<(String, bool)> {
 }
 
 fn gateway_ws_url_from_config(cfg: &crate::config::OpenpupConfig) -> String {
-    let bind = cfg
-        .gateway
-        .clone()
-        .unwrap_or_default()
-        .bind;
+    let bind = cfg.gateway.clone().unwrap_or_default().bind;
     format!("ws://{}/ws", bind.trim())
 }
 
@@ -263,10 +263,7 @@ pub async fn run_bot_loop() -> Result<()> {
     let mut offset: i64 = 0;
 
     loop {
-        let url = format!(
-            "https://api.telegram.org/bot{}/getUpdates",
-            token
-        );
+        let url = format!("https://api.telegram.org/bot{}/getUpdates", token);
         let resp = client
             .get(&url)
             .query(&[("timeout", "25"), ("offset", &offset.to_string())])
@@ -306,16 +303,31 @@ pub async fn run_bot_loop() -> Result<()> {
                 };
                 if let Some(ctx) = ctx {
                     let _ = ctx.ws_tx.send(WsMessage::Text(
-                        serde_json::to_string(&GatewayEnvelope::v1(ClientToGateway::ApprovalResponse {
-                            approval_id: approval_id.clone(),
-                            approve,
-                        }))
+                        serde_json::to_string(&GatewayEnvelope::v1(
+                            ClientToGateway::ApprovalResponse {
+                                approval_id: approval_id.clone(),
+                                approve,
+                            },
+                        ))
                         .unwrap(),
                     ));
-                    let _ = answer_callback_query(&client, &token, &cb.id, if approve { "Approved" } else { "Denied" }).await;
-                    let _ = send_message(&client, &token, ctx.chat_id, "openpup: approval response sent.").await;
+                    let _ = answer_callback_query(
+                        &client,
+                        &token,
+                        &cb.id,
+                        if approve { "Approved" } else { "Denied" },
+                    )
+                    .await;
+                    let _ = send_message(
+                        &client,
+                        &token,
+                        ctx.chat_id,
+                        "openpup: approval response sent.",
+                    )
+                    .await;
                 } else {
-                    let _ = answer_callback_query(&client, &token, &cb.id, "Approval expired").await;
+                    let _ =
+                        answer_callback_query(&client, &token, &cb.id, "Approval expired").await;
                 }
                 continue;
             }
@@ -337,24 +349,43 @@ pub async fn run_bot_loop() -> Result<()> {
                     let chat_id = msg.chat.id;
                     let approvals2 = Arc::clone(&approvals);
                     tokio::spawn(async move {
-                        let _ = send_message(&client2, &token2, chat_id, "openpup: orchestration started (via gateway).").await;
+                        let _ = send_message(
+                            &client2,
+                            &token2,
+                            chat_id,
+                            "openpup: orchestration started (via gateway).",
+                        )
+                        .await;
                         let cfg = match config::load_or_init() {
                             Ok(c) => c,
                             Err(e) => {
-                                let _ = send_message(&client2, &token2, chat_id, &format!("openpup: failed to load config: {e:#}")).await;
+                                let _ = send_message(
+                                    &client2,
+                                    &token2,
+                                    chat_id,
+                                    &format!("openpup: failed to load config: {e:#}"),
+                                )
+                                .await;
                                 return;
                             }
                         };
                         let ws_url = gateway_ws_url_from_config(&cfg);
                         let gw_token = gateway_token_from_config(&cfg);
 
-                        let (ws_stream, _resp) = match tokio_tungstenite::connect_async(&ws_url).await {
-                            Ok(v) => v,
-                            Err(e) => {
-                                let _ = send_message(&client2, &token2, chat_id, &format!("openpup: failed to connect gateway WS: {e}")).await;
-                                return;
-                            }
-                        };
+                        let (ws_stream, _resp) =
+                            match tokio_tungstenite::connect_async(&ws_url).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = send_message(
+                                        &client2,
+                                        &token2,
+                                        chat_id,
+                                        &format!("openpup: failed to connect gateway WS: {e}"),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            };
 
                         let (mut ws_write, mut ws_read) = ws_stream.split();
                         let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
@@ -369,52 +400,94 @@ pub async fn run_bot_loop() -> Result<()> {
                         // auth + subscribe + orchestrate
                         if let Some(t) = gw_token {
                             let _ = tx.send(WsMessage::Text(
-                                serde_json::to_string(&GatewayEnvelope::v1(ClientToGateway::Auth { token: t })).unwrap(),
+                                serde_json::to_string(&GatewayEnvelope::v1(
+                                    ClientToGateway::Auth { token: t },
+                                ))
+                                .unwrap(),
                             ));
                         }
                         let _ = tx.send(WsMessage::Text(
-                            serde_json::to_string(&GatewayEnvelope::v1(ClientToGateway::Subscribe {
-                                topics: vec![format!("session/{}", session_id.clone())],
-                            }))
+                            serde_json::to_string(&GatewayEnvelope::v1(
+                                ClientToGateway::Subscribe {
+                                    topics: vec![format!("session/{}", session_id.clone())],
+                                },
+                            ))
                             .unwrap(),
                         ));
                         let _ = tx.send(WsMessage::Text(
-                            serde_json::to_string(&GatewayEnvelope::v1(ClientToGateway::Orchestrate {
-                                session_id: session_id.clone(),
-                                goal: goal.clone(),
-                                agents: vec![],
-                            }))
+                            serde_json::to_string(&GatewayEnvelope::v1(
+                                ClientToGateway::Orchestrate {
+                                    session_id: session_id.clone(),
+                                    goal: goal.clone(),
+                                    agents: vec![],
+                                },
+                            ))
                             .unwrap(),
                         ));
 
                         // read loop: handle NeedsApproval、每步输出与最终总结
                         while let Some(Ok(msg)) = ws_read.next().await {
                             let WsMessage::Text(t) = msg else { continue };
-                            let Ok(env) = serde_json::from_str::<GatewayEnvelope<GatewayToClient>>(&t) else { continue };
-                            if env.v != 1 { continue; }
+                            let Ok(env) =
+                                serde_json::from_str::<GatewayEnvelope<GatewayToClient>>(&t)
+                            else {
+                                continue;
+                            };
+                            if env.v != 1 {
+                                continue;
+                            }
                             match env.data {
-                                GatewayToClient::NeedsApproval { approval_id, summary, .. } => {
+                                GatewayToClient::NeedsApproval {
+                                    approval_id,
+                                    summary,
+                                    ..
+                                } => {
                                     {
                                         let mut map = approvals2.lock().unwrap();
-                                        map.insert(approval_id.clone(), ApprovalCtx { ws_tx: tx.clone(), chat_id });
+                                        map.insert(
+                                            approval_id.clone(),
+                                            ApprovalCtx {
+                                                ws_tx: tx.clone(),
+                                                chat_id,
+                                            },
+                                        );
                                     }
-                                    let _ = send_message_with_approval_buttons(&client2, &token2, chat_id, &approval_id, &summary).await;
+                                    let _ = send_message_with_approval_buttons(
+                                        &client2,
+                                        &token2,
+                                        chat_id,
+                                        &approval_id,
+                                        &summary,
+                                    )
+                                    .await;
                                 }
-                                GatewayToClient::OrchestrationStepFinished { agent, output, .. } => {
+                                GatewayToClient::OrchestrationStepFinished {
+                                    agent,
+                                    output,
+                                    ..
+                                } => {
                                     // 实时转发每个子 Agent 的输出；非字符串则按 JSON 打印。
                                     let body = match output {
                                         serde_json::Value::String(s) => s,
-                                        v => serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
+                                        v => serde_json::to_string_pretty(&v)
+                                            .unwrap_or_else(|_| v.to_string()),
                                     };
                                     let text = format!("Agent `{}` replied:\n{}", agent, body);
                                     let _ = send_message(&client2, &token2, chat_id, &text).await;
                                 }
                                 GatewayToClient::OrchestrationFinished { summary, .. } => {
-                                    let _ = send_message(&client2, &token2, chat_id, &summary).await;
+                                    let _ =
+                                        send_message(&client2, &token2, chat_id, &summary).await;
                                     break;
                                 }
                                 GatewayToClient::Error { message } => {
-                                    let _ = send_message(&client2, &token2, chat_id, &format!("openpup gateway error: {}", message)).await;
+                                    let _ = send_message(
+                                        &client2,
+                                        &token2,
+                                        chat_id,
+                                        &format!("openpup gateway error: {}", message),
+                                    )
+                                    .await;
                                 }
                                 _ => {}
                             }
@@ -433,7 +506,13 @@ pub async fn run_bot_loop() -> Result<()> {
                     let cfg = match config::load_or_init() {
                         Ok(c) => c,
                         Err(e) => {
-                            let _ = send_message(&client2, &token2, msg.chat.id, &format!("openpup: failed to load config: {e:#}")).await;
+                            let _ = send_message(
+                                &client2,
+                                &token2,
+                                msg.chat.id,
+                                &format!("openpup: failed to load config: {e:#}"),
+                            )
+                            .await;
                             return;
                         }
                     };
@@ -446,10 +525,17 @@ pub async fn run_bot_loop() -> Result<()> {
                     let res = k.run_turn(req).await;
                     match res {
                         Ok(turn) => {
-                            let _ = send_message(&client2, &token2, msg.chat.id, &turn.reply_text).await;
+                            let _ = send_message(&client2, &token2, msg.chat.id, &turn.reply_text)
+                                .await;
                         }
                         Err(e) => {
-                            let _ = send_message(&client2, &token2, msg.chat.id, &format!("openpup: chat error: {e:#}")).await;
+                            let _ = send_message(
+                                &client2,
+                                &token2,
+                                msg.chat.id,
+                                &format!("openpup: chat error: {e:#}"),
+                            )
+                            .await;
                         }
                     }
                 });

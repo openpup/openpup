@@ -283,4 +283,3 @@ pub fn delete_semantic_item(id: i64) -> Result<bool> {
 pub fn now_unix_ts() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
-
