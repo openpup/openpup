@@ -201,21 +201,25 @@ Available tools:\n",
                     t.name, t.level, t.description, t.args
                 ));
             }
-            tools_section.push_str(
-                "- save_composite_tool (management): {\"spec_toml\": string containing CompositeToolFile TOML}\n\
+            let mode = self.env.cfg.autonomy.execution_mode.as_str();
+            if mode != "readonly" {
+                tools_section.push_str(
+                    "- save_composite_tool (management, L2): {\"spec_toml\": string containing CompositeToolFile TOML}\n\
 CompositeToolFile TOML must follow this schema: top-level `id` (string, required) as composite tool ID, used as `{id}.toml` filename and registry key; also include `name` / `description` / `steps`. When you create any composite tool TOML, you MUST include `id`, usually equal to `name` or a slug of it.\n",
-            );
-            tools_section.push_str(
-                "- register_sub_agent (management): {\"name\": string, \"model\": optional, \"persona\": optional}\n",
-            );
-            tools_section
-                .push_str("- register_node (management): {\"name\": string, \"host\": optional}\n");
-            tools_section.push_str(
-                "- invoke_sub_agent (multi-agent): {\"name\": string, \"input\": string}\n",
-            );
-            tools_section.push_str(
-                "- invoke_node_tool (multi-node): {\"node\": string, \"tool\": string, \"args\": object}\n\n",
-            );
+                );
+                tools_section.push_str(
+                    "- register_sub_agent (management, L2): {\"name\": string, \"model\": optional, \"persona\": optional}\n",
+                );
+                tools_section
+                    .push_str("- register_node (management, L2): {\"name\": string, \"host\": optional}\n");
+                tools_section.push_str(
+                    "- invoke_sub_agent (multi-agent, L2): {\"name\": string, \"input\": string}\n",
+                );
+                tools_section.push_str(
+                    "- invoke_node_tool (multi-node, L2): {\"node\": string, \"tool\": string, \"args\": object}\n",
+                );
+            }
+            tools_section.push('\n');
             system = format!(
                 "You are openpup, a local agent.\n\n{}{}",
                 tools_section, system

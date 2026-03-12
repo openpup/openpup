@@ -2,9 +2,12 @@ use anyhow::{Context, Result};
 
 use crate::audit;
 use crate::config;
-use crate::core::{llm, memory, persona, registry, runtime, runtime_audit, scheduler};
+use crate::core::{
+    llm, memory, persona, registry, runtime, runtime_audit, scheduler, templates, workspace,
+};
 use crate::tools;
 use crate::tools::integrations::{home_assistant, market as market_news};
+use crate::tools::NodeTransport;
 
 use super::{
     AddAgentCmd, AddChannelSub, AddToolSub, AgentCmd, CronCmd, CronSub, MemorySub, NodeSub,
@@ -18,6 +21,7 @@ pub fn dispatch(cli: &OpenpupCli) -> Result<()> {
 
     match &cli.command {
         super::Command::Init => cmd_init()?,
+        super::Command::Onboard => cmd_onboard()?,
         super::Command::Up => cmd_up()?,
         super::Command::Down => cmd_down()?,
         super::Command::Status => cmd_status()?,
@@ -58,6 +62,7 @@ pub fn dispatch(cli: &OpenpupCli) -> Result<()> {
         super::Command::Node(n) => match &n.sub {
             NodeSub::Spawn { name, host } => cmd_node_spawn(name, host.as_deref())?,
             NodeSub::List => cmd_node_list()?,
+            NodeSub::Test { name } => cmd_node_test(name)?,
         },
         super::Command::Cron(c) => cmd_cron(c)?,
         super::Command::Dashboard => cmd_dashboard()?,
@@ -98,6 +103,40 @@ fn cmd_init() -> Result<()> {
         path, cfg.autonomy.spawn.mode
     );
     println!("Persona workspace and tools can now be configured via openpup CLI (no external engine required).");
+    Ok(())
+}
+
+fn cmd_onboard() -> Result<()> {
+    // 1. 初始化配置（若已存在则保持不变）
+    cmd_init()?;
+
+    // 2. 初始化 Persona 模板（不覆盖已有文件）
+    println!();
+    println!("Step 1/3: persona templates");
+    persona::init()?;
+
+    // 3. 准备 workspace 根目录与基础 Markdown 文件
+    println!();
+    println!("Step 2/3: workspace markdown (today_tasks.md, life_notes.md)");
+    workspace::ensure_workspace_and_logs()?;
+    templates::ensure_workspace_markdown_templates()?;
+
+    // 4. 为内置 Loop 写入 playbook 模板（若缺失）
+    println!();
+    println!("Step 3/3: loop playbooks (workspace/playbooks/*.toml)");
+    for loop_id in templates::BUILTIN_LOOP_IDS {
+        templates::ensure_loop_playbook(loop_id)?;
+        println!("  ensured playbook: {}", loop_id);
+    }
+
+    println!();
+    println!("openpup onboard: done.");
+    println!("  下一步建议：");
+    println!("    1) 编辑 ~/.openpup/workspace/persona/*.md（身份 / 红线 / 偏好 / 工具哲学）");
+    println!("    2) 编辑 ~/.openpup/workspace/today_tasks.md 与 life_notes.md");
+    println!("    3) 运行 `openpup run work:morning` / `openpup run life:evening` 体验首批 Loop");
+    println!("    4) 使用 `openpup up` 启动长驻 scheduler");
+
     Ok(())
 }
 
@@ -857,10 +896,15 @@ fn cmd_dashboard() -> Result<()> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
+    let cfg = config::load_or_init()?;
     let home = dirs::home_dir().context("failed to locate home directory")?;
     let path = home.join(".openpup").join("runtime-audit.log");
     println!("openpup dashboard");
     println!("  runtime-audit: {:?}", path);
+    println!(
+        "  safety: execution_mode = {}",
+        cfg.autonomy.execution_mode
+    );
 
     if !path.exists() {
         println!("  (no runtime-audit.log found yet; run some loops or tools first)");
@@ -884,6 +928,7 @@ fn cmd_dashboard() -> Result<()> {
     let mut loop_stats: HashMap<String, LoopStat> = HashMap::new();
     let mut tool_call_success = 0usize;
     let mut tool_call_fail = 0usize;
+    let mut safety_events: Vec<(String, String, String)> = Vec::new();
 
     const LOOP_IDS: &[&str] = &[
         "work_morning",
@@ -900,6 +945,15 @@ fn cmd_dashboard() -> Result<()> {
             entry.count += 1;
             entry.last_ts = ev.ts.clone();
 
+            if ev.trigger_kind == "safety_denied" || ev.trigger_kind == "safety_emergency" {
+                let summary = if ev.decision_summary.len() > 60 {
+                    format!("{}...", &ev.decision_summary[..60])
+                } else {
+                    ev.decision_summary.clone()
+                };
+                safety_events.push((ev.ts.clone(), ev.trigger_kind.clone(), summary));
+            }
+
             if !ev.tools.is_empty() {
                 if ev.result.status == "success" {
                     tool_call_success += 1;
@@ -907,6 +961,15 @@ fn cmd_dashboard() -> Result<()> {
                     tool_call_fail += 1;
                 }
             }
+        }
+    }
+
+    const SAFETY_CAP: usize = 10;
+    if !safety_events.is_empty() {
+        println!();
+        println!("--- Recent safety events (last {} max) ---", SAFETY_CAP);
+        for (ts, kind, summary) in safety_events.iter().rev().take(SAFETY_CAP) {
+            println!("  {}  {}  {}", ts, kind, summary);
         }
     }
 
@@ -1032,6 +1095,9 @@ Available tools:\n",
         })?;
         if let Some((_call, res)) = &result.tool_call {
             println!("pup (tool): {:?}", res);
+            if !res.ok && tools::is_safety_denial_error(res.error.as_deref()) {
+                println!("[safety] Tool was denied by execution_mode. Use `openpup status` to see current mode, or `openpup safety draft-only` to allow L2 tools.");
+            }
         }
         println!("{}", result.reply_text);
         return Ok(());
@@ -1067,6 +1133,9 @@ Available tools:\n",
                 Ok(result) => {
                     if let Some((call, res)) = &result.tool_call {
                         println!("pup (tool request): {:?} -> {:?}", call.kind, res);
+                        if !res.ok && tools::is_safety_denial_error(res.error.as_deref()) {
+                            println!("[safety] Tool denied by execution_mode. Try `openpup safety draft-only` or check `openpup status`.");
+                        }
                     }
                     println!("pup> {}\n", result.reply_text.trim());
                 }
@@ -1128,12 +1197,68 @@ fn cmd_node_list() -> Result<()> {
     Ok(())
 }
 
+fn cmd_node_test(name: &str) -> Result<()> {
+    let nodes_file = registry::load_nodes()?;
+    let node = nodes_file
+        .nodes
+        .get(name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("node {:?} not found; use `openpup node list`", name))?;
+    let host = node
+        .host
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("node {:?} has no host; set host with `openpup node spawn {} --host <url>`", name, name))?;
+
+    let transport = crate::core::kernel::node_transport::HttpNodeTransport;
+    let res = transport.invoke_tool(&node, "health_check", &serde_json::json!({}))?;
+
+    let mut ev = runtime_audit::new_event(
+        runtime_audit::REALM_DEFAULT,
+        runtime_audit::AGENT_CORE,
+        "manual",
+        "node_test",
+        format!("Test node {} at {}", name, host),
+    );
+    ev.tools.push(runtime_audit::RuntimeAuditToolCall {
+        name: "health_check".to_string(),
+        level: "L1".to_string(),
+        args_digest: None,
+    });
+    ev.result = runtime_audit::RuntimeAuditResult {
+        status: if res.ok { "success" } else { "error" }.to_string(),
+        error: res.error.clone(),
+    };
+    ev.risk = runtime_audit::RuntimeAuditRisk::default();
+    let _ = runtime_audit::record(&ev);
+
+    if res.ok {
+        println!("node {:?}: OK", name);
+        if let Some(v) = res.value {
+            println!("  {}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()));
+        }
+    } else {
+        println!("node {:?}: FAIL", name);
+        if let Some(e) = res.error {
+            println!("  {}", e);
+        }
+    }
+    Ok(())
+}
+
 fn cmd_status() -> Result<()> {
     let cfg = config::load_or_init()?;
     let path = config::config_path()?;
     println!("openpup config: {:?}", path);
     println!("  spawn.mode = {}", cfg.autonomy.spawn.mode);
-    println!("  execution_mode = {}", cfg.autonomy.execution_mode);
+    let mode = cfg.autonomy.execution_mode.as_str();
+    let mode_scope = match mode {
+        "readonly" => "only L1 tools allowed",
+        "draft-only" => "L1/L2 allowed, L3/L4 forbidden",
+        "full" => "L1–L3 allowed; L4 requires approval",
+        _ => "see docs/tools-autonomy-safety.md",
+    };
+    println!("  execution_mode = {} ({})", mode, mode_scope);
     match persona::load_assembled_persona() {
         Ok(s) => println!("Persona: assembled ({} chars, ready for runtime)", s.len()),
         Err(_) => println!("Persona: not loaded (run `openpup persona init` and edit ~/.openpup/workspace/persona/)"),
@@ -1143,15 +1268,19 @@ fn cmd_status() -> Result<()> {
 
 fn cmd_safety_readonly() -> Result<()> {
     let mut cfg = config::load_or_init()?;
+    let old_mode = cfg.autonomy.execution_mode.clone();
     cfg.autonomy.execution_mode = "readonly".to_string();
     config::save(&cfg)?;
-    println!("Safety: execution_mode set to \"readonly\". Only L1 tools should be enabled.");
+    println!("Safety: execution_mode set to \"readonly\". Only L1 tools are allowed.");
     let mut event = runtime_audit::new_event(
         runtime_audit::REALM_DEFAULT,
         runtime_audit::AGENT_CORE,
         "manual",
         "safety_emergency",
-        "Emergency downgrade: execution_mode set to readonly.",
+        format!(
+            "Emergency downgrade: execution_mode {} -> readonly.",
+            old_mode
+        ),
     );
     event.result = runtime_audit::RuntimeAuditResult {
         status: "success".to_string(),
@@ -1164,17 +1293,21 @@ fn cmd_safety_readonly() -> Result<()> {
 
 fn cmd_safety_draft_only() -> Result<()> {
     let mut cfg = config::load_or_init()?;
+    let old_mode = cfg.autonomy.execution_mode.clone();
     cfg.autonomy.execution_mode = "draft-only".to_string();
     config::save(&cfg)?;
     println!(
-        "Safety: execution_mode set to \"draft-only\". Allow L1/L2 (draft), forbid L3/L4 execution."
+        "Safety: execution_mode set to \"draft-only\". L1/L2 allowed; L3/L4 forbidden."
     );
     let mut event = runtime_audit::new_event(
         runtime_audit::REALM_DEFAULT,
         runtime_audit::AGENT_CORE,
         "manual",
         "safety_emergency",
-        "Emergency downgrade: execution_mode set to draft-only.",
+        format!(
+            "Emergency downgrade: execution_mode {} -> draft-only.",
+            old_mode
+        ),
     );
     event.result = runtime_audit::RuntimeAuditResult {
         status: "success".to_string(),
@@ -1264,6 +1397,14 @@ fn cmd_plan(cmd: &PlanCmd) -> Result<()> {
                     success_count += 1;
                 }
                 println!("    result: {:?}\n", res);
+                if !res.ok && tools::is_safety_denial_error(res.error.as_deref()) {
+                    println!(
+                        "    [safety] Current execution_mode = {:?}. Only certain tool levels are allowed.",
+                        cfg.autonomy.execution_mode
+                    );
+                    println!("    To allow L2 tools: openpup safety draft-only. To allow L3: set execution_mode to full in ~/.openpup/config.toml.");
+                    println!("    Check current safety state: openpup status.\n");
+                }
 
                 let mut ev = runtime_audit::new_event(
                     runtime_audit::REALM_DEFAULT,

@@ -1,0 +1,14 @@
+name = "工作 – 今日计划草稿（草稿）"
+base = "workspace"
+input = "today_tasks.md"
+semantic_kind = "work_log"
+empty_message = "（暂无今日任务，请编辑 workspace/today_tasks.md，以便生成今日计划草稿）"
+header = "--- 今日计划草稿（待你确认） ---"
+footer = "(Phase 2：草稿 Loop，已写入 runtime-audit.log，source=work_plan_draft)"
+join_separator = "\n"
+max_lines = 0
+
+## 说明：
+## - 与 work_morning 类似，但更偏向「草稿」，保留 today_tasks.md 中的全部非空行。
+## - 适合在晚上或第二天早上，用于生成可编辑的「执行计划」草稿。
+

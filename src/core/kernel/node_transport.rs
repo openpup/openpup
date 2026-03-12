@@ -26,7 +26,15 @@ impl NodeTransport for HttpNodeTransport {
                 .json(&body)
                 .send()
                 .await
-                .context("node request failed")?;
+                .map_err(|e| {
+                    let s = e.to_string();
+                    let hint = if s.contains("connection refused") || s.contains("Connect") {
+                        format!(" (is the worker running at {}?)", url)
+                    } else {
+                        String::new()
+                    };
+                    anyhow::anyhow!("node request failed: {}{}", s, hint)
+                })?;
             let status = resp.status();
             let text = resp
                 .text()

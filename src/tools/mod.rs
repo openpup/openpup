@@ -4,7 +4,8 @@ pub mod net;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{OpenpupConfig, ToolExposeConfig};
+use crate::config::OpenpupConfig;
+use crate::core::llm;
 use crate::core::memory;
 use crate::core::registry;
 use crate::core::runtime_audit;
@@ -14,6 +15,8 @@ use anyhow::{Context, Result};
 use std::fs::{self, create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// 统一的工具种类定义（只包含当前实现的只读 L1 工具 + 少量管理工具 + 组合工具）。
@@ -31,6 +34,22 @@ pub enum ToolKind {
     CaldavEventsToday,
     /// CalDAV 任务列表（简要）。
     CaldavTasks,
+    /// 原语：执行 shell 命令（沙箱内，L2）。
+    ShellExec,
+    /// 原语：读取文件内容（workspace 内相对路径，L1）。
+    FileRead,
+    /// 原语：写入文件（workspace 内相对路径，L2）。
+    FileWrite,
+    /// 原语：发起 HTTP 请求（L2）。
+    HttpRequest,
+    /// 原语：联网搜索（L1，当前用 DuckDuckGo 摘要）。
+    WebSearch,
+    /// 原语：安全数学表达式计算（L1）。
+    Calculator,
+    /// 原语：存储一条长期记忆 k/v（L2）。
+    MemoryStore,
+    /// 原语：按查询检索长期记忆（L1）。
+    MemoryRecall,
     /// 管理工具：保存一个组合工具 TOML 到 workspace/tools 目录。
     SaveCompositeTool,
     /// 管理工具：注册一个子 Agent（受 spawn.mode 约束）。
@@ -88,6 +107,14 @@ pub fn tool_kind_from_str(name: &str) -> Option<ToolKind> {
         "email_unread_subjects" | "email:unread-subjects" => Some(ToolKind::EmailUnreadSubjects),
         "caldav_events_today" | "caldav:events-today" => Some(ToolKind::CaldavEventsToday),
         "caldav_tasks" | "caldav:tasks" => Some(ToolKind::CaldavTasks),
+        "shell_exec" | "shell" | "exec" => Some(ToolKind::ShellExec),
+        "file_read" => Some(ToolKind::FileRead),
+        "file_write" => Some(ToolKind::FileWrite),
+        "http_request" | "http" => Some(ToolKind::HttpRequest),
+        "web_search" => Some(ToolKind::WebSearch),
+        "calculator" => Some(ToolKind::Calculator),
+        "memory_store" => Some(ToolKind::MemoryStore),
+        "memory_recall" => Some(ToolKind::MemoryRecall),
         "save_composite_tool" => Some(ToolKind::SaveCompositeTool),
         "register_sub_agent" | "spawn" => Some(ToolKind::RegisterSubAgent),
         "register_node" | "node_register" => Some(ToolKind::RegisterNode),
@@ -126,6 +153,14 @@ fn map_id_to_kind(id: &str) -> Option<ToolKind> {
         "email_unread_subjects" => Some(ToolKind::EmailUnreadSubjects),
         "caldav_events_today" => Some(ToolKind::CaldavEventsToday),
         "caldav_tasks" => Some(ToolKind::CaldavTasks),
+        "shell_exec" => Some(ToolKind::ShellExec),
+        "file_read" => Some(ToolKind::FileRead),
+        "file_write" => Some(ToolKind::FileWrite),
+        "http_request" => Some(ToolKind::HttpRequest),
+        "web_search" => Some(ToolKind::WebSearch),
+        "calculator" => Some(ToolKind::Calculator),
+        "memory_store" => Some(ToolKind::MemoryStore),
+        "memory_recall" => Some(ToolKind::MemoryRecall),
         "l3_log_decision" => Some(ToolKind::L3LogDecision),
         "l3_update_progress" => Some(ToolKind::L3UpdateProgress),
         "l3_add_todo" => Some(ToolKind::L3AddTodo),
@@ -135,36 +170,202 @@ fn map_id_to_kind(id: &str) -> Option<ToolKind> {
     }
 }
 
+/// 内建工具（硬编码）：所有已实现的工具及等级，不依赖 config。暴露时再按 execution_mode 过滤。
+fn builtin_tools() -> Vec<ExposedTool> {
+    vec![
+        ExposedTool {
+            name: "home_assistant_get_state".to_string(),
+            description: "Read Home Assistant entity state".to_string(),
+            level: "L1".to_string(),
+            args: "{\"entity_id\": string}".to_string(),
+            kind: ToolKind::HomeAssistantGetState,
+        },
+        ExposedTool {
+            name: "market_quote".to_string(),
+            description: "Get daily quote for a symbol".to_string(),
+            level: "L1".to_string(),
+            args: "{\"symbol\": string}".to_string(),
+            kind: ToolKind::MarketQuote,
+        },
+        ExposedTool {
+            name: "news_rss_headlines".to_string(),
+            description: "Fetch RSS headlines from configured feeds".to_string(),
+            level: "L1".to_string(),
+            args: "{\"limit\": optional number}".to_string(),
+            kind: ToolKind::NewsRssHeadlines,
+        },
+        ExposedTool {
+            name: "email_unread_subjects".to_string(),
+            description: "List unread email subjects".to_string(),
+            level: "L1".to_string(),
+            args: "{\"mailbox\": optional string, \"limit\": optional number}".to_string(),
+            kind: ToolKind::EmailUnreadSubjects,
+        },
+        ExposedTool {
+            name: "caldav_events_today".to_string(),
+            description: "Get today's calendar events".to_string(),
+            level: "L1".to_string(),
+            args: "{\"limit\": optional number}".to_string(),
+            kind: ToolKind::CaldavEventsToday,
+        },
+        ExposedTool {
+            name: "caldav_tasks".to_string(),
+            description: "Get calendar tasks".to_string(),
+            level: "L1".to_string(),
+            args: "{\"limit\": optional number}".to_string(),
+            kind: ToolKind::CaldavTasks,
+        },
+        ExposedTool {
+            name: "shell_exec".to_string(),
+            description: "Execute shell command in workspace (sandbox)".to_string(),
+            level: "L2".to_string(),
+            args: "{\"command\": string, \"timeout_sec\": optional number, \"working_dir\": optional string}".to_string(),
+            kind: ToolKind::ShellExec,
+        },
+        ExposedTool {
+            name: "file_read".to_string(),
+            description: "Read file contents (path relative to workspace)".to_string(),
+            level: "L1".to_string(),
+            args: "{\"path\": string, \"encoding\": optional string}".to_string(),
+            kind: ToolKind::FileRead,
+        },
+        ExposedTool {
+            name: "file_write".to_string(),
+            description: "Write content to file (path relative to workspace)".to_string(),
+            level: "L2".to_string(),
+            args: "{\"path\": string, \"content\": string, \"mode\": optional \"overwrite\"|\"append\"}".to_string(),
+            kind: ToolKind::FileWrite,
+        },
+        ExposedTool {
+            name: "http_request".to_string(),
+            description: "Make HTTP request (GET/POST/PUT/DELETE)".to_string(),
+            level: "L2".to_string(),
+            args: "{\"method\": string, \"url\": string, \"headers\": optional object, \"body\": optional string, \"timeout\": optional number}".to_string(),
+            kind: ToolKind::HttpRequest,
+        },
+        ExposedTool {
+            name: "web_search".to_string(),
+            description: "Search the web and return summary (DuckDuckGo)".to_string(),
+            level: "L1".to_string(),
+            args: "{\"query\": string, \"num_results\": optional number}".to_string(),
+            kind: ToolKind::WebSearch,
+        },
+        ExposedTool {
+            name: "calculator".to_string(),
+            description: "Evaluate math expression safely".to_string(),
+            level: "L1".to_string(),
+            args: "{\"expression\": string}".to_string(),
+            kind: ToolKind::Calculator,
+        },
+        ExposedTool {
+            name: "memory_store".to_string(),
+            description: "Store a key-value in long-term memory".to_string(),
+            level: "L2".to_string(),
+            args: "{\"key\": string, \"value\": string, \"tags\": optional string}".to_string(),
+            kind: ToolKind::MemoryStore,
+        },
+        ExposedTool {
+            name: "memory_recall".to_string(),
+            description: "Recall memories by query".to_string(),
+            level: "L1".to_string(),
+            args: "{\"query\": string, \"limit\": optional number}".to_string(),
+            kind: ToolKind::MemoryRecall,
+        },
+        ExposedTool {
+            name: "l3_log_decision".to_string(),
+            description: "Append a decision/summary to local L3 log".to_string(),
+            level: "L3".to_string(),
+            args: "{\"summary\": string, \"details\": optional}".to_string(),
+            kind: ToolKind::L3LogDecision,
+        },
+        ExposedTool {
+            name: "l3_update_progress".to_string(),
+            description: "Update a local progress key".to_string(),
+            level: "L3".to_string(),
+            args: "{\"key\": string, \"status\": string, \"meta\": optional}".to_string(),
+            kind: ToolKind::L3UpdateProgress,
+        },
+        ExposedTool {
+            name: "l3_add_todo".to_string(),
+            description: "Add a local TODO item".to_string(),
+            level: "L3".to_string(),
+            args: "{\"title\": string, \"id\": optional, \"status\": optional, \"tags\": optional}".to_string(),
+            kind: ToolKind::L3AddTodo,
+        },
+        ExposedTool {
+            name: "l3_update_todo_status".to_string(),
+            description: "Update local TODO status".to_string(),
+            level: "L3".to_string(),
+            args: "{\"id\": string, \"status\": string}".to_string(),
+            kind: ToolKind::L3UpdateTodoStatus,
+        },
+    ]
+}
+
+/// 四个 execution_mode：readonly、draft-only、full、approval。
+/// 按 execution_mode 决定某等级是否可暴露：readonly 仅 L1，draft-only 允许 L1/L2，full 允许 L1–L3，approval 允许 L1–L4。
+fn level_exposed_for_mode(mode: &str, level: &str) -> bool {
+    match mode {
+        "readonly" => level == "L1",
+        "draft-only" => level == "L1" || level == "L2",
+        "full" => level == "L1" || level == "L2" || level == "L3",
+        "approval" => level == "L1" || level == "L2" || level == "L3" || level == "L4",
+        _ => level == "L1",
+    }
+}
+
 /// 从配置构建一份对 LLM 可见的工具列表。
 ///
-/// - 若 cfg.tools 为空，则返回空列表（agent 将不暴露任何工具）。
-/// - 无法映射到已知 ToolKind 的条目会被忽略。
+/// - **内建工具**（硬编码）：L1 只读 + L3 本地工具，始终作为底表；config [tools] 可覆盖同名项。
+/// - **execution_mode**：只暴露当前模式允许的等级（readonly→L1，draft-only→L1/L2，full→L1–L3）。
+/// - 管理/多节点工具（save_composite_tool、register_*、invoke_*）为 L2，在 draft-only/full 下暴露，由 kernel 在 system prompt 中统一描述。
+/// - 最后叠加 workspace 组合工具（组合工具等级以声明为准，同样按 mode 过滤）。
 pub fn exposed_tools_from_config(cfg: &OpenpupConfig) -> Vec<ExposedTool> {
-    let mut out = Vec::new();
-    let list: &[ToolExposeConfig] = match cfg.tools.as_ref() {
-        Some(v) => v.as_slice(),
-        None => return out,
-    };
+    let mode = cfg.autonomy.execution_mode.as_str();
+    let mut out: Vec<ExposedTool> = builtin_tools()
+        .into_iter()
+        .filter(|t| level_exposed_for_mode(mode, &t.level))
+        .collect();
 
-    for t in list {
-        if let Some(kind) = map_id_to_kind(t.id.as_str()) {
-            out.push(ExposedTool {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                level: if t.level.is_empty() {
-                    "L1".to_string()
+    if let Some(list) = cfg.tools.as_ref() {
+        for t in list {
+            if let Some(kind) = map_id_to_kind(t.id.as_str()) {
+                let level = if t.level.is_empty() {
+                    tool_level_for_kind(&kind).to_string()
                 } else {
                     t.level.clone()
-                },
-                args: t.args.clone(),
-                kind,
-            });
+                };
+                if !level_exposed_for_mode(mode, &level) {
+                    continue;
+                }
+                let name = if t.name.is_empty() { t.id.clone() } else { t.name.clone() };
+                if let Some(pos) = out.iter().position(|e| e.name == name || e.name == t.id) {
+                    out[pos] = ExposedTool {
+                        name,
+                        description: t.description.clone(),
+                        level,
+                        args: t.args.clone(),
+                        kind,
+                    };
+                } else {
+                    out.push(ExposedTool {
+                        name,
+                        description: t.description.clone(),
+                        level,
+                        args: t.args.clone(),
+                        kind,
+                    });
+                }
+            }
         }
     }
 
-    // 叠加 workspace 下声明的组合工具。
     if let Ok(extra) = load_composite_tools() {
-        out.extend(extra);
+        for t in extra {
+            if level_exposed_for_mode(mode, &t.level) {
+                out.push(t);
+            }
+        }
     }
 
     out
@@ -285,7 +486,11 @@ pub fn save_composite_tool_raw(raw_toml: &str) -> Result<PathBuf> {
 
 fn tool_level_for_kind(kind: &ToolKind) -> &'static str {
     match kind {
-        ToolKind::SaveCompositeTool
+        ToolKind::ShellExec
+        | ToolKind::FileWrite
+        | ToolKind::HttpRequest
+        | ToolKind::MemoryStore
+        | ToolKind::SaveCompositeTool
         | ToolKind::RegisterSubAgent
         | ToolKind::RegisterNode
         | ToolKind::InvokeSubAgent
@@ -298,39 +503,234 @@ fn tool_level_for_kind(kind: &ToolKind) -> &'static str {
     }
 }
 
+fn tool_name_for_kind(kind: &ToolKind) -> String {
+    match kind {
+        ToolKind::HomeAssistantGetState => "home_assistant_get_state".to_string(),
+        ToolKind::MarketQuote => "market_quote".to_string(),
+        ToolKind::NewsRssHeadlines => "news_rss_headlines".to_string(),
+        ToolKind::EmailUnreadSubjects => "email_unread_subjects".to_string(),
+        ToolKind::CaldavEventsToday => "caldav_events_today".to_string(),
+        ToolKind::CaldavTasks => "caldav_tasks".to_string(),
+        ToolKind::ShellExec => "shell_exec".to_string(),
+        ToolKind::FileRead => "file_read".to_string(),
+        ToolKind::FileWrite => "file_write".to_string(),
+        ToolKind::HttpRequest => "http_request".to_string(),
+        ToolKind::WebSearch => "web_search".to_string(),
+        ToolKind::Calculator => "calculator".to_string(),
+        ToolKind::MemoryStore => "memory_store".to_string(),
+        ToolKind::MemoryRecall => "memory_recall".to_string(),
+        ToolKind::SaveCompositeTool => "save_composite_tool".to_string(),
+        ToolKind::RegisterSubAgent => "register_sub_agent".to_string(),
+        ToolKind::RegisterNode => "register_node".to_string(),
+        ToolKind::InvokeSubAgent => "invoke_sub_agent".to_string(),
+        ToolKind::InvokeNodeTool => "invoke_node_tool".to_string(),
+        ToolKind::L3LogDecision => "l3_log_decision".to_string(),
+        ToolKind::L3UpdateProgress => "l3_update_progress".to_string(),
+        ToolKind::L3AddTodo => "l3_add_todo".to_string(),
+        ToolKind::L3UpdateTodoStatus => "l3_update_todo_status".to_string(),
+        ToolKind::Composite(id) => format!("composite:{}", id),
+    }
+}
+
 fn level_allowed(mode: &str, level: &str) -> bool {
-    // tools-autonomy-safety：L3 仅在 execution_mode = "full" 时允许执行。
+    // L4 仅在 execution_mode = "approval" 时允许执行。
+    if level == "L4" {
+        return mode == "approval";
+    }
+    // L3 仅在 full / approval 时允许执行。
     if level == "L3" {
-        return mode == "full";
+        return mode == "full" || mode == "approval";
     }
     match mode {
         "readonly" => level == "L1",
         "draft-only" => level == "L1" || level == "L2",
-        "full" => true,
+        "full" | "approval" => true,
         _ => level == "L1",
     }
 }
+
+/// 错误信息前缀，用于 CLI 判断是否为「安全矩阵拒绝」。
+const SAFETY_DENIAL_ERROR_PREFIX: &str = "execution_mode ";
+
+/// 判断工具执行失败是否因 execution_mode × 工具等级矩阵拒绝。
+pub fn is_safety_denial_error(err: Option<&str>) -> bool {
+    err.map(|e| e.contains(SAFETY_DENIAL_ERROR_PREFIX) && e.contains("does not allow"))
+        .unwrap_or(false)
+}
+
+// ============== 安全审查官：按单次调用的参数评估「真实等级」，再与 execution_mode 矩阵比对 ==============
+
+/// 安全审查官：根据本次调用的参数得出该次调用的**真实风险等级**（effective level）。
+/// 工具声明等级（如 shell_exec 声明为 L2）仅表示默认；审查官可依据 args 将本次调用判定为更高等级（L3/L4），
+/// 再与 execution_mode 矩阵决定是否放行。
+pub fn effective_tool_level(call: &ToolCall) -> &'static str {
+    match &call.kind {
+        ToolKind::ShellExec => {
+            let cmd = call
+                .args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            effective_level_for_shell_command(cmd)
+        }
+        _ => tool_level_for_kind(&call.kind),
+    }
+}
+
+/// 对 shell_exec 的 command 做风险分级：返回本次执行应视为的等级（L2/L3/L4）。
+fn effective_level_for_shell_command(cmd: &str) -> &'static str {
+    println!("effective_level_for_shell_command: {}", cmd);
+    if cmd.is_empty() {
+        return "L2";
+    }
+    let lower = cmd.to_lowercase();
+
+    // L4：明显高危，仅 approval 模式可执行
+    let l4_patterns: &[&str] = &[
+        "rm -rf /",
+        "rm -rf /*",
+        "sudo ",
+        " > /etc",
+        ">>/etc",
+        "|/bin/sh",
+        "| sh ",
+        "|bash ",
+        ":(){",
+        "mkfs.",
+        "dd if=",
+        "chmod 777 /",
+        "chmod 4755",
+        "> /dev/sd",
+        ">/dev/sd",
+    ];
+    if l4_patterns.iter().any(|p| lower.contains(p)) {
+        return "L4";
+    }
+
+    // L3：中危（网络拉取并执行、后台常驻、写系统路径等），full 可执行
+    let l3_patterns: &[&str] = &[
+        "curl ",
+        "wget ",
+        " | sh",
+        " | bash",
+        "nohup ",
+        " &",
+        ">/tmp/",
+        ">>/tmp/",
+        ">/var/",
+        ">/usr/",
+    ];
+    if l3_patterns.iter().any(|p| lower.contains(p)) {
+        return "L3";
+    }
+
+    // L2：低危（只读或仅写 workspace 内、简单命令）
+    "L2"
+}
+
+/// 执行时使用的有效等级：若开启 LLM 增强且为 shell_exec，且当前**未**在 tokio runtime 内，则用内建 security_reviewer 判定；否则用规则（避免在 async 上下文中创建 runtime 导致 panic）。
+fn effective_tool_level_for_execution(cfg: &OpenpupConfig, call: &ToolCall) -> String {
+    if cfg.autonomy.use_llm_security_review != Some(true) {
+        return effective_tool_level(call).to_string();
+    }
+    if let ToolKind::ShellExec = &call.kind {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return effective_tool_level(call).to_string();
+        }
+        let cmd = call
+            .args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if let Ok(llm_cfg) = llm::load_openai_from_config(cfg) {
+            if let Ok(reply) =
+                llm::complete_as_builtin_role_blocking(&llm_cfg, llm::ROLE_SECURITY_REVIEWER, cmd)
+            {
+                if let Some(level) = llm::parse_security_level_from_review(&reply) {
+                    return level;
+                }
+            }
+        }
+    }
+    effective_tool_level(call).to_string()
+}
+
+// ============== 以上为安全审查官 ==============
 
 /// 统一的同步执行器：在给定配置下执行某个工具。
 ///
 /// - 不打印到 stdout，由上层决定如何渲染；
 /// - 按 execution_mode 与工具 level 做最小权限控制：readonly 仅 L1，draft-only 允许 L1/L2，full 不限制。
+/// - 被拒绝时写入 runtime-audit.log 的 safety_denied 事件。
 /// - `node_transport`：调用 Worker 节点工具时使用，由 kernel 注入；若为 None 且请求为 InvokeNodeTool 则返回错误。
+fn workspace_relative_path(rel: &str) -> Result<PathBuf> {
+    let root = workspace::workspace_root()?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.clone());
+    let path = root.join(rel);
+    let normalized = path.components().fold(PathBuf::new(), |mut acc, c| {
+        match c {
+            std::path::Component::ParentDir => {
+                if acc.as_os_str().is_empty() {
+                    acc.push("..");
+                } else {
+                    acc.pop();
+                }
+            }
+            std::path::Component::CurDir => {}
+            _ => acc.push(c),
+        }
+        acc
+    });
+    let resolved = root.join(&normalized);
+    if resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        anyhow::bail!("path escapes workspace")
+    }
+}
+
 pub fn execute_tool(
     cfg: &OpenpupConfig,
     call: &ToolCall,
     node_transport: Option<&dyn NodeTransport>,
 ) -> ToolResult {
     let mode = cfg.autonomy.execution_mode.as_str();
-    let level = tool_level_for_kind(&call.kind);
-    if !level_allowed(mode, level) {
+    let declared_level = tool_level_for_kind(&call.kind);
+    let effective_level = effective_tool_level_for_execution(cfg, call);
+    if !level_allowed(mode, &effective_level) {
+        let tool_id = tool_name_for_kind(&call.kind);
+        let err_msg = format!(
+            "execution_mode {:?} does not allow effective tool level {} (declared {}); tool_id={}",
+            mode, effective_level, declared_level, tool_id
+        );
+        let mut ev = runtime_audit::new_event(
+            runtime_audit::REALM_DEFAULT,
+            runtime_audit::AGENT_CORE,
+            "tool",
+            "safety_denied",
+            format!(
+                "Tool execution denied by security reviewer: mode={} effective_level={} tool_id={}",
+                mode, effective_level, tool_id
+            ),
+        );
+        ev.tools.push(runtime_audit::RuntimeAuditToolCall {
+            name: tool_id.clone(),
+            level: effective_level.clone(),
+            args_digest: Some(format!("declared={},effective={}", declared_level, effective_level)),
+        });
+        ev.result = runtime_audit::RuntimeAuditResult {
+            status: "denied".to_string(),
+            error: Some(err_msg.clone()),
+        };
+        ev.risk = runtime_audit::RuntimeAuditRisk::default();
+        let _ = runtime_audit::record(&ev);
+
         return ToolResult {
             ok: false,
             value: None,
-            error: Some(format!(
-                "execution_mode {:?} does not allow tool level {}",
-                mode, level
-            )),
+            error: Some(err_msg),
         };
     }
 
@@ -894,6 +1294,378 @@ pub fn execute_tool(
                         error: Some(e.to_string()),
                     }
                 }
+            }
+        }
+        ToolKind::ShellExec => {
+            let command = call
+                .args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if command.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.command is required for shell_exec".to_string()),
+                };
+            }
+            let _timeout_sec = call
+                .args
+                .get("timeout_sec")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60);
+            let cwd = match workspace::workspace_root() {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolResult {
+                        ok: false,
+                        value: None,
+                        error: Some(e.to_string()),
+                    };
+                }
+            };
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .current_dir(&cwd)
+                .output();
+            match output {
+                Ok(o) => ToolResult {
+                    ok: true,
+                    value: Some(serde_json::json!({
+                        "stdout": String::from_utf8_lossy(&o.stdout),
+                        "stderr": String::from_utf8_lossy(&o.stderr),
+                        "exit_code": o.status.code().unwrap_or(-1)
+                    })),
+                    error: None,
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::FileRead => {
+            let path_arg = call
+                .args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if path_arg.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.path is required for file_read".to_string()),
+                };
+            }
+            match workspace_relative_path(path_arg) {
+                Ok(p) => match fs::read_to_string(&p) {
+                    Ok(s) => ToolResult {
+                        ok: true,
+                        value: Some(serde_json::json!({ "content": s })),
+                        error: None,
+                    },
+                    Err(e) => ToolResult {
+                        ok: false,
+                        value: None,
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::FileWrite => {
+            let path_arg = call
+                .args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content = call
+                .args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if path_arg.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.path is required for file_write".to_string()),
+                };
+            }
+            let mode = call
+                .args
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("overwrite");
+            match workspace_relative_path(path_arg) {
+                Ok(p) => {
+                    if let Some(parent) = p.parent() {
+                        let _ = create_dir_all(parent);
+                    }
+                    let open_result = if mode == "append" {
+                        OpenOptions::new().write(true).append(true).create(true).open(&p)
+                    } else {
+                        OpenOptions::new()
+                            .write(true)
+                            .truncate(true)
+                            .create(true)
+                            .open(&p)
+                    };
+                    match open_result.and_then(|mut f| f.write_all(content.as_bytes())) {
+                        Ok(()) => ToolResult {
+                            ok: true,
+                            value: Some(serde_json::json!({ "path": p.to_string_lossy() })),
+                            error: None,
+                        },
+                        Err(e) => ToolResult {
+                            ok: false,
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::HttpRequest => {
+            let method = call
+                .args
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GET")
+                .to_uppercase();
+            let url = call
+                .args
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if url.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.url is required for http_request".to_string()),
+                };
+            }
+            let timeout_sec = call
+                .args
+                .get("timeout")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30);
+            let res: Result<serde_json::Value> = crate::tools::net::block_on_async(async {
+                let proxy = std::env::var("OPENPUP_PROXY").ok();
+                let mut builder = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(timeout_sec));
+                if let Some(p) = proxy {
+                    builder = builder.proxy(reqwest::Proxy::all(p)?);
+                }
+                let client = builder.build()?;
+
+                let mut req = match method.as_str() {
+                    "GET" => client.get(url),
+                    "POST" => client.post(url),
+                    "PUT" => client.put(url),
+                    "DELETE" => client.delete(url),
+                    _ => anyhow::bail!("unsupported method: {}", method),
+                };
+
+                if let Some(h) = call.args.get("headers").and_then(|v| v.as_object()) {
+                    for (k, v) in h {
+                        if let Some(s) = v.as_str() {
+                            req = req.header(k.as_str(), s);
+                        }
+                    }
+                }
+                if let Some(body) = call.args.get("body").and_then(|v| v.as_str()) {
+                    req = req.body(body.to_string());
+                }
+
+                let resp = req.send().await?;
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                Ok(serde_json::json!({ "status": status, "body": body }))
+            });
+
+            match res {
+                Ok(v) => ToolResult {
+                    ok: true,
+                    value: Some(v),
+                    error: None,
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::WebSearch => {
+            let query = call
+                .args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if query.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.query is required for web_search".to_string()),
+                };
+            }
+            let url = format!(
+                "https://api.duckduckgo.com/?q={}&format=json",
+                urlencoding::encode(query)
+            );
+            let res: Result<serde_json::Value> = crate::tools::net::block_on_async(async {
+                let proxy = std::env::var("OPENPUP_PROXY").ok();
+                let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+                if let Some(p) = proxy {
+                    builder = builder.proxy(reqwest::Proxy::all(p)?);
+                }
+                let client = builder.build()?;
+                let resp = client.get(&url).send().await?;
+                let text = resp.text().await.unwrap_or_default();
+                let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+                let abstract_text = v
+                    .as_ref()
+                    .and_then(|o| o.get("AbstractText"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let abstract_url = v
+                    .as_ref()
+                    .and_then(|o| o.get("AbstractURL"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(serde_json::json!({
+                    "summary": abstract_text,
+                    "url": abstract_url,
+                    "raw": if abstract_text.is_empty() { text } else { String::new() }
+                }))
+            });
+
+            match res {
+                Ok(v) => ToolResult {
+                    ok: true,
+                    value: Some(v),
+                    error: None,
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::Calculator => {
+            let expression = call
+                .args
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if expression.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.expression is required for calculator".to_string()),
+                };
+            }
+            match evalexpr::eval_number(expression) {
+                Ok(n) => ToolResult {
+                    ok: true,
+                    value: Some(serde_json::json!({ "result": n })),
+                    error: None,
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::MemoryStore => {
+            let key = call
+                .args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let value = call
+                .args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if key.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some("args.key is required for memory_store".to_string()),
+                };
+            }
+            let _tags = call
+                .args
+                .get("tags")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match memory::add_semantic_item("memory", &value, Some(&key)) {
+                Ok(()) => ToolResult {
+                    ok: true,
+                    value: Some(serde_json::json!({ "stored": true, "key": key })),
+                    error: None,
+                },
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        ToolKind::MemoryRecall => {
+            let query = call
+                .args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let limit = call
+                .args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5) as usize;
+            match memory::search_semantic_items(Some("memory"), query, limit) {
+                Ok(items) => {
+                    let arr: Vec<serde_json::Value> = items
+                        .into_iter()
+                        .map(|it| {
+                            serde_json::json!({
+                                "key": it.tags.unwrap_or_default(),
+                                "content": it.content,
+                                "created_ts": it.created_ts
+                            })
+                        })
+                        .collect();
+                    ToolResult {
+                        ok: true,
+                        value: Some(serde_json::json!({ "items": arr })),
+                        error: None,
+                    }
+                }
+                Err(e) => ToolResult {
+                    ok: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                },
             }
         }
         ToolKind::Composite(id) => {

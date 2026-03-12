@@ -1,0 +1,13 @@
+name = "生活 – 晚间摘要（只读）"
+base = "workspace"
+input = "life_notes.md"
+semantic_kind = "life_log"
+empty_message = "（暂无生活笔记，请编辑 workspace/life_notes.md）"
+header = "--- 生活摘要（晚间·只读） ---"
+footer = "(已写入 runtime-audit.log，source=life_evening)"
+max_lines = 20
+
+## 说明：
+## - 适合在睡前整理当天的生活笔记和感想。
+## - 建议与 life_morning 一起使用，形成生活节奏的「早晚双摘要」。
+

@@ -19,8 +19,38 @@ struct ToolResponse {
     error: Option<String>,
 }
 
+/// L1 只读：返回 Worker 版本与系统信息，供 Core 做 node test 健康检查。
+fn tool_health_check() -> ToolResponse {
+    ToolResponse {
+        ok: true,
+        value: Some(serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        })),
+        error: None,
+    }
+}
+
+/// L1 只读：返回当前工作目录与简单磁盘信息（占位，可扩展为 df/stat）。
+fn tool_disk_usage_readonly() -> ToolResponse {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    ToolResponse {
+        ok: true,
+        value: Some(serde_json::json!({
+            "cwd": cwd,
+            "message": "L1 read-only disk info (extend with df/stat if needed)",
+        })),
+        error: None,
+    }
+}
+
 async fn handle_tool(Json(req): Json<ToolRequest>) -> Json<ToolResponse> {
     let resp = match req.tool.as_str() {
+        "health_check" => tool_health_check(),
+        "disk_usage_readonly" => tool_disk_usage_readonly(),
         "echo" => ToolResponse {
             ok: true,
             value: Some(req.args),
@@ -39,7 +69,7 @@ async fn handle_tool(Json(req): Json<ToolRequest>) -> Json<ToolResponse> {
         other => ToolResponse {
             ok: false,
             value: None,
-            error: Some(format!("unknown demo tool {:?}", other)),
+            error: Some(format!("unknown tool {:?}", other)),
         },
     };
     Json(resp)

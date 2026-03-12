@@ -108,3 +108,8 @@
   - 移除旧的 `LlmConfig` / `complete()` 等占位接口。  
   - 统一使用 `OpenpupLlmConfig` 与 `load_openai_from_config` / `chat_once` / `chat_with_memory` / `tool_planner`。  
   - 若你在自定义代码中依赖旧接口，请对照源码替换为上述新 API。
+
+- **execution_mode 与工具等级硬约束**  
+  - 工具执行路径中强制执行 execution_mode × L1–L4 矩阵：`readonly` 仅允许 L1，`draft-only` 允许 L1/L2，`full` 允许 L1–L3（L4 仍走审批）。  
+  - 此前若在 `readonly` 下曾依赖 L2 执行，升级后会被拒绝；请改用 `openpup safety draft-only` 或将 config.toml 中 `execution_mode` 设为 `draft-only` / `full`。  
+  - 被拒绝时会写入 `safety_denied` 审计事件，并可在 `openpup dashboard` 中查看近期安全事件。

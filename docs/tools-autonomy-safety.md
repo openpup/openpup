@@ -208,12 +208,31 @@
   - 自动执行了哪些事情（按 Realm / Agent / 风险等级聚合）
   - 是否有接近边界或被拒绝的动作
 
-#### 4.3 紧急停止与降权
+#### 4.3 execution_mode × 工具等级矩阵（硬约束）
 
-- 提供一键命令（例如在飞书/Telegram 中输入特定指令）：
-  - 立即将系统切换到：
-    - 只读模式（禁止一切修改外部状态）
-    - 或草稿模式（允许生成建议与草稿，但不执行）
+运行时通过 `~/.openpup/config.toml` 中的 `[autonomy] execution_mode` 控制允许执行的工具等级。工具执行前会做矩阵校验，不满足时直接拒绝并写入 `safety_denied` 审计事件。
+
+**安全审查官（effective level）**：工具在配置中声明的等级（如 `shell_exec` 声明为 L2）仅表示默认风险。执行前会先由内置「安全审查官」根据**本次调用的参数**评估该次调用的**真实等级**（effective level）。若审查官将本次调用判定为更高等级（例如某条 shell 命令被判定为 L4），则按 effective level 与上表矩阵做放行判断；拒绝时会注明「effective level Lx (declared Ly)」，便于排查。
+
+- **规则审查**（默认）：对 `shell_exec` 用内置规则做 L2/L3/L4 分级（删根、sudo、写系统路径等→L4；网络执行、后台、写 /tmp 等→L3；其余→L2）。
+- **LLM 增强**：在 `config.toml` 的 `[autonomy]` 下设置 `use_llm_security_review = true` 后，会用内建 LLM 角色 `security_reviewer` 对 shell 命令再做一次等级判定；LLM 不可用或解析失败时回退到规则。内建角色定义在 `core::llm`（`complete_as_builtin_role`），便于扩展更多「LLM 增强」场景。
+
+| execution_mode | L1 只读 | L2 草稿 | L3 自动 | L4 高风险 |
+|----------------|---------|---------|--------|-----------|
+| **readonly**   | ✅      | ❌      | ❌     | ❌        |
+| **draft-only**| ✅      | ✅      | ❌     | ❌        |
+| **full**      | ✅      | ✅      | ✅     | 需审批    |
+
+- **默认值**：`execution_mode = "readonly"`（仅 L1）。
+- **推荐**：日常使用可设为 `draft-only`，以便助手生成草稿与计划；需要本地 L3 工具（如 l3_log_decision、l3_add_todo）时再设为 `full`。
+- **常见错误**：在 `readonly` 下调用 L2/L3 工具会得到「execution_mode does not allow tool level X」。解决：运行 `openpup safety draft-only` 或编辑 config.toml 将 `execution_mode` 改为 `draft-only` / `full`，或使用 `openpup status` 查看当前安全状态。
+
+#### 4.4 紧急停止与降权
+
+- 提供一键命令（CLI）：
+  - `openpup safety readonly`：立即切换为只读（仅 L1）。
+  - `openpup safety draft-only`：允许 L1/L2，禁止 L3/L4。
+  - 每次变更会写入 `safety_emergency` 审计事件（含旧模式、新模式）。
 
 - 在出现以下情况时自动降级：
   - 检测到异常行为（频繁下单、非白名单域名、家居设备异常闪烁）

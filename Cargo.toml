@@ -21,6 +21,8 @@ imap = "2"
 native-tls = "0.2"
 ical = "0.11"
 rusqlite = "0.31"
+evalexpr = "11"
+urlencoding = "2"
 axum = { version = "0.7", features = ["json", "ws"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"

@@ -1,0 +1,13 @@
+name = "投资 – 早盘简报（只读）"
+base = "logs"
+input = "INVEST_LOG.md"
+semantic_kind = "invest_log"
+empty_message = "（暂无投资日志，请编辑 workspace/logs/INVEST_LOG.md）"
+header = "--- 早盘简报（只读） ---"
+footer = "(已写入 runtime-audit.log，source=invest_morning)"
+max_lines = 20
+
+## 说明：
+## - 该 Loop 默认从 workspace/logs/INVEST_LOG.md 读取最近若干行，生成早盘摘要。
+## - 建议你用其他工具或手动方式，把每日投资记录写入 INVEST_LOG.md。
+

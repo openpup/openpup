@@ -97,11 +97,16 @@ OpenPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：
    - 长期：跨会话的关键决策、偏好、重要事实。  
    - 程序性：一类「怎么做」的经验/Playbook（偏向工作流与技能）。
 
-3. **L1–L4 风险分级工具 + 审批**  
-   - L1：只读查询（行情、RSS、邮件头、日历、Home Assistant 状态等）。  
-   - L2：低风险写操作（本地文件、备忘、低影响配置）。  
-   - L3：小权限自治（内部 TODO 进度、仅本机状态、不会对外部世界造成直接危险）。  
-   - L4：高风险外部动作（真实交易、设备控制、远程登录等，默认关 + 需要显式审批）。
+3. **L1–L4 风险分级工具 + 审批**
+
+   **等级能力与 execution_mode 对照表**（四个 execution_mode：readonly、draft-only、full、approval；下表为各模式下是否暴露/可执行）：
+
+   | 等级 | name | 能力 | readonly | draft-only | full | approval |
+   |------|------|------|:--------:|:----------:|:----:|:--------:|
+   | **L1** | Read Only | 只读，不修改任何外部状态 | ✅ | ✅ | ✅ | ✅ |
+   | **L2** | Draft | 草稿/编排：写文件、执行命令、HTTP、记忆、组合与多节点 | ❌ | ✅ | ✅ | ✅ |
+   | **L3** | Auto Safe | 低风险自治：本机进度、TODO、决策日志，可容错 | ❌ | ❌ | ✅ | ✅ |
+   | **L4** | High-Risk | 高风险执行（交易/设备/远程），需审批 | ❌ | ❌ | ❌ | ✅ |
 
 4. **Core + Worker 多节点模型**  
    - Core：你的大脑与调度中枢，管理 Persona、Memory、Loop、工具与审计。  
@@ -113,7 +118,7 @@ OpenPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：
 
 6. **审计优先 + 紧急降权**  
    - 所有行为都有审计记录：来源、Loop、工具、风险等级。  
-   - 提供 `openpup safety readonly` / `draft-only` 等命令立刻把自治降到安全等级。
+   - 提供 `openpup safety readonly` / `draft-only` 等命令立刻把自治降到安全等级；`full` / `approval` 需在 `~/.openpup/config.toml` 的 `autonomy.execution_mode` 中设置。
 
 ---
 
@@ -225,8 +230,9 @@ Loop 的结构与配置见 `docs/CLI.md` 与 `docs/architecture.md`。
     - 家居 Worker（Home Assistant）  
     - 数据/回测 Worker（市场数据、回测引擎）
   - Core 通过 `invoke_node_tool` 把指令发到远端 Worker，Worker 只负责执行具体工具。
+  - 常用命令：`openpup node spawn <name> --host <url>`、`openpup node list`、`openpup node test <name>`；在另一台机器上起 Worker 见 **`docs/worker-quickstart.md`**。
 
-更完整示例依然保留在代码和文档中（如 `node_worker` 示例、`docs/architecture.md`）。
+更完整示例依然保留在代码和文档中（如 `node_worker` 二进制、`docs/architecture.md`）。
 
 ---
 
@@ -312,6 +318,9 @@ OpenPup 目前仍然处在「自用为主，但欢迎旁观和共创」的阶段
 
 - **工具、自主性与安全**  
   - `docs/tools-autonomy-safety.md`：L1–L4 工具分层、自主性与安全模型。
+
+- **多节点 Worker**  
+  - `docs/worker-quickstart.md`：在另一台机器上起 Worker、注册节点与 `node test` 验证。
 
 ---
 

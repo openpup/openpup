@@ -1,5 +1,9 @@
 //! LLM 客户端：从 config.toml + env 加载统一配置，通过 OpenAI 兼容 /chat/completions 调用。
 //! 提供 chat_once、chat_with_memory、tool_planner 等高层 API，供 Agent / Planner 使用。
+//!
+//! ## 内建 LLM 角色（LLM 增强）
+//! 提供若干**内建角色**（固定 system prompt），用于安全审查、摘要、校验等增强能力。
+//! 通过 `complete_as_builtin_role(cfg, role_id, user_message)` 调用，使用低 temperature 以保证稳定输出。
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -186,7 +190,13 @@ pub async fn openai_complete_with_memory(
                     let mut content = it.content.trim().to_string();
                     let max_len = 400usize;
                     if content.len() > max_len {
-                        content.truncate(max_len);
+                        // `String::truncate` expects a UTF-8 char boundary; max_len is bytes.
+                        // Walk backwards to the nearest boundary to avoid panic on multi-byte chars.
+                        let mut new_len = max_len;
+                        while new_len > 0 && !content.is_char_boundary(new_len) {
+                            new_len -= 1;
+                        }
+                        content.truncate(new_len);
                         content.push_str(" ...");
                     }
                     buf.push_str("- ");
@@ -228,6 +238,77 @@ pub async fn chat_with_memory(
     )
     .await
 }
+
+// ============== 内建 LLM 角色（用于安全审查、摘要等增强） ==============
+
+/// 内建角色 ID，用于 `complete_as_builtin_role`。
+pub const ROLE_SECURITY_REVIEWER: &str = "security_reviewer";
+
+fn builtin_role_system_prompt(role_id: &str) -> Option<&'static str> {
+    match role_id {
+        "security_reviewer" => Some(
+            r#"You are a security reviewer for shell commands. Given one shell command string, you must respond with exactly one line: L2, L3, or L4.
+
+- L4: High risk — e.g. delete root (rm -rf /), sudo, write to /etc or system paths, pipe to sh/bash, mkfs, dd to device, chmod 4755, fork bomb.
+- L3: Medium risk — e.g. curl/wget (network), nohup, background &, write to /tmp /var /usr.
+- L2: Low risk — read-only or only writes under workspace; simple commands.
+
+Reply with only the level (L2, L3, or L4), optionally followed by a single space and a very short reason. Example: "L2" or "L4 dangerous: rm -rf /"."#,
+        ),
+        _ => None,
+    }
+}
+
+/// 使用内建角色的 system prompt 做一次补全（低 temperature，便于解析）。
+/// 用于安全审查官、摘要等「LLM 增强」场景。
+pub async fn complete_as_builtin_role(
+    cfg: &OpenpupLlmConfig,
+    role_id: &str,
+    user_message: &str,
+) -> Result<String> {
+    let system = builtin_role_system_prompt(role_id)
+        .ok_or_else(|| anyhow!("unknown builtin role: {}", role_id))?;
+    let mut low_temp_cfg = cfg.clone();
+    low_temp_cfg.temperature = 0.1;
+    openai_complete(&low_temp_cfg, system, user_message).await
+}
+
+/// 从 security_reviewer 角色回复中解析出等级 L2/L3/L4（取第一个出现的等级标记）。
+pub fn parse_security_level_from_review(reply: &str) -> Option<String> {
+    let reply = reply.trim().to_uppercase();
+    if reply.starts_with("L2") {
+        Some("L2".to_string())
+    } else if reply.starts_with("L3") {
+        Some("L3".to_string())
+    } else if reply.starts_with("L4") {
+        Some("L4".to_string())
+    } else {
+        None
+    }
+}
+
+/// 同步封装：仅在**当前线程没有** tokio runtime 时新建 runtime 并调用 `complete_as_builtin_role`。
+/// 若当前已在 runtime 内（如 agent REPL 的 worker 线程），直接返回 Err，避免在 async 上下文中创建/销毁 runtime 导致 panic；调用方（tools）会回退到规则审查。
+pub fn complete_as_builtin_role_blocking(
+    cfg: &OpenpupLlmConfig,
+    role_id: &str,
+    user_message: &str,
+) -> Result<String> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(anyhow!(
+            "LLM builtin role cannot run blocking here (already inside tokio runtime); use rule-based review"
+        ));
+    }
+    let cfg = cfg.clone();
+    let role_id = role_id.to_string();
+    let user_message = user_message.to_string();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow!("runtime: {}", e))?;
+    rt.block_on(async move {
+        complete_as_builtin_role(&cfg, &role_id, &user_message).await
+    })
+}
+
+// ============== 以上为内建 LLM 角色 ==============
 
 /// 专用于 planner 的补全接口：
 /// - 要求 LLM 返回 **JSON 数组**，形如 `[{"tool": "...", "args": {...}}, ...]`；

@@ -164,8 +164,65 @@ pub struct ScheduleJob {
 pub struct AutonomyConfig {
     pub spawn: SpawnConfig,
     /// 全局执行模式：控制是否允许执行 L2/L3/L4 工具。
-    /// "readonly" | "draft-only" | "full"
+    /// 四个取值："readonly" | "draft-only" | "full" | "approval"
     pub execution_mode: String,
+    /// 是否用内建 LLM 角色（security_reviewer）对 shell_exec 做等级审查；未配置或 false 时仅用规则。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_llm_security_review: Option<bool>,
+}
+
+/// 全局执行模式：与 config.toml [autonomy] execution_mode 对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// 仅允许 L1（只读）工具。
+    Readonly,
+    /// 允许 L1、L2（草稿/低风险写），禁止 L3/L4。
+    DraftOnly,
+    /// 允许 L1–L3 执行；L4 不暴露。
+    Full,
+    /// 允许 L1–L4；L4 暴露且可执行（走显式审批）。
+    Approval,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::Readonly => "readonly",
+            ExecutionMode::DraftOnly => "draft-only",
+            ExecutionMode::Full => "full",
+            ExecutionMode::Approval => "approval",
+        }
+    }
+    /// 从 config 中使用的字符串解析；无效时默认 Readonly。
+    pub fn from_config_str(s: &str) -> Self {
+        match s {
+            "draft-only" => ExecutionMode::DraftOnly,
+            "full" => ExecutionMode::Full,
+            "approval" => ExecutionMode::Approval,
+            _ => ExecutionMode::Readonly,
+        }
+    }
+}
+
+/// 工具风险等级：与 tools 模块中的 level 对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRiskLevel {
+    L1,
+    L2,
+    L3,
+    L4,
+}
+
+impl ToolRiskLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolRiskLevel::L1 => "L1",
+            ToolRiskLevel::L2 => "L2",
+            ToolRiskLevel::L3 => "L3",
+            ToolRiskLevel::L4 => "L4",
+        }
+    }
 }
 
 /// Allowed values for autonomy.spawn.mode (tools-autonomy-safety.md §5.3).
@@ -175,8 +232,8 @@ fn is_valid_spawn_mode(mode: &str) -> bool {
     SPAWN_MODES.contains(&mode)
 }
 
-/// Allowed values for autonomy.execution_mode.
-const EXECUTION_MODES: [&str; 3] = ["readonly", "draft-only", "full"];
+/// Allowed values for autonomy.execution_mode（四个 execution_mode）。
+const EXECUTION_MODES: [&str; 4] = ["readonly", "draft-only", "full", "approval"];
 
 fn is_valid_execution_mode(mode: &str) -> bool {
     EXECUTION_MODES.contains(&mode)
@@ -225,6 +282,7 @@ impl Default for OpenpupConfig {
                     require_manual_approval: true,
                 },
                 execution_mode: "readonly".to_string(),
+                use_llm_security_review: None,
             },
             schedule: None,
             integrations: None,
@@ -357,6 +415,7 @@ mod tests {
         assert!(is_valid_execution_mode("readonly"));
         assert!(is_valid_execution_mode("draft-only"));
         assert!(is_valid_execution_mode("full"));
+        assert!(is_valid_execution_mode("approval"));
         assert!(!is_valid_execution_mode("something-else"));
     }
 }

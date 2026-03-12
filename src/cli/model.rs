@@ -15,6 +15,9 @@ pub struct OpenpupCli {
 pub enum Command {
     /// 交互式初始化 openpup 的最小安全配置
     Init,
+    /// 一键引导：初始化配置、Persona 与常用 Loop 模板
+    #[command(name = "onboard")]
+    Onboard,
     /// 启动 openpup 守护进程（runtime + scheduler），与 down 对应
     #[command(name = "up")]
     Up,
@@ -322,18 +325,24 @@ pub struct NodeCmd {
 #[derive(Debug, Subcommand, Serialize)]
 #[serde(tag = "type", content = "data")]
 pub enum NodeSub {
-    /// 在目标主机上声明/占位一个 Worker 节点（占位实现）
+    /// 在目标主机上声明/占位一个 Worker 节点
     #[command(name = "spawn")]
     Spawn {
         /// 节点名称
         name: String,
-        /// 可选：目标主机或标签，例如 host1 / mac-mini / hk-cluster
+        /// 可选：目标主机或标签，例如 http://127.0.0.1:8080
         #[arg(long)]
         host: Option<String>,
     },
-    /// 列出已知节点（占位实现）
+    /// 列出已知节点
     #[command(name = "list")]
     List,
+    /// 测试节点连通性：调用远端 Worker 的 health_check 工具
+    #[command(name = "test")]
+    Test {
+        /// 已注册的节点名称
+        name: String,
+    },
 }
 
 #[derive(Debug, Parser, Serialize)]
