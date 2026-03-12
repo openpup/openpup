@@ -1,22 +1,22 @@
-## openPup - 你的个人分身 OS
+## OpenPup - 你的个人分身 OS
 
 > Opened by you, loyal forever.  
 > 上网之处，皆有你的小分身。
 
 License: **MIT OR Apache-2.0**.
 
-openPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：  
+OpenPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：  
 内建人格、三层记忆、**L1–L4 风险分级工具**和定时 Loop，让你的「第二个你」在安全边界内，长期经营你的工作、投资和生活。
 
-和 OpenClaw 相比：**OpenClaw 更像多通道消息 + 工具的通用 Agent 网关；openPup 专注于「一个人的王朝」——人格化、记忆化、生活 + 投资 + 工作一体的长期分身。**
+和 OpenClaw 相比：**OpenClaw 更像多通道消息 + 工具的通用 Agent 网关；OpenPup 专注于「一个人的王朝」——人格化、记忆化、生活 + 投资 + 工作一体的长期分身。**
 
-一句话：**openPup 是你亲手造出来的“第二个你”，而不是一个通用 ChatGPT wrapper。**
+一句话：**OpenPup 是你亲手造出来的“第二个你”，而不是一个通用 ChatGPT wrapper。**
 
 ---
 
 ### 🚀 项目愿景
 
-**openPup** 想要做的是：  
+**OpenPup** 想要做的是：  
 不是给所有人一个「Agent 云服务」，而是给你一个可以带走的、跑在你自己环境里的 **个人王朝中枢（Core + Workers）**。
 
 它常驻在你的世界里，作为 **Core 大脑 + Worker 节点**：
@@ -30,7 +30,7 @@ openPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：
 
 ---
 
-### 🎯 为什么选择 openPup？
+### 🎯 为什么选择 OpenPup？
 
 - **🧠 强人格 + 三层记忆**  
   - Persona 文档 + 短期 / 长期 / 程序性记忆，决策风格、沟通方式、风险偏好尽量「像你」。  
@@ -171,7 +171,7 @@ openpup status
 
 ### 💬 第一个「分身对话」
 
-和参考 README 的「第一个 Agent」类似，在 openPup 里你主要通过 CLI 和本地配置来「养成」分身。
+在 OpenPup 里你主要通过 CLI 和本地配置来「养成」分身。
 
 ```bash
 # 进入交互式分身会话
@@ -282,7 +282,7 @@ Loop 的结构与配置见 `docs/CLI.md` 与 `docs/architecture.md`。
 
 ### 🤝 参与贡献
 
-openPup 目前仍然处在「自用为主，但欢迎旁观和共创」的阶段。
+OpenPup 目前仍然处在「自用为主，但欢迎旁观和共创」的阶段。
 
 #### 如何参与
 
@@ -296,7 +296,7 @@ openPup 目前仍然处在「自用为主，但欢迎旁观和共创」的阶段
    - 如有 Breaking change，请同步更新 `ROADMAP.md` 与相关文档。
 
 3. **分享你的「王朝用例」**  
-   - 分享你是如何用 openPup 经营自己的工作/投资/生活。  
+   - 分享你是如何用 OpenPup 经营自己的工作/投资/生活。  
    - 包括：Persona 结构、Loop 设计、工具分层、审计策略等。
 
 ---

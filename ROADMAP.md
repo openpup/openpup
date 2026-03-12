@@ -1,17 +1,17 @@
-# openPup ROADMAP
+# OpenPup ROADMAP
 
-> 面向个人/小团队的分身 OS，不是通用 Agent SaaS。  
-> 这里只追踪「王朝中枢」这条主线。
+> OpenPup：你的个人分身 OS（Core + Workers 王朝中枢）。  
+> 这里只追踪「王朝中枢」和分身体验这条主线，而不是「做一个通用 Agent 平台」。
 
 ---
 
-## 1. 当前状态（2025–2026）
+## 1. 当前状态（当前版本）
 
 ### 1.1 已落地能力
 
 - **Core / 分身大脑**
   - Persona + 三层记忆（短期 / 长期 / 程序性）的基础实现。  
-  - `openpup agent` / `agent -m`：带记忆的单轮与多轮对话。  
+  - `openpup agent` / `openpup agent -m`：带记忆的单轮与多轮对话。  
   - 统一 LLM 配置（`~/.openpup/config.toml` + env），通过 `llm::load_openai_from_config` 等接口使用。
 
 - **Loops / Scheduler**
@@ -43,7 +43,8 @@
 
 ## 2. 短期规划（下一阶段优先级）
 
-> 目标：让「一个人的王朝」在安全前提下更好用，而不是堆更多通用 Agent 功能。
+> 目标版本：**v0.2.x**  
+> 方向：让「一个人的王朝」在安全前提下更好用，而不是堆更多通用 Agent 功能或接更多外部集成。
 
 ### 2.1 分身体验
 
@@ -97,13 +98,13 @@
 
 ## 4. Breaking changes（只记录对使用者有感的）
 
-> 仅保留和「如何用/怎么升级」强相关的条目，内部重构不在此列。
+> 仅保留和「如何用/怎么升级」强相关的条目，内部重构不在此列；不再绑定具体日期/年份。
 
-- **2025-xx: RuntimeEvent 改为 enum**  
+- **RuntimeEvent 改为 enum**  
   - 从 struct 变为 enum（如 `Loop { loop_id, trigger, source }` 等）。  
   - 若你直接构造 `RuntimeEvent`，需要按新枚举形式调整；CLI 使用无需修改。
 
-- **2025-xx: LLM 客户端接口统一**  
+- **LLM 客户端接口统一**  
   - 移除旧的 `LlmConfig` / `complete()` 等占位接口。  
   - 统一使用 `OpenpupLlmConfig` 与 `load_openai_from_config` / `chat_once` / `chat_with_memory` / `tool_planner`。  
   - 若你在自定义代码中依赖旧接口，请对照源码替换为上述新 API。
