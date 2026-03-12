@@ -119,18 +119,34 @@ openPup 是一个面向个人/小团队的 **Rust 数字分身操作系统**：
 
 ### 🛠️ 快速开始
 
-#### 安装（开发者模式）
+#### 安装
+
+**一键安装（Linux x86_64 / macOS Apple Silicon，需已安装 [jq](https://stedolan.github.io/jq/)）：**
 
 ```bash
-# 克隆仓库
-git clone https://github.com/yourname/openpup.git
+curl -fsSL https://raw.githubusercontent.com/openpup/openpup/main/install.sh | bash
+```
+
+安装目录默认为 `~/.local/bin`，可通过环境变量覆盖：
+
+```bash
+OPENPUP_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/openpup/openpup/main/install.sh | bash
+```
+
+指定版本或自建仓库：
+
+```bash
+OPENPUP_VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/openpup/openpup/main/install.sh | bash
+OPENPUP_REPO=yourname/openpup curl -fsSL https://raw.githubusercontent.com/yourname/openpup/main/install.sh | bash
+```
+
+**从源码构建（任意平台）：**
+
+```bash
+git clone https://github.com/openpup/openpup.git
 cd openpup
-
-# 构建 CLI
 cargo build --release
-
-# （可选）把 openpup 放到 PATH
-cp target/release/openpup ~/.local/bin/  # 或你自己的 bin 目录
+cp target/release/openpup ~/.local/bin/
 ```
 
 #### 初始化你的分身
@@ -149,7 +165,7 @@ openpup up
 openpup status
 ```
 
-更多 CLI 细节见 `docs/CLI.md`。
+更多实现与 CLI 说明见「文档与资源」一节及 `docs/architecture.md`。
 
 ---
 
