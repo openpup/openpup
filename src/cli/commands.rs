@@ -870,10 +870,7 @@ fn cmd_dashboard() -> Result<()> {
     let file = File::open(&path)
         .with_context(|| format!("failed to open runtime audit log at {:?}", path))?;
     let reader = BufReader::new(file);
-    let mut lines: Vec<String> = reader
-        .lines()
-        .map_while(Result::ok)
-        .collect();
+    let mut lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
     let max_events = 100usize;
     if lines.len() > max_events {
         lines.drain(0..lines.len() - max_events);
