@@ -12,7 +12,7 @@ async fn http_get_text_async(url: &str) -> Result<String> {
     if !resp.status().is_success() {
         anyhow::bail!("HTTP {} for {}", resp.status(), url);
     }
-    Ok(resp.text().await.context("failed to read body")?)
+    resp.text().await.context("failed to read body")
 }
 
 fn http_get_text(url: &str) -> Result<String> {

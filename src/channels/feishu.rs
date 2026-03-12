@@ -42,7 +42,7 @@ fn feishu_app_from_env(feishu_cfg: &FeishuChannelConfig) -> Result<(String, Stri
     let app_secret_name = if app_secret_var.is_empty() {
         "FEISHU_APP_SECRET"
     } else {
-        "FEISHU_APP_SECRET"
+        app_secret_var.as_str()
     };
 
     let app_id = std::env::var(app_id_name)

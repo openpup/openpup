@@ -37,7 +37,7 @@ pub fn ensure_workspace_and_logs() -> Result<()> {
             let mut f =
                 File::create(&p).with_context(|| format!("failed to create log file {:?}", p))?;
             writeln!(f, "# {}", name.replace('_', " "))?;
-            writeln!(f, "")?;
+            writeln!(f)?;
             writeln!(f, "<!-- openpup 将在此追加每日/每周摘要 -->")?;
         }
     }

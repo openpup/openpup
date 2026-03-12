@@ -21,6 +21,7 @@ struct Update {
     callback_query: Option<CallbackQuery>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Message {
     message_id: i64,
@@ -29,6 +30,7 @@ struct Message {
     text: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Chat {
     id: i64,
@@ -36,6 +38,7 @@ struct Chat {
     username: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct CallbackQuery {
     id: String,

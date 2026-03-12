@@ -97,7 +97,7 @@ fn extract_envelope(f: &Fetch) -> Option<(String, String, String)> {
     let from = env
         .from
         .as_ref()
-        .and_then(|addrs| addrs.get(0))
+        .and_then(|addrs| addrs.first())
         .and_then(|a| a.mailbox.as_ref().or(a.name.as_ref()))
         .map(|b| String::from_utf8_lossy(b).to_string())
         .unwrap_or_default();

@@ -101,6 +101,7 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn cmd_schedule() -> Result<()> {
     println!("Scheduler started (times in UTC). Use Ctrl+C to stop.");
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -269,7 +270,7 @@ fn cmd_tools_list() -> Result<()> {
 }
 
 fn cmd_add_channel_telegram() -> Result<()> {
-    use std::io::{self, Read as _};
+    use std::io;
 
     let mut cfg = config::load_or_init()?;
 
@@ -869,7 +870,10 @@ fn cmd_dashboard() -> Result<()> {
     let file = File::open(&path)
         .with_context(|| format!("failed to open runtime audit log at {:?}", path))?;
     let reader = BufReader::new(file);
-    let mut lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let mut lines: Vec<String> = reader
+        .lines()
+        .map_while(Result::ok)
+        .collect();
     let max_events = 100usize;
     if lines.len() > max_events {
         lines.drain(0..lines.len() - max_events);
@@ -895,9 +899,7 @@ fn cmd_dashboard() -> Result<()> {
 
     for line in &lines {
         if let Ok(ev) = serde_json::from_str::<runtime_audit::RuntimeAuditEvent>(line) {
-            let entry = loop_stats
-                .entry(ev.trigger_kind.clone())
-                .or_insert_with(LoopStat::default);
+            let entry = loop_stats.entry(ev.trigger_kind.clone()).or_default();
             entry.count += 1;
             entry.last_ts = ev.ts.clone();
 
@@ -987,7 +989,7 @@ Available tools:\n",
         tools_section.push_str("- register_node (management): {\"name\": string, \"host\": optional} — register a worker node (allowed when spawn.mode != disabled)\n");
         tools_section.push_str("- invoke_sub_agent (multi-agent): {\"name\": string, \"input\": string} — run one turn with a registered sub-agent and get its reply\n");
         tools_section.push_str("- invoke_node_tool (multi-node): {\"node\": string, \"tool\": string, \"args\": object} — run a tool on a registered node (node must have host; node must expose POST /tool)\n");
-        tools_section.push_str("\n");
+        tools_section.push('\n');
     }
     if let Some(s) = &cmd.subagents {
         let names: Vec<&str> = s
@@ -1013,7 +1015,7 @@ Available tools:\n",
         }
     }
 
-    system = format!(
+    let _system = format!(
         "You are openpup, a local agent.\n\n{}{}",
         tools_section, system
     );
@@ -1118,10 +1120,7 @@ fn cmd_node_list() -> Result<()> {
         return Ok(());
     }
     println!("openpup node list:");
-    println!(
-        "  {:<20} {:<24} {:<12} {}",
-        "name", "host", "status", "last_seen"
-    );
+    println!("  {:<20} {:<24} {:<12} last_seen", "name", "host", "status");
     for n in nodes {
         let host = n.host.as_deref().unwrap_or("-");
         println!(

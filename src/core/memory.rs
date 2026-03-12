@@ -174,10 +174,8 @@ pub fn search_semantic_items(
                     created_ts: row.get(4)?,
                 })
             })?;
-            for r in rows {
-                if let Ok(it) = r {
-                    items.push(it);
-                }
+            for it in rows.flatten() {
+                items.push(it);
             }
         } else {
             let mut stmt = conn.prepare(
@@ -197,10 +195,8 @@ pub fn search_semantic_items(
                     created_ts: row.get(4)?,
                 })
             })?;
-            for r in rows {
-                if let Ok(it) = r {
-                    items.push(it);
-                }
+            for it in rows.flatten() {
+                items.push(it);
             }
         }
         return Ok(items);
@@ -227,10 +223,8 @@ pub fn search_semantic_items(
                 created_ts: row.get(4)?,
             })
         })?;
-        for r in rows {
-            if let Ok(it) = r {
-                items.push(it);
-            }
+        for it in rows.flatten() {
+            items.push(it);
         }
     } else {
         let mut stmt = conn.prepare(
@@ -251,10 +245,8 @@ pub fn search_semantic_items(
                 created_ts: row.get(4)?,
             })
         })?;
-        for r in rows {
-            if let Ok(it) = r {
-                items.push(it);
-            }
+        for it in rows.flatten() {
+            items.push(it);
         }
     }
 

@@ -23,7 +23,7 @@ use openpup::core::kernel::{
 };
 use openpup::tools::{ToolCall, ToolKind, ToolResult};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Clone)]
 struct Hub {
@@ -105,8 +105,6 @@ struct FeishuEvent {
 struct FeishuMessage {
     #[serde(default)]
     chat_id: String,
-    #[serde(default)]
-    message_id: String,
     #[serde(default)]
     message_type: String,
     #[serde(default)]
@@ -531,7 +529,7 @@ async fn handle_inbound_message(
                     &session_id,
                     &goal,
                     agents,
-                    |evt| publish(evt),
+                    publish,
                 )
                 .await;
 

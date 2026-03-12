@@ -205,7 +205,7 @@ Goal: {goal}\n\n\
 Here are execution outputs as JSON array:\n{outputs}\n\n\
 Produce a concise final answer for the user (plain text).",
         goal = goal,
-        outputs = Value::Array(outputs).to_string()
+        outputs = Value::Array(outputs)
     );
 
     let sum_req = AgentRequest {

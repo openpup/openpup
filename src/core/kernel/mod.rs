@@ -8,14 +8,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::config::{self, OpenpupConfig};
+use crate::config::OpenpupConfig;
 use crate::core::agent_runtime;
 use crate::core::llm;
 use crate::core::persona;
-use crate::core::registry;
 use crate::core::runtime_audit;
 use crate::core::runtime_audit as runtime_audit_core;
-use crate::loops;
 use crate::tools::{self, ExposedTool, ToolCall, ToolResult};
 
 /// 对外暴露的统一 Agent 请求结构。

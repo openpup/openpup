@@ -174,13 +174,13 @@ pub fn exposed_tools_from_config(cfg: &OpenpupConfig) -> Vec<ExposedTool> {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CompositeToolFile {
     id: String,
-    name: String,
+    pub name: String,
     #[serde(default)]
-    description: String,
+    pub description: String,
     #[serde(default)]
-    level: String,
+    pub level: String,
     #[serde(default)]
-    args: String,
+    pub args: String,
     #[serde(default)]
     steps: Vec<CompositeStep>,
 }
@@ -198,6 +198,7 @@ use std::collections::HashMap;
 /// 仅在进程内使用，不做跨进程共享。
 static mut COMPOSITE_REGISTRY: Option<HashMap<String, CompositeToolFile>> = None;
 
+#[allow(static_mut_refs)]
 fn with_composite_registry<F, R>(f: F) -> R
 where
     F: FnOnce(&mut HashMap<String, CompositeToolFile>) -> R,

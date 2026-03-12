@@ -34,7 +34,7 @@ async fn http_get_ics_async(url: &str, user: &str, pass: &str) -> Result<String>
     if !resp.status().is_success() {
         anyhow::bail!("CalDAV HTTP {}", resp.status());
     }
-    Ok(resp.text().await.context("failed to read CalDAV body")?)
+    resp.text().await.context("failed to read CalDAV body")
 }
 
 fn http_get_ics(url: &str, user: &str, pass: &str) -> Result<String> {
