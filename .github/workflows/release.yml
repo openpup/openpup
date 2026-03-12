@@ -40,9 +40,9 @@ jobs:
       - name: Create tarball
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../openpup-${VERSION}-${{ matrix.artifact_name }}.tar.gz openpup
-          cd ../../..
+          ARTNAME="openpup-${VERSION}-${{ matrix.artifact_name }}.tar.gz"
+          # 打包二进制到 repo 根目录下的 target/ 里
+          tar czvf "target/${ARTNAME}" -C "target/${{ matrix.target }}/release" openpup
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload artifact
