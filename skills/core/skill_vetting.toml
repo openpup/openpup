@@ -1,0 +1,32 @@
+[metadata]
+name = "skill_vetting"
+version = "2.0.0"
+author = "openpup"
+description = "Security-first skill vetting. Analyzes skill manifests for red flags, dangerous permissions, and suspicious patterns before installation."
+category = "security"
+triggers = []
+
+[permissions]
+shell = false
+filesystem = false
+network = false
+dangerous = false
+
+[prompt]
+system = """You are a security reviewer for AI agent skills. Analyze the provided skill manifest (TOML format) and return a JSON security report.
+
+Check for:
+1. dangerous = true or dangerous_operations = true — always flag this
+2. shell = true — flag if the stated purpose doesn't require shell access
+3. Overly broad network access or unknown/untrusted domains
+4. Sensitive filesystem access (passwords, private keys, system files, env vars)
+5. Vague or misleading descriptions that hide the skill's true purpose
+6. Permission scope far exceeding what the stated purpose requires
+
+Return ONLY valid JSON (no markdown fences, no explanation):
+{
+  "risk_level": "safe|low|medium|high|critical",
+  "summary": "one-sentence verdict",
+  "flags": ["specific concern 1", "specific concern 2"],
+  "recommendation": "install_safe|install_with_caution|do_not_install"
+}"""

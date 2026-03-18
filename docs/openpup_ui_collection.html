@@ -1,0 +1,204 @@
+
+<style>
+  .screen { background: var(--color-background-secondary); border-radius: 12px; padding: 16px; margin-bottom: 24px; border: 0.5px solid var(--color-border-tertiary); }
+  .screen-label { font-size: 11px; color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .chat-bubble-user { background: var(--color-background-info); border-radius: 12px 12px 4px 12px; padding: 8px 12px; font-size: 13px; color: var(--color-text-info); max-width: 72%; margin-left: auto; margin-bottom: 8px; }
+  .chat-bubble-pup { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: 12px 12px 12px 4px; padding: 8px 12px; font-size: 13px; color: var(--color-text-primary); max-width: 80%; margin-bottom: 8px; }
+  .pup-tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 10px; margin-right: 4px; margin-bottom: 4px; }
+  .alpha { background: var(--color-background-success); color: var(--color-text-success); }
+  .dev { background: var(--color-background-info); color: var(--color-text-info); }
+  .writer { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .permission-card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-secondary); border-radius: 10px; padding: 12px; margin: 8px 0; }
+  .risk-high { border-left: 3px solid var(--color-border-danger); }
+  .risk-low { border-left: 3px solid var(--color-border-success); }
+  .memory-chip { display: inline-block; background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: 6px; font-size: 11px; color: var(--color-text-secondary); padding: 3px 8px; margin: 2px; }
+  .timeline-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--color-border-tertiary); align-items: flex-start; }
+  .timeline-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+  .dot-alpha { background: #1D9E75; }
+  .dot-dev { background: #378ADD; }
+  .dot-writer { background: #BA7517; }
+  .onboard-step { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: 10px; padding: 14px; margin-bottom: 8px; }
+  .onboard-q { font-size: 14px; color: var(--color-text-primary); margin-bottom: 8px; font-weight: 500; }
+  .onboard-a { font-size: 12px; color: var(--color-text-secondary); font-style: italic; }
+  .tab { display: inline-block; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer; color: var(--color-text-secondary); }
+  .tab.active { background: var(--color-background-primary); color: var(--color-text-primary); border: 0.5px solid var(--color-border-tertiary); }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 7px; font-size: 13px; color: var(--color-text-secondary); margin-bottom: 2px; cursor: pointer; }
+  .nav-item.active { background: var(--color-background-secondary); color: var(--color-text-primary); }
+  .nav-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .btn-sm { font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 0.5px solid var(--color-border-secondary); background: transparent; color: var(--color-text-primary); cursor: pointer; }
+  .btn-primary { background: var(--color-text-primary); color: var(--color-background-primary); border: none; }
+  .cli-block { background: #1a1a1a; border-radius: 8px; padding: 12px 14px; font-family: var(--font-mono); font-size: 12px; color: #c9d1d9; margin: 6px 0; }
+  .cli-prompt { color: #58a6ff; }
+  .cli-out { color: #3fb950; }
+  .cli-dim { color: #6e7681; }
+  .section-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin: 0 0 10px; }
+</style>
+
+<!-- === 1. ONBOARDING === -->
+<div class="screen">
+  <div class="screen-label">① Onboarding — Alpha Pup 认识主人</div>
+  <div style="display:flex;gap:12px">
+    <div style="flex:1">
+      <div class="onboard-step">
+        <div class="onboard-q">🐾 你好，我是你的 Alpha Pup。在开始之前，我想先认识你。</div>
+        <div class="onboard-q">你最不希望我在没有确认的情况下替你做的事是什么？</div>
+        <div class="onboard-a">"不要自动发任何公开消息，不要删除文件"</div>
+      </div>
+      <div class="onboard-step">
+        <div class="onboard-q">你每周最浪费时间的一件事是什么？</div>
+        <div class="onboard-a">"整理 GitHub issues，写周报"</div>
+      </div>
+      <div class="onboard-step">
+        <div class="onboard-q">你偏好用中文还是英文和我交流？</div>
+        <div class="onboard-a">"中文为主，代码用英文"</div>
+      </div>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:8px">自动生成 OWNER.md 预览</div>
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:8px;padding:12px;font-family:var(--font-mono);font-size:11px;color:var(--color-text-secondary);line-height:1.7">
+        <span style="color:var(--color-text-primary);font-weight:500"># Owner Profile</span><br>
+        <span style="color:var(--color-text-tertiary)">## Boundaries</span><br>
+        - ❌ 不自动发公开消息<br>
+        - ❌ 不删除文件<br><br>
+        <span style="color:var(--color-text-tertiary)">## Pain Points</span><br>
+        - GitHub issue 整理<br>
+        - 周报撰写<br><br>
+        <span style="color:var(--color-text-tertiary)">## Language</span><br>
+        - 对话：中文<br>
+        - 代码：English
+      </div>
+      <div style="margin-top:8px;text-align:right">
+        <button class="btn-sm btn-primary">确认并开始 →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- === 2. MAIN CHAT === -->
+<div class="screen">
+  <div class="screen-label">② 主聊天界面</div>
+  <div style="display:flex;gap:0">
+    <!-- Sidebar -->
+    <div style="width:140px;border-right:0.5px solid var(--color-border-tertiary);padding-right:12px;margin-right:12px">
+      <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:8px">狗群</div>
+      <div class="nav-item active"><div class="nav-dot" style="background:#1D9E75"></div>Alpha</div>
+      <div class="nav-item"><div class="nav-dot" style="background:#378ADD"></div>Dev Pup</div>
+      <div class="nav-item"><div class="nav-dot" style="background:#BA7517"></div>Writer Pup</div>
+      <div class="nav-item"><div class="nav-dot" style="background:#888780"></div>Ops Pup</div>
+      <div style="border-top:0.5px solid var(--color-border-tertiary);margin:10px 0"></div>
+      <div class="nav-item">记忆</div>
+      <div class="nav-item">Timeline</div>
+      <div class="nav-item">Skills</div>
+    </div>
+    <!-- Chat -->
+    <div style="flex:1">
+      <!-- Memory chips -->
+      <div style="margin-bottom:8px">
+        <span class="memory-chip">📌 不自动发推</span>
+        <span class="memory-chip">📌 偏好 Rust</span>
+        <span class="memory-chip">🔍 上次：整理了 12 个 issues</span>
+      </div>
+      <div class="chat-bubble-user">帮我整理本周的 GitHub issues 并生成周报</div>
+      <div class="chat-bubble-pup">
+        <span class="pup-tag alpha">Alpha</span><br>
+        收到，我会把这个任务分给 Dev Pup 和 Writer Pup：<br>
+        <span style="font-size:12px;color:var(--color-text-secondary)">① Dev Pup → 拉取并分类 issues<br>② Writer Pup → 生成周报草稿</span>
+      </div>
+      <div class="chat-bubble-pup" style="border-left:2px solid #378ADD">
+        <span class="pup-tag dev">Dev Pup</span><br>
+        找到 23 个 open issues，已按优先级分类。
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <input style="flex:1;font-size:13px;padding:7px 10px;border-radius:8px;border:0.5px solid var(--color-border-secondary);background:var(--color-background-primary);color:var(--color-text-primary)" placeholder="告诉 Alpha..." />
+        <button class="btn-sm btn-primary">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- === 3. PERMISSION DIALOG === -->
+<div class="screen">
+  <div class="screen-label">③ 权限确认弹窗（牵绳模式）</div>
+  <div style="max-width:420px;margin:0 auto">
+    <div class="permission-card risk-high">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:500">🐕 Writer Pup 需要你的许可</div>
+        <span style="font-size:10px;background:var(--color-background-danger);color:var(--color-text-danger);padding:2px 7px;border-radius:10px">高风险</span>
+      </div>
+      <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:10px">即将发布文章到 Medium（公开）</div>
+      <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:10px">标题：《我为什么不再用 ChatGPT》· 目标读者：开发者</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn-sm">拒绝</button>
+        <button class="btn-sm btn-primary">允许发布</button>
+      </div>
+    </div>
+    <div class="permission-card risk-low">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:500">🐕 Dev Pup 请求授权</div>
+        <span style="font-size:10px;background:var(--color-background-success);color:var(--color-text-success);padding:2px 7px;border-radius:10px">低风险</span>
+      </div>
+      <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:8px">读取 ~/projects/openpup 目录</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <input type="checkbox" id="rem" /><label for="rem" style="font-size:12px;color:var(--color-text-secondary)">记住，下次不再询问</label>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn-sm">拒绝</button>
+        <button class="btn-sm btn-primary">允许</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- === 4. TIMELINE === -->
+<div class="screen">
+  <div class="screen-label">④ Timeline — 所有 Pup 行为可见</div>
+  <div style="display:flex;gap:8px;margin-bottom:10px">
+    <div class="tab active">全部</div>
+    <div class="tab">Alpha</div>
+    <div class="tab">Dev</div>
+    <div class="tab">Writer</div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-dot dot-writer"></div>
+    <div style="flex:1">
+      <div style="font-size:12px;color:var(--color-text-secondary)">Writer Pup · 刚刚</div>
+      <div style="font-size:13px">生成周报草稿 · 812 字 · <span style="color:var(--color-text-info);font-size:12px">查看</span></div>
+    </div>
+    <div style="font-size:11px;color:var(--color-text-tertiary)">~340 tokens</div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-dot dot-dev"></div>
+    <div style="flex:1">
+      <div style="font-size:12px;color:var(--color-text-secondary)">Dev Pup · 3 分钟前</div>
+      <div style="font-size:13px">拉取 GitHub issues · 23 条 · 已分类</div>
+    </div>
+    <div style="font-size:11px;color:var(--color-text-tertiary)">~180 tokens</div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-dot dot-alpha"></div>
+    <div style="flex:1">
+      <div style="font-size:12px;color:var(--color-text-secondary)">Alpha · 5 分钟前</div>
+      <div style="font-size:13px">更新记忆：用户偏好周五生成周报</div>
+    </div>
+    <div style="font-size:11px;color:var(--color-text-tertiary)">记忆写入</div>
+  </div>
+</div>
+
+<!-- === 5. CLI === -->
+<div class="screen">
+  <div class="screen-label">⑤ CLI 设计（迭代最快的形态）</div>
+  <div class="cli-block">
+    <span class="cli-prompt">$ </span>openpup chat<br>
+    <span class="cli-dim">Alpha Pup 已连接 · 记忆 247 条 · 模式：牵绳</span><br><br>
+    <span class="cli-prompt">You: </span>整理今天的 issues<br>
+    <span class="cli-dim">→ Dev Pup 执行中...</span><br>
+    <span class="cli-out">✓ 找到 8 个 open issues，已分类写入 ~/workspace/issues-2026-03-17.md</span><br><br>
+    <span class="cli-prompt">$ </span>openpup memory list --type preference<br>
+    <span class="cli-out">📌 偏好 Rust 而非 Python（置信度 0.92）</span><br>
+    <span class="cli-out">📌 工作时间 9-18:00 PST，晚上不打扰（0.88）</span><br>
+    <span class="cli-out">📌 不自动发送公开内容（0.99）</span><br><br>
+    <span class="cli-prompt">$ </span>openpup skill run weekly-report --dry-run<br>
+    <span class="cli-dim">[dry-run] 将读取 inbox·github·calendar · 预计 ~800 tokens</span><br>
+    <span class="cli-dim">确认执行？[y/N]</span>
+  </div>
+</div>

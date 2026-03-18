@@ -1,0 +1,26 @@
+{
+  "productName": "openpup",
+  "version": "0.1.0",
+  "identifier": "com.openpup.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.png", "icons/icon.ico","icons/icon.icns"]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenPup",
+        "width": 1100,
+        "height": 720,
+        "resizable": true
+      }
+    ]
+  }
+}
+

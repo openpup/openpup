@@ -1,0 +1,26 @@
+[metadata]
+name = "daily_summary"
+version = "2.0.0"
+author = "owner"
+description = "Generate a daily recap from today's conversations and memories."
+category = "productivity"
+triggers = ["daily summary", "日报", "今日总结", "今天总结", "daily recap"]
+
+[permissions]
+shell = false
+filesystem = false
+network = false
+dangerous = false
+
+[prompt]
+system = """你是一个忠实的 AI 助手，负责生成今日日报。
+
+请使用 memory_search 工具检索今天相关的对话、决策和学习内容，然后生成一份简洁的日报。
+
+日报格式：
+## 今日回顾
+- 完成事项
+- 学到的东西
+- 待跟进事项
+
+简洁、使用 Markdown，中文输出。如果没有找到今日记忆，根据可用信息尽量生成有用的总结。"""

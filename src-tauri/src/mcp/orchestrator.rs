@@ -1,0 +1,396 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::{anyhow, Result};
+use rmcp::{
+  model::{CallToolRequestParams, ClientInfo},
+  transport::StreamableHttpClientTransport,
+  ServiceExt,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::sync::RwLock;
+
+use crate::mcp::server::LocalMcpServer;
+
+/// A single configured MCP server (serialisable → persisted to JSON).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerEntry {
+  pub name: String,
+  pub base_url: String,
+  pub token: String,
+  pub description: String,
+  pub enabled: bool,
+}
+
+/// Legacy alias used in main.rs env-var bootstrap.
+pub type ServerConfig = McpServerEntry;
+
+/// A tool discovered from a connected MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolInfo {
+  pub server: String,
+  pub name: String,
+  pub description: String,
+  /// JSON Schema for the tool's input parameters (OpenAI-compatible).
+  #[serde(default)]
+  pub input_schema: serde_json::Value,
+}
+
+#[derive(Clone)]
+pub struct MCPOrchestrator {
+  servers: Arc<RwLock<HashMap<String, McpServerEntry>>>,
+  /// Cache of tools discovered from remote servers.
+  tool_cache: Arc<RwLock<HashMap<String, Vec<McpToolInfo>>>>,
+  config_path: Option<PathBuf>,
+}
+
+impl MCPOrchestrator {
+  pub fn new() -> Self {
+    Self {
+      servers: Arc::new(RwLock::new(HashMap::new())),
+      tool_cache: Arc::new(RwLock::new(HashMap::new())),
+      config_path: None,
+    }
+  }
+
+  /// Load persisted server list from `path`; sets `config_path` for future saves.
+  /// Tool discovery for all enabled servers is kicked off in the background.
+  pub fn load(path: PathBuf) -> Self {
+    let servers: HashMap<String, McpServerEntry> = if path.exists() {
+      fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<McpServerEntry>>(&t).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| (e.name.clone(), e))
+        .collect()
+    } else {
+      HashMap::new()
+    };
+
+    let orchestrator = Self {
+      servers: Arc::new(RwLock::new(servers.clone())),
+      tool_cache: Arc::new(RwLock::new(HashMap::new())),
+      config_path: Some(path),
+    };
+
+    // Background-discover tools for all enabled servers that were persisted
+    let self_clone = orchestrator.clone();
+    tokio::spawn(async move {
+      for entry in servers.values().filter(|e| e.enabled) {
+        match self_clone.discover_server_tools(entry).await {
+          Ok(tools) => {
+            eprintln!("[mcp] startup: discovered {} tools from '{}'", tools.len(), entry.name);
+            self_clone.tool_cache.write().await.insert(entry.name.clone(), tools);
+          }
+          Err(e) => eprintln!("[mcp] startup discovery for '{}' failed: {e}", entry.name),
+        }
+      }
+    });
+
+    orchestrator
+  }
+
+  // ── Server management ───────────────────────────────────────────────────────
+
+  pub async fn add_server(&self, entry: McpServerEntry) -> Result<()> {
+    self.servers.write().await.insert(entry.name.clone(), entry.clone());
+    self.persist().await?;
+    // Kick off tool discovery in the background so the caller doesn't block.
+    let self_clone = self.clone();
+    tokio::spawn(async move {
+      match self_clone.discover_server_tools(&entry).await {
+        Ok(tools) => {
+          eprintln!("[mcp] auto-discovered {} tools from '{}'", tools.len(), entry.name);
+          self_clone.tool_cache.write().await.insert(entry.name.clone(), tools);
+        }
+        Err(e) => eprintln!("[mcp] auto-discovery for '{}' failed: {e}", entry.name),
+      }
+    });
+    Ok(())
+  }
+
+  pub async fn remove_server(&self, name: &str) -> Result<()> {
+    self.servers.write().await.remove(name);
+    self.tool_cache.write().await.remove(name);
+    self.persist().await
+  }
+
+  pub async fn toggle_server(&self, name: &str, enabled: bool) -> Result<()> {
+    let entry_opt = {
+      let mut guard = self.servers.write().await;
+      if let Some(e) = guard.get_mut(name) {
+        e.enabled = enabled;
+        Some(e.clone())
+      } else {
+        None
+      }
+    };
+    if !enabled {
+      self.tool_cache.write().await.remove(name);
+    } else if let Some(entry) = entry_opt {
+      // Re-enabled — re-discover tools in background
+      let self_clone = self.clone();
+      tokio::spawn(async move {
+        match self_clone.discover_server_tools(&entry).await {
+          Ok(tools) => {
+            self_clone.tool_cache.write().await.insert(entry.name.clone(), tools);
+          }
+          Err(e) => eprintln!("[mcp] re-discovery for '{}' failed: {e}", entry.name),
+        }
+      });
+    }
+    self.persist().await
+  }
+
+  pub async fn list_servers(&self) -> Vec<McpServerEntry> {
+    let guard = self.servers.read().await;
+    let mut v: Vec<McpServerEntry> = guard.values().cloned().collect();
+    v.sort_by(|a, b| a.name.cmp(&b.name));
+    v
+  }
+
+  /// Legacy helper kept for main.rs env-var path.
+  pub async fn connect_to_server(&self, cfg: McpServerEntry) -> Result<()> {
+    self.add_server(cfg).await
+  }
+
+  // ── Tool discovery ──────────────────────────────────────────────────────────
+
+  /// Refresh the tool cache for all enabled remote servers.
+  pub async fn refresh_all_tools(&self) {
+    let servers = self.list_servers().await;
+    for server in servers {
+      if server.enabled {
+        match self.discover_server_tools(&server).await {
+          Ok(tools) => {
+            self.tool_cache.write().await.insert(server.name.clone(), tools);
+          }
+          Err(e) => {
+            eprintln!("MCP tool discovery for '{}' failed: {e}", server.name);
+          }
+        }
+      }
+    }
+  }
+
+  /// Discover tools from a remote MCP server via streamable HTTP transport.
+  async fn discover_server_tools(&self, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
+    let mcp_url = format!("{}/mcp", entry.base_url.trim_end_matches('/'));
+    rmcp_list_tools(&mcp_url, entry).await
+  }
+
+  /// Return all discovered tools (remote cache + built-in local tools).
+  pub async fn list_all_tools(&self) -> Vec<McpToolInfo> {
+    let mut tools = vec![
+      McpToolInfo {
+        server: "local".into(),
+        name: "read_file".into(),
+        description: "Read a local file".into(),
+        input_schema: serde_json::json!({ "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }),
+      },
+      McpToolInfo {
+        server: "local".into(),
+        name: "write_file".into(),
+        description: "Write content to a local file".into(),
+        input_schema: serde_json::json!({ "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] }),
+      },
+      McpToolInfo {
+        server: "local".into(),
+        name: "open_browser".into(),
+        description: "Open a URL in the system browser".into(),
+        input_schema: serde_json::json!({ "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }),
+      },
+    ];
+    let cache = self.tool_cache.read().await;
+    for tool_list in cache.values() {
+      tools.extend(tool_list.iter().cloned());
+    }
+    tools
+  }
+
+  /// Return MCP tools filtered by relevance to `task`.
+  ///
+  /// When the total tool count is below `max`, all tools are returned.
+  /// Otherwise we score each tool by keyword overlap between `task` and the
+  /// tool's name + description, then return the top `max` hits.
+  /// This keeps the context window tight and avoids hitting provider tool limits.
+  pub async fn tools_for_task(&self, task: &str, max: usize) -> Vec<serde_json::Value> {
+    let all = self.tools_as_openai_specs().await;
+    if all.len() <= max {
+      return all;
+    }
+
+    // Tokenise task into lowercase words (≥ 3 chars)
+    let task_words: std::collections::HashSet<String> = task
+      .split(|c: char| !c.is_alphanumeric())
+      .filter(|w| w.len() >= 3)
+      .map(|w| w.to_lowercase())
+      .collect();
+
+    let mut scored: Vec<(usize, &serde_json::Value)> = all
+      .iter()
+      .map(|spec| {
+        let name = spec["function"]["name"].as_str().unwrap_or("").to_lowercase();
+        let desc = spec["function"]["description"].as_str().unwrap_or("").to_lowercase();
+        let haystack = format!("{name} {desc}");
+        let score = task_words.iter().filter(|w| haystack.contains(w.as_str())).count();
+        (score, spec)
+      })
+      .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!(
+      "[mcp] tools_for_task: total={} → selecting top {max} (best_score={})",
+      all.len(),
+      scored.first().map(|(s, _)| *s).unwrap_or(0)
+    );
+    scored.into_iter().take(max).map(|(_, s)| s.clone()).collect()
+  }
+
+  /// Return all cached remote tools as OpenAI-compatible function tool specs.
+  ///
+  /// Each tool is named `mcp__{server}__{tool}` so the executor can route it
+  /// back to the right MCP server without ambiguity.
+  pub async fn tools_as_openai_specs(&self) -> Vec<serde_json::Value> {
+    let cache = self.tool_cache.read().await;
+    let mut specs = Vec::new();
+    for tools in cache.values() {
+      for t in tools {
+        let fn_name = format!("mcp__{}__{}", t.server, t.name);
+        let schema = if t.input_schema.is_null() {
+          serde_json::json!({ "type": "object", "properties": {} })
+        } else {
+          t.input_schema.clone()
+        };
+        specs.push(serde_json::json!({
+          "type": "function",
+          "function": {
+            "name": fn_name,
+            "description": format!("[{}] {}", t.server, t.description),
+            "parameters": schema,
+          }
+        }));
+      }
+    }
+    specs
+  }
+
+  // ── Tool dispatch ───────────────────────────────────────────────────────────
+
+  pub async fn call_tool(&self, server: &str, tool: &str, params: &Value) -> Result<Value> {
+    if server == "local" {
+      return LocalMcpServer::call(tool, params).await;
+    }
+    let guard = self.servers.read().await;
+    let entry = guard
+      .get(server)
+      .ok_or_else(|| anyhow!("MCP server not registered: '{server}'"))?;
+    if !entry.enabled {
+      return Err(anyhow!("MCP server '{server}' is disabled"));
+    }
+    let entry = entry.clone();
+    drop(guard);
+    call_remote(&entry, tool, params).await
+  }
+
+  // ── Internal ────────────────────────────────────────────────────────────────
+
+  async fn persist(&self) -> Result<()> {
+    let Some(ref path) = self.config_path else {
+      return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent)?;
+    }
+    let guard = self.servers.read().await;
+    let list: Vec<&McpServerEntry> = guard.values().collect();
+    let json = serde_json::to_string_pretty(&list)?;
+    drop(guard);
+    fs::write(path, json)?;
+    Ok(())
+  }
+}
+
+/// Call a remote MCP tool via streamable HTTP transport.
+async fn call_remote(entry: &McpServerEntry, tool: &str, params: &Value) -> Result<Value> {
+  let mcp_url = format!("{}/mcp", entry.base_url.trim_end_matches('/'));
+  rmcp_call_tool(&mcp_url, entry, tool, params).await
+}
+
+/// Streamable HTTP-based tool listing via rmcp.
+async fn rmcp_list_tools(mcp_url: &str, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
+  let transport = StreamableHttpClientTransport::from_uri(mcp_url);
+
+  let client = ClientInfo::default()
+    .serve(transport)
+    .await
+    .map_err(|e| anyhow!("MCP client init for '{}': {e}", mcp_url))?;
+
+  let result = client
+    .list_tools(Default::default())
+    .await
+    .map_err(|e| anyhow!("list_tools: {e}"))?;
+
+  Ok(result
+    .tools
+    .into_iter()
+    .map(|t| {
+      // Capture the full input_schema so we can build proper OpenAI tool specs
+      let schema = serde_json::to_value(&*t.input_schema).unwrap_or_else(|_| {
+        serde_json::json!({ "type": "object", "properties": {} })
+      });
+      McpToolInfo {
+        server: entry.name.clone(),
+        name: t.name.to_string(),
+        description: t.description.clone().unwrap_or_default().to_string(),
+        input_schema: schema,
+      }
+    })
+    .collect())
+}
+
+/// Streamable HTTP-based tool call via rmcp.
+async fn rmcp_call_tool(
+  mcp_url: &str,
+  _entry: &McpServerEntry,
+  tool: &str,
+  params: &Value,
+) -> Result<Value> {
+  let transport = StreamableHttpClientTransport::from_uri(mcp_url);
+
+  let client = ClientInfo::default()
+    .serve(transport)
+    .await
+    .map_err(|e| anyhow!("MCP client init: {e}"))?;
+
+  let mut req = CallToolRequestParams::new(tool.to_string());
+  if let Some(obj) = params.as_object().cloned() {
+    req = req.with_arguments(obj.into_iter().collect::<serde_json::Map<_, _>>());
+  }
+
+  let result = client
+    .call_tool(req)
+    .await
+    .map_err(|e| anyhow!("call_tool '{tool}': {e}"))?;
+
+  // Extract text content from MCP result
+  let text = result
+    .content
+    .iter()
+    .filter_map(|c| {
+      if let Some(t) = c.as_text() {
+        Some(t.text.as_str())
+      } else {
+        None
+      }
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+
+  Ok(Value::String(text))
+}
+

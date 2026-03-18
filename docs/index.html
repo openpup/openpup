@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Pup - AI 协作助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/typography"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.0.0/index.css">
+    <style>
+        * { font-family: 'Noto Sans SC', -apple-system, sans-serif; }
+        .chat-bubble { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+        }
+        .typing-indicator span { animation: typing 1.4s infinite; }
+        @keyframes typing { 0%, 60%, 100% { opacity: 0; } 30% { opacity: 1; } }
+        .glass { backdrop-filter: blur(20px); background: rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 min-h-screen p-4">
+    
+    <!-- 顶部栏 -->
+    <div class="glass rounded-2xl p-6 mb-6 shadow-2xl border border-white/20">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <div class="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-500 rounded-2xl flex items-center justify-center shadow-lg">
+                    <span class="text-2xl">🐕‍🦺</span>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-white drop-shadow-lg">Alpha Pup</h1>
+                    <p class="text-slate-300 text-sm">你的 AI 协作助手</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2 text-sm text-slate-400">
+                <span>牵绳模式</span>
+                <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 消息列表 -->
+    <div id="messages" class="glass rounded-3xl p-6 h-[60vh] overflow-y-auto space-y-4 mb-6 shadow-2xl border border-white/20 scrollbar-thin scrollbar-thumb-purple-500/50">
+        <!-- 系统消息 -->
+        <div class="message assistant max-w-3xl mx-auto">
+            <div class="flex items-start space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-r from-orange-400 to-yellow-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <span class="text-lg">🐕</span>
+                </div>
+                <div class="flex-1">
+                    <div class="text-xs text-slate-400 mb-1 flex items-center space-x-1">
+                        <span>Alpha</span>
+                        <span class="w-1 h-1 bg-slate-400 rounded-full"></span>
+                        <span>刚刚</span>
+                    </div>
+                    <div class="bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-white prose prose-invert max-w-none">
+                        <p>🐾 你好！我是你的 <strong>Alpha Pup</strong>，负责协调整个狗群。</p>
+                        <p>当前在线：<span class="px-2 py-1 bg-blue-500/20 rounded-full text-blue-200 text-xs">Dev Pup</span> 
+                                   <span class="px-2 py-1 bg-green-500/20 rounded-full text-green-200 text-xs">Writer Pup</span></p>
+                        <p>今天有什么需要我帮忙的吗？比如<strong>整理 GitHub issues</strong>、<strong>生成周报</strong>？</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 用户消息示例 -->
+        <div class="message user max-w-3xl mx-auto ml-auto">
+            <div class="flex items-start space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-r from-indigo-400 to-purple-500 rounded-xl flex items-center justify-center flex-shrink-0 ml-auto order-last">
+                    <span class="text-lg">👤</span>
+                </div>
+                <div class="flex-1 text-right">
+                    <div class="text-xs text-slate-400 mb-1 flex items-center justify-end space-x-1">
+                        <span>现在</span>
+                    </div>
+                    <div class="bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-2xl p-4 inline-block shadow-xl">
+                        帮我整理本周的 GitHub issues 并生成周报
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 协作消息示例 -->
+        <div class="message assistant max-w-3xl mx-auto">
+            <div class="flex items-start space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-r from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <span class="text-lg">💻</span>
+                </div>
+                <div class="flex-1">
+                    <div class="text-xs text-slate-400 mb-1 flex items-center space-x-1">
+                        <span>Dev Pup</span>
+                        <span class="w-1 h-1 bg-slate-400 rounded-full"></span>
+                        <span>1分钟前</span>
+                    </div>
+                    <div class="bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-white prose prose-invert max-w-none">
+                        ✅ 找到 <strong>23 个 open issues</strong>，已按优先级分类：
+                        <ul class="mt-2 space-y-1 text-sm">
+                            <li>🔥 高优先级：5个（bug fixes）</li>
+                            <li>⭐ 中优先级：12个（features）</li>
+                            <li>📋 低优先级：6个（docs）</li>
+                        </ul>
+                        <div class="mt-3 p-3 bg-blue-500/20 rounded-xl border border-blue-500/30">
+                            <strong>Token 消耗：</strong> ~180 tokens
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="glass rounded-3xl p-6 shadow-2xl border border-white/20">
+        <div class="flex items-end space-x-3">
+            <!-- 输入框 -->
+            <div class="flex-1 relative">
+                <textarea 
+                    id="messageInput" 
+                    rows="1" 
+                    placeholder="输入你的指令，比如：'整理 issues' 或 '写周报'..."
+                    class="w-full resize-none bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-transparent min-h-[44px] max-h-32 scrollbar-thin"
+                ></textarea>
+                <div class="absolute bottom-3 right-4 flex items-center space-x-2 text-slate-400 text-sm">
+                    <button class="p-1 hover:text-white transition-all">🎤</button>
+                    <span>Ctrl+Enter 发送</span>
+                </div>
+            </div>
+            
+            <!-- 发送按钮 -->
+            <button id="sendBtn" class="w-14 h-14 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 rounded-2xl flex items-center justify-center text-white shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-200">
+                <span class="text-xl">➤</span>
+            </button>
+        </div>
+        
+        <!-- 快捷指令 -->
+        <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-white/10">
+            <button class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white text-sm transition-all backdrop-blur-sm">整理 Issues</button>
+            <button class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white text-sm transition-all backdrop-blur-sm">生成周报</button>
+            <button class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white text-sm transition-all backdrop-blur-sm">检查记忆</button>
+            <button class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white text-sm transition-all backdrop-blur-sm">权限设置</button>
+        </div>
+    </div>
+
+    <script>
+        // 交互逻辑
+        const messages = document.getElementById('messages');
+        const input = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        
+        // 自动调整 textarea 高度
+        input.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 128) + 'px';
+        });
+        
+        // 发送消息
+        function sendMessage() {
+            const text = input.value.trim();
+            if (!text) return;
+            
+            // 添加用户消息
+            addMessage('user', text, '👤', '现在');
+            input.value = '';
+            input.style.height = 'auto';
+            
+            // 模拟 AI 回复 + 打字效果
+            sendBtn.innerHTML = '<div class="typing-indicator flex space-x-1"><span>•</span><span>•</span><span>•</span></div>';
+            sendBtn.classList.add('animate-pulse');
+            
+            setTimeout(() => {
+                addMessage('assistant', '收到！我会把这个任务分给 Dev Pup 和 Writer Pup：\n\n① Dev Pup → 拉取并分类 issues\n② Writer Pup → 生成周报草稿\n\n📊 预计 3-5 分钟完成', '🐕‍🦺', '刚刚');
+                sendBtn.innerHTML = '<span class="text-xl">➤</span>';
+                sendBtn.classList.remove('animate-pulse');
+            }, 1500);
+        }
+        
+        // 添加消息
+        function addMessage(role, content, avatar, time) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role} max-w-3xl mx-auto ${role === 'user' ? 'ml-auto' : ''}`;
+            
+            const bgClass = role === 'user' ? 'from-blue-500 to-purple-500' : 'bg-white/10 backdrop-blur-sm';
+            messageDiv.innerHTML = `
+                <div class="flex items-start space-x-3 ${role === 'user' ? 'flex-row-reverse space-x-reverse text-right' : ''}">
+                    <div class="w-10 h-10 bg-gradient-to-r ${role === 'user' ? 'from-indigo-400 to-purple-500' : 'from-orange-400 to-yellow-500'} rounded-xl flex items-center justify-center flex-shrink-0">
+                        <span class="text-lg">${avatar}</span>
+                    </div>
+                    <div class="flex-1">
+                        <div class="text-xs text-slate-400 mb-1 flex items-center ${role === 'user' ? 'justify-end' : ''} space-x-1">
+                            <span>${time}</span>
+                        </div>
+                        <div class="${bgClass} rounded-2xl p-4 text-white prose prose-invert max-w-none ${role === 'user' ? 'shadow-xl inline-block' : ''}">
+                            ${content.replace(/\n/g, '<br>')}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+        
+        // 事件绑定
+        sendBtn.addEventListener('click', sendMessage);
+        input.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // 快捷按钮
+        document.querySelectorAll('.glass button:not(#sendBtn)').forEach(btn => {
+            btn.addEventListener('click', function() {
+                input.value = this.textContent;
+                input.focus();
+            });
+        });
+    </script>
+</body>
+</html>

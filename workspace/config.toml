@@ -1,0 +1,40 @@
+# OpenPup configuration
+# Copy to ~/.openpup/config.toml and fill in your values.
+
+[llm]
+# LLM provider: "openai" (OpenAI-compatible API) or "ollama" (local)
+provider = "openai"
+
+# Primary model for chat and generation
+model = "gpt-4o"
+
+# Cheaper model for quick classification tasks (defaults to `model` if empty)
+mini_model = "gpt-4o-mini"
+
+# API key — alternatively set OPENPUP_API_KEY environment variable
+api_key = ""
+
+# Base URL override — leave empty for provider default
+# Examples:
+#   SiliconFlow: https://api.siliconflow.cn/v1
+#   Ollama:      http://localhost:11434/v1
+#   OpenAI:      https://api.openai.com/v1
+api_base = ""
+
+# Embedding model for semantic memory search
+embed_model = "BAAI/bge-m3"
+
+[app]
+# "leashed" — confirm before taking actions
+# "freerun" — autonomous execution
+execution_mode = "leashed"
+
+# UI theme: "dark" or "light"
+theme = "dark"
+
+# Interface language: "zh" (Chinese) or "en" (English)
+language = "zh"
+
+[pups]
+# Which specialist pups are active
+enabled = ["alpha", "dev", "writer", "ops", "research", "life_admin"]

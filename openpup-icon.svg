@@ -1,0 +1,56 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="100%" stop-color="#020817"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="url(#bg)"/>
+
+  <!-- Dog head outline -->
+  <path
+    d="M180 210
+       C185 170 215 140 255 140
+       C295 140 325 170 330 210
+       L330 260
+       C330 295 305 320 270 330
+       L240 338
+       C215 345 190 330 185 305
+       Z"
+    fill="none"
+    stroke="#e5e7eb"
+    stroke-width="16"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Ear -->
+  <path
+    d="M220 155
+       L205 120
+       C200 110 190 110 185 120
+       L180 145"
+    fill="none"
+    stroke="#e5e7eb"
+    stroke-width="16"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Eye -->
+  <circle cx="265" cy="195" r="8" fill="#e5e7eb"/>
+
+  <!-- Small terminal prompt in bottom-right -->
+  <rect x="300" y="310" width="110" height="70" rx="16" ry="16"
+        fill="none" stroke="#0ea5e9" stroke-width="10"/>
+  <path
+    d="M320 343 L338 355 L320 367"
+    fill="none"
+    stroke="#0ea5e9"
+    stroke-width="8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <line x1="350" y1="368" x2="380" y2="368"
+        stroke="#0ea5e9" stroke-width="8" stroke-linecap="round"/>
+</svg>

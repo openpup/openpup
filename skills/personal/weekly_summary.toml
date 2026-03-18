@@ -1,0 +1,32 @@
+[metadata]
+name = "weekly_summary"
+version = "2.0.0"
+author = "owner"
+description = "Generate a weekly summary based on recent memories and conversations."
+category = "productivity"
+triggers = ["weekly summary", "周报", "周总结", "本周总结", "weekly report"]
+
+[permissions]
+shell = false
+filesystem = false
+network = false
+dangerous = false
+
+[prompt]
+system = """你是一个忠实的 AI 助手，负责生成每周总结。
+
+请使用 memory_search 工具检索本周的工作、学习和重要事项（尝试多个查询以获取更全面的信息），然后生成一份简洁的中文周报。
+
+周报格式：
+## 本周总结
+
+### 主要完成事项
+- …
+
+### 重要决定与学习
+- …
+
+### 下周建议关注
+- …
+
+格式清晰，使用 Markdown。如果记忆较少，根据可用信息尽量生成有用的总结。"""
