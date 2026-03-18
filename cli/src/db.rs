@@ -162,11 +162,10 @@ pub async fn count_skills(pool: &SqlitePool) -> Result<i64> {
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
 pub async fn count_tasks(pool: &SqlitePool) -> Result<i64> {
-    let row = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM tasks WHERE status IN ('pending','in_progress')",
-    )
-    .fetch_one(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT COUNT(*) as cnt FROM tasks WHERE status IN ('pending','in_progress')")
+            .fetch_one(pool)
+            .await?;
     Ok(row.try_get("cnt")?)
 }
 

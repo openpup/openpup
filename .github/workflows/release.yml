@@ -25,7 +25,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: darwin-aarch64
             binary: openpup
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact_name: darwin-x86_64
             binary: openpup
@@ -75,7 +75,7 @@ jobs:
           - platform: darwin-aarch64
             os: macos-14
           - platform: darwin-x86_64
-            os: macos-13
+            os: macos-14
           - platform: windows-x86_64
             os: windows-latest
     steps:
@@ -118,6 +118,7 @@ jobs:
     needs: [cli]
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Download all CLI artifacts
         uses: actions/download-artifact@v4

@@ -41,48 +41,33 @@ Everything lives in `~/.openpup/` — plain files you can read, edit, and back u
 
 ## vs. The Alternatives
 
-OpenPup lives in the same ecosystem as **OpenClaw** and **ZeroClaw** — all three are local-first, open-source AI agents with skill systems. Here's how they differ:
+Three mainstream open-source agent frameworks, each with a distinct focus:
 
-### Feature comparison
+### Feature Comparison
 
-| | **OpenPup** | **OpenClaw** | **ZeroClaw** |
+| | **OpenPup** | **OpenClaw** | **OpenFang** |
 |---|:---:|:---:|:---:|
-| **Philosophy** | Owner-centric (OWNER.md) | Agent-centric (SOUL.md) | Runtime-centric (pluggable) |
-| **Core question** | *Who are you?* | *What AI do you want?* | *Where do you deploy?* |
-| Language / runtime | Rust + Tauri | TypeScript (Node.js) | Rust |
-| RAM footprint | low (native) | >1 GB (Node.js heap) | <5 MB |
-| Startup time | fast (native) | seconds (Node.js cold start) | <10 ms |
-| Interface | Desktop app + CLI | Web UI + 27+ messaging platform gateway | CLI / containerized |
-| Multi-agent team | ✅ 5 specialists + Alpha | ❌ single agent + AgentSkills | ❌ single runtime |
-| Memory model | OWNER.md + SQLite semantic search | SOUL.md + daily markdown + SQLite | Pluggable backends |
-| Skills format | TOML (ClaWHub) | AgentSkills YAML (ClaWHub) | Pluggable |
-| MCP support | ✅ rmcp streamable HTTP | ✅ | ❌ |
-| Target user | Personal use, daily driver | Power users, 20+ platform integrations | Edge / serverless deployment |
-| Open source | MIT / Apache 2.0 | MIT (foundation-maintained) | Apache 2.0 |
+| **Position** | Personal desktop assistant | Multi-channel gateway | Agent operating system |
+| **Core innovation** | OWNER.md (owner-centric) | Multi-agent routing + 27+ channels | 7 autonomous Hands (pre-built) |
+| Tech stack | Rust + Tauri | Node.js + WebSocket | Rust (14 crates) |
+| Memory footprint | ~40 MB | ~394 MB | ~40 MB |
+| Startup time | seconds | ~6 sec | <200 ms |
+| Expert team | ✅ 5 specialists + coordinator | Routes to single agent | Runs Hands (not agents) |
+| Interface | Desktop app + CLI | Web UI + messaging channels | Dashboard + CLI |
+| Channel support | Internal integrations | 27+ platforms (WhatsApp/Telegram/etc) | 40+ platform gateway |
+| Use case | Daily companion | Heavy multi-channel users | Autonomous business flows |
+| License | MIT / Apache 2.0 | MIT (foundation-maintained) | MIT |
 
-### vs. OpenClaw
+### Quick Comparison
 
-OpenClaw and OpenPup share the same skill marketplace ([ClaWHub](https://clawhub.ai)) — skills are cross-compatible. The core difference is philosophical:
+**OpenPup**
+Core: embed your identity (`OWNER.md`) into the system so the pups understand you deeply. Specialist division of labor (Dev/Writer/Research/Ops/LifeAdmin). Native desktop app. Best for people who want a daily companion that gradually understands them better.
 
-> OpenClaw's `SOUL.md` defines **the AI's personality**.
-> OpenPup's `OWNER.md` defines **your identity**.
+**OpenClaw**
+Core: multi-channel gateway + multi-agent routing. Single AI assistant, but present simultaneously on WhatsApp, Telegram, Slack, Discord, and 27+ other platforms. Perfect for heavy users who need a unified presence across channels.
 
-OpenClaw asks: *"What AI do you want?"* — you craft the agent's character, voice, and opinions.
-OpenPup asks: *"Who are you?"* — the pups adapt to you, not the other way around.
-
-Practically: OpenClaw excels if you want a single highly-customized agent that bridges WhatsApp, Telegram, Discord, and your desktop in one gateway. OpenPup is better if you want a **personal team that knows you deeply**, with specialist routing and a native desktop app.
-
-One trade-off worth knowing: OpenClaw runs on Node.js and requires >1 GB RAM (1 GB minimum officially, 2 GB+ recommended for stable production use). As a persistent messaging gateway, that memory is always occupied. OpenPup is compiled Rust + Tauri — meaningfully lighter on the same hardware.
-
-> OpenClaw was created by Peter Steinberger in late 2025. In February 2026, Steinberger joined OpenAI and the project was transferred to an open-source foundation, where it continues active development.
-
-### vs. ZeroClaw
-
-ZeroClaw is a Rust-based agent runtime built for **edge and resource-constrained environments** — single binary, <5 MB RAM, <10 ms cold start, with every subsystem (providers, channels, tools, memory, tunnels) swappable via traits. It's designed to run on a $10 single-board computer or inside a Docker container. Licensed under Apache 2.0.
-
-OpenPup is a **desktop personal assistant** — it's not designed for serverless or edge deployment, but it offers things ZeroClaw doesn't: a GUI, multi-agent routing, rich memory UI, and the opinionated owner-centric philosophy.
-
-If you need to deploy an agent to a server or embedded device, ZeroClaw is the right tool. If you want a daily companion on your laptop that gets to know you over time, that's OpenPup.
+**OpenFang**
+Core: 7 pre-built autonomous capability packages ("Hands") — lead generation, video clips, intelligence gathering, etc. Executes autonomously without needing conversation. Designed for teams that need to automate business workflows (sales, research, operations).
 
 ---
 

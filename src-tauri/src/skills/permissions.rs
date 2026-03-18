@@ -14,50 +14,50 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
-  Leashed,
-  FreeRun,
+    Leashed,
+    FreeRun,
 }
 
 // ── Action types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum Action {
-  DeleteFile(String),
-  SendPublicMessage(String),
-  MakePayment(f64),
-  ModifySystemConfig(String),
-  Other(String),
+    DeleteFile(String),
+    SendPublicMessage(String),
+    MakePayment(f64),
+    ModifySystemConfig(String),
+    Other(String),
 }
 
 impl Action {
-  pub fn is_dangerous(&self) -> bool {
-    matches!(
-      self,
-      Action::DeleteFile(_)
-        | Action::SendPublicMessage(_)
-        | Action::MakePayment(_)
-        | Action::ModifySystemConfig(_)
-    )
-  }
+    pub fn is_dangerous(&self) -> bool {
+        matches!(
+            self,
+            Action::DeleteFile(_)
+                | Action::SendPublicMessage(_)
+                | Action::MakePayment(_)
+                | Action::ModifySystemConfig(_)
+        )
+    }
 }
 
 // ── Payloads ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
 pub struct PermissionDetails {
-  pub affected_files: Option<Vec<String>>,
-  pub network_destinations: Option<Vec<String>>,
-  pub estimated_cost: Option<f64>,
+    pub affected_files: Option<Vec<String>>,
+    pub network_destinations: Option<Vec<String>>,
+    pub estimated_cost: Option<f64>,
 }
 
 #[derive(Clone, Serialize)]
 pub struct PermissionRequestPayload {
-  /// Unique ID matched when the frontend calls `approve_permission` / `deny_permission`.
-  pub request_id: String,
-  pub skill_name: String,
-  pub action_description: String,
-  pub risk_level: String, // "high" | "low"
-  pub details: PermissionDetails,
+    /// Unique ID matched when the frontend calls `approve_permission` / `deny_permission`.
+    pub request_id: String,
+    pub skill_name: String,
+    pub action_description: String,
+    pub risk_level: String, // "high" | "low"
+    pub details: PermissionDetails,
 }
 
 // ── PermissionChecker ─────────────────────────────────────────────────────────
@@ -67,151 +67,157 @@ pub struct PermissionRequestPayload {
 /// (the only place where `AppHandle` is available before the event loop starts).
 #[derive(Clone)]
 pub struct PermissionChecker {
-  mode: Arc<RwLock<ExecutionMode>>,
-  trusted_skills: Arc<RwLock<HashSet<String>>>,
-  /// Initialised once from `.setup()` via `init_handle()`.
-  app_handle: Arc<OnceLock<tauri::AppHandle>>,
-  /// In-flight requests awaiting user response.
-  pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-  /// Path to persist trusted skills JSON.
-  trusted_skills_path: Arc<Mutex<Option<PathBuf>>>,
+    mode: Arc<RwLock<ExecutionMode>>,
+    trusted_skills: Arc<RwLock<HashSet<String>>>,
+    /// Initialised once from `.setup()` via `init_handle()`.
+    app_handle: Arc<OnceLock<tauri::AppHandle>>,
+    /// In-flight requests awaiting user response.
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// Path to persist trusted skills JSON.
+    trusted_skills_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl PermissionChecker {
-  pub fn new() -> Self {
-    Self {
-      mode: Arc::new(RwLock::new(ExecutionMode::Leashed)),
-      trusted_skills: Arc::new(RwLock::new(HashSet::new())),
-      app_handle: Arc::new(OnceLock::new()),
-      pending: Arc::new(Mutex::new(HashMap::new())),
-      trusted_skills_path: Arc::new(Mutex::new(None)),
-    }
-  }
-
-  /// Set the path to persist trusted skills and load any existing data.
-  pub fn set_persist_path(&self, path: PathBuf) {
-    if path.exists() {
-      if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(skills) = serde_json::from_str::<Vec<String>>(&text) {
-          if let Ok(mut guard) = self.trusted_skills.try_write() {
-            for s in skills { guard.insert(s); }
-          }
+    pub fn new() -> Self {
+        Self {
+            mode: Arc::new(RwLock::new(ExecutionMode::Leashed)),
+            trusted_skills: Arc::new(RwLock::new(HashSet::new())),
+            app_handle: Arc::new(OnceLock::new()),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            trusted_skills_path: Arc::new(Mutex::new(None)),
         }
-      }
     }
-    if let Ok(mut p) = self.trusted_skills_path.lock() {
-      *p = Some(path);
-    }
-  }
 
-  /// Must be called once from Tauri's `setup()` closure.
-  pub fn init_handle(&self, handle: tauri::AppHandle) {
-    let _ = self.app_handle.set(handle);
-  }
-
-  // ── Public API ──────────────────────────────────────────────────────────────
-
-  pub async fn get_mode(&self) -> ExecutionMode {
-    *self.mode.read().await
-  }
-
-  pub async fn set_mode(&self, mode: ExecutionMode) {
-    *self.mode.write().await = mode;
-  }
-
-  pub async fn check_permission(&self, skill_name: &str, action: &Action) -> Result<bool> {
-    match self.get_mode().await {
-      ExecutionMode::Leashed => {
-        if action.is_dangerous() {
-          self.request_user_confirmation(skill_name, action).await
-        } else {
-          Ok(true)
+    /// Set the path to persist trusted skills and load any existing data.
+    pub fn set_persist_path(&self, path: PathBuf) {
+        if path.exists() {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(skills) = serde_json::from_str::<Vec<String>>(&text) {
+                    if let Ok(mut guard) = self.trusted_skills.try_write() {
+                        for s in skills {
+                            guard.insert(s);
+                        }
+                    }
+                }
+            }
         }
-      }
-      ExecutionMode::FreeRun => {
-        let trusted = self.trusted_skills.read().await;
-        if trusted.contains(skill_name) && !action.is_dangerous() {
-          Ok(true)
-        } else {
-          self.request_user_confirmation(skill_name, action).await
+        if let Ok(mut p) = self.trusted_skills_path.lock() {
+            *p = Some(path);
         }
-      }
     }
-  }
 
-  /// Called by `approve_permission` / `deny_permission` commands to resolve
-  /// a pending request.
-  pub fn respond(&self, request_id: &str, approved: bool) {
-    if let Some(tx) = self.pending.lock().unwrap().remove(request_id) {
-      let _ = tx.send(approved);
+    /// Must be called once from Tauri's `setup()` closure.
+    pub fn init_handle(&self, handle: tauri::AppHandle) {
+        let _ = self.app_handle.set(handle);
     }
-  }
 
-  pub async fn trust_skill(&self, skill_name: &str) {
-    self.trusted_skills.write().await.insert(skill_name.to_string());
-    // Persist to JSON
-    let skills: Vec<String> = self.trusted_skills.read().await.iter().cloned().collect();
-    if let Ok(path_guard) = self.trusted_skills_path.lock() {
-      if let Some(ref path) = *path_guard {
-        if let Ok(text) = serde_json::to_string_pretty(&skills) {
-          let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
-          let _ = std::fs::write(path, text);
+    // ── Public API ──────────────────────────────────────────────────────────────
+
+    pub async fn get_mode(&self) -> ExecutionMode {
+        *self.mode.read().await
+    }
+
+    pub async fn set_mode(&self, mode: ExecutionMode) {
+        *self.mode.write().await = mode;
+    }
+
+    pub async fn check_permission(&self, skill_name: &str, action: &Action) -> Result<bool> {
+        match self.get_mode().await {
+            ExecutionMode::Leashed => {
+                if action.is_dangerous() {
+                    self.request_user_confirmation(skill_name, action).await
+                } else {
+                    Ok(true)
+                }
+            }
+            ExecutionMode::FreeRun => {
+                let trusted = self.trusted_skills.read().await;
+                if trusted.contains(skill_name) && !action.is_dangerous() {
+                    Ok(true)
+                } else {
+                    self.request_user_confirmation(skill_name, action).await
+                }
+            }
         }
-      }
     }
-  }
 
-  // ── Internal ────────────────────────────────────────────────────────────────
-
-  async fn request_user_confirmation(&self, skill_name: &str, action: &Action) -> Result<bool> {
-    let Some(handle) = self.app_handle.get() else {
-      // AppHandle not yet initialised — safe default: deny
-      return Ok(false);
-    };
-
-    let request_id = Uuid::new_v4().to_string();
-    let (tx, rx) = oneshot::channel::<bool>();
-
-    self.pending.lock().unwrap().insert(request_id.clone(), tx);
-
-    let payload = PermissionRequestPayload {
-      request_id: request_id.clone(),
-      skill_name: skill_name.to_string(),
-      action_description: action_description(action),
-      risk_level: if action.is_dangerous() { "high" } else { "low" }.to_string(),
-      details: PermissionDetails {
-        affected_files: match action {
-          Action::DeleteFile(p) => Some(vec![p.clone()]),
-          _ => None,
-        },
-        network_destinations: None,
-        estimated_cost: match action {
-          Action::MakePayment(amt) => Some(*amt),
-          _ => None,
-        },
-      },
-    };
-
-    // Emit the event — the frontend will show the dialog
-    let _ = handle.emit("permission_request", &payload);
-
-    // Wait up to 5 minutes for the user to click Allow or Deny
-    match timeout(Duration::from_secs(300), rx).await {
-      Ok(Ok(approved)) => Ok(approved),
-      _ => {
-        self.pending.lock().unwrap().remove(&request_id);
-        Ok(false) // timeout or channel drop → deny
-      }
+    /// Called by `approve_permission` / `deny_permission` commands to resolve
+    /// a pending request.
+    pub fn respond(&self, request_id: &str, approved: bool) {
+        if let Some(tx) = self.pending.lock().unwrap().remove(request_id) {
+            let _ = tx.send(approved);
+        }
     }
-  }
+
+    pub async fn trust_skill(&self, skill_name: &str) {
+        self.trusted_skills
+            .write()
+            .await
+            .insert(skill_name.to_string());
+        // Persist to JSON
+        let skills: Vec<String> = self.trusted_skills.read().await.iter().cloned().collect();
+        if let Ok(path_guard) = self.trusted_skills_path.lock() {
+            if let Some(ref path) = *path_guard {
+                if let Ok(text) = serde_json::to_string_pretty(&skills) {
+                    let _ =
+                        std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+                    let _ = std::fs::write(path, text);
+                }
+            }
+        }
+    }
+
+    // ── Internal ────────────────────────────────────────────────────────────────
+
+    async fn request_user_confirmation(&self, skill_name: &str, action: &Action) -> Result<bool> {
+        let Some(handle) = self.app_handle.get() else {
+            // AppHandle not yet initialised — safe default: deny
+            return Ok(false);
+        };
+
+        let request_id = Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel::<bool>();
+
+        self.pending.lock().unwrap().insert(request_id.clone(), tx);
+
+        let payload = PermissionRequestPayload {
+            request_id: request_id.clone(),
+            skill_name: skill_name.to_string(),
+            action_description: action_description(action),
+            risk_level: if action.is_dangerous() { "high" } else { "low" }.to_string(),
+            details: PermissionDetails {
+                affected_files: match action {
+                    Action::DeleteFile(p) => Some(vec![p.clone()]),
+                    _ => None,
+                },
+                network_destinations: None,
+                estimated_cost: match action {
+                    Action::MakePayment(amt) => Some(*amt),
+                    _ => None,
+                },
+            },
+        };
+
+        // Emit the event — the frontend will show the dialog
+        let _ = handle.emit("permission_request", &payload);
+
+        // Wait up to 5 minutes for the user to click Allow or Deny
+        match timeout(Duration::from_secs(300), rx).await {
+            Ok(Ok(approved)) => Ok(approved),
+            _ => {
+                self.pending.lock().unwrap().remove(&request_id);
+                Ok(false) // timeout or channel drop → deny
+            }
+        }
+    }
 }
 
 fn action_description(action: &Action) -> String {
-  match action {
-    Action::DeleteFile(path) => format!("删除文件：{path}"),
-    Action::SendPublicMessage(msg) => format!("发送公开消息：{msg}"),
-    Action::MakePayment(amount) => format!("发起支付：${amount:.2}"),
-    Action::ModifySystemConfig(key) => format!("修改系统配置：{key}"),
-    Action::Other(desc) => desc.clone(),
-  }
+    match action {
+        Action::DeleteFile(path) => format!("删除文件：{path}"),
+        Action::SendPublicMessage(msg) => format!("发送公开消息：{msg}"),
+        Action::MakePayment(amount) => format!("发起支付：${amount:.2}"),
+        Action::ModifySystemConfig(key) => format!("修改系统配置：{key}"),
+        Action::Other(desc) => desc.clone(),
+    }
 }

@@ -22,8 +22,12 @@ struct ConfigFile {
     llm: LlmConfig,
 }
 
-fn default_provider() -> String { "openai".into() }
-fn default_model() -> String { "gpt-4o".into() }
+fn default_provider() -> String {
+    "openai".into()
+}
+fn default_model() -> String {
+    "gpt-4o".into()
+}
 
 impl Default for LlmConfig {
     fn default() -> Self {
@@ -48,8 +52,7 @@ pub fn load_llm_config() -> Result<LlmConfig> {
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("Cannot read config at {}", path.display()))?;
 
-    let file: ConfigFile = toml::from_str(&raw)
-        .with_context(|| "Invalid config.toml")?;
+    let file: ConfigFile = toml::from_str(&raw).with_context(|| "Invalid config.toml")?;
 
     let mut cfg = file.llm;
 

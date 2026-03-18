@@ -60,10 +60,7 @@ pub async fn run_chat(db_path: &str, pup: &str) -> Result<()> {
         format!("记忆 {} 条", mem_count).dimmed(),
         format!("模式: 牵绳").dimmed(),
     );
-    println!(
-        "{}",
-        "输入消息，按 Enter 发送。Ctrl-C 退出。".dimmed()
-    );
+    println!("{}", "输入消息，按 Enter 发送。Ctrl-C 退出。".dimmed());
     println!();
 
     // Load recent context (last 6 turns)
@@ -104,7 +101,8 @@ pub async fn run_chat(db_path: &str, pup: &str) -> Result<()> {
                 println!("\n");
 
                 // Save assistant response
-                let _ = db::save_conversation(&pool, "assistant", &response, Some(&pup_display)).await;
+                let _ =
+                    db::save_conversation(&pool, "assistant", &response, Some(&pup_display)).await;
 
                 messages.push(ChatMsg {
                     role: "assistant".into(),
@@ -133,7 +131,8 @@ pub async fn run_skill_prompt(
     input: Option<&str>,
 ) -> Result<String> {
     // Simple single-turn skill execution via LLM
-    let system = "You are executing a skill. Use the manifest as instructions. Return the result directly.";
+    let system =
+        "You are executing a skill. Use the manifest as instructions. Return the result directly.";
     let user = if let Some(inp) = input {
         format!("Manifest:\n{}\n\nInput:\n{}", manifest, inp)
     } else {
@@ -141,8 +140,14 @@ pub async fn run_skill_prompt(
     };
 
     let messages = vec![
-        ChatMsg { role: "system".into(), content: system.into() },
-        ChatMsg { role: "user".into(), content: user },
+        ChatMsg {
+            role: "system".into(),
+            content: system.into(),
+        },
+        ChatMsg {
+            role: "user".into(),
+            content: user,
+        },
     ];
 
     // Non-streaming for skill runs
@@ -166,7 +171,8 @@ async fn build_system_prompt(pup: &str, pool: &sqlx::sqlite::SqlitePool) -> Vec<
         if memories.is_empty() {
             String::new()
         } else {
-            let lines: Vec<String> = memories.iter()
+            let lines: Vec<String> = memories
+                .iter()
                 .map(|m| format!("- [{}] {}", m.memory_type, m.content))
                 .collect();
             format!("\n\n## Relevant Memories\n{}", lines.join("\n"))
@@ -176,7 +182,10 @@ async fn build_system_prompt(pup: &str, pool: &sqlx::sqlite::SqlitePool) -> Vec<
     };
 
     let system_content = format!("{}{}", base, memory_context);
-    vec![ChatMsg { role: "system".into(), content: system_content }]
+    vec![ChatMsg {
+        role: "system".into(),
+        content: system_content,
+    }]
 }
 
 async fn stream_response(cfg: &LlmConfig, messages: &[ChatMsg]) -> Result<String> {

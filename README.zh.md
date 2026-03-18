@@ -43,50 +43,35 @@ openpup 在问：**「你是一个什么样的人？」**
 
 ---
 
-## 与竞品对比
+## 与OpenClaw等对比
 
-OpenPup、**OpenClaw** 和 **ZeroClaw** 处于同一生态位——三者都是本地优先、开源、有技能系统的 AI Agent。区别在于各自的核心取向：
+三个主流开源 Agent 框架，各有侧重：
 
-### 功能对比
+### 核心对比
 
-| | **OpenPup** | **OpenClaw** | **ZeroClaw** |
+| | **OpenPup** | **OpenClaw** | **OpenFang** |
 |---|:---:|:---:|:---:|
-| **核心哲学** | 主人中心（OWNER.md） | 智能体中心（SOUL.md） | 运行时中心（可插拔） |
-| **核心问题** | *你是什么样的人？* | *你想要什么样的 AI？* | *部署在哪里？* |
-| 语言 / 运行时 | Rust + Tauri | TypeScript（Node.js） | Rust |
-| 内存占用 | 低（原生） | >1 GB（Node.js 堆） | <5 MB |
-| 启动时间 | 快（原生） | 数秒（Node.js 初始化） | <10 毫秒 |
-| 界面 | 桌面应用 + CLI | Web UI + 27+ 消息平台网关 | CLI / 容器化 |
-| 多智能体团队 | ✅ 5 只专家 + Alpha | ❌ 单一智能体 + AgentSkills | ❌ 单一运行时 |
-| 记忆模型 | OWNER.md + SQLite 语义搜索 | SOUL.md + 每日 markdown + SQLite | 可插拔后端 |
-| 技能格式 | TOML（ClaWHub） | AgentSkills YAML（ClaWHub） | 可插拔 |
-| MCP 支持 | ✅ rmcp 流式 HTTP | ✅ | ❌ |
-| 目标用户 | 个人日常使用 | 重度集成用户（20+ 平台） | 边缘 / 无服务器部署 |
-| 开源协议 | MIT / Apache 2.0 | MIT（基金会维护） | Apache 2.0 |
+| **定位** | 个人桌面助手 | 多渠道网关 | Agent 操作系统 |
+| **核心创新** | OWNER.md（主人中心） | 多Agent路由 + 27+ 渠道 | 7个自治Hands（预构建） |
+| 技术栈 | Rust + Tauri | Node.js + WebSocket | Rust（14 crates） |
+| 内存占用 | ~40 MB | ~394 MB | ~40 MB |
+| 启动时间 | 秒级 | ~6 秒 | <200 ms |
+| 专家团队 | ✅ 5 只 + 协调 | 路由到单一 Agent | 运行Hands（非Agent） |
+| 界面 | 桌面应用 + CLI | Web UI + 消息渠道 | 仪表板 + CLI |
+| 渠道支持 | 内部集成 | 27+ 平台（WhatsApp/Telegram等） | 40+ 平台网关 |
+| 使用场景 | 日常助手 | 重度多渠道用户 | 自主业务流程 |
+| License | MIT / Apache 2.0 | MIT（基金会维护） | MIT |
 
-### vs. OpenClaw
+### 简明对比
 
-OpenPup 和 OpenClaw 共享同一个技能市场（[ClaWHub](https://clawhub.ai)）——技能文件可以互相兼容。核心差异是哲学层面的：
+**OpenPup**
+核心：把你的身份（`OWNER.md`）写进系统，小狗们深度了解你。专业分工（Dev/Writer/Research/Ops/LifeAdmin），本地桌面应用。适合想要一个逐渐更懂自己的日常伴侣的人。
 
-> OpenClaw 的 `SOUL.md`：定义的是 **AI 的人格**。
-> OpenPup 的 `OWNER.md`：定义的是 **你的身份**。
+**OpenClaw**
+核心：多渠道网关 + 多Agent路由。单一AI助手，但能同时在 WhatsApp、Telegram、Slack、Discord 等 27+ 平台活动。适合需要跨渠道统一存在感的重度用户。
 
-OpenClaw 在问：「你想要一个什么样的 AI？」——你来塑造智能体的性格、声音和观点。
-OpenPup 在问：「你是一个什么样的人？」——小狗们适应你，而不是反过来。
-
-实际使用上：如果你需要一个高度自定义的单一智能体，同时打通 WhatsApp、Telegram、Discord 和桌面——OpenClaw 更合适。如果你想要一个**深度了解你、按专业分工协作的本地团队**，以及一个流畅的原生桌面应用——OpenPup 更合适。
-
-值得注意的一个差异：OpenClaw 基于 Node.js，内存占用超过 1 GB（官方最低要求 1 GB，推荐 2 GB+）；作为消息网关长期驻留运行，资源消耗是持续的。OpenPup 是编译后的 Rust + Tauri，在同等硬件上更轻。
-
-> OpenClaw 由 Peter Steinberger 于 2025 年底创建；2026 年 2 月 Steinberger 加入 OpenAI 后，项目移交开源基金会维护，持续活跃。
-
-### vs. ZeroClaw
-
-ZeroClaw 是一个面向**边缘计算和资源受限环境**的 Rust Agent 运行时——单一可执行文件，内存 <5 MB，冷启动 <10 毫秒，每个子系统（provider、channel、tool、memory）均可插拔替换。设计目标是跑在 10 美元的单板计算机上或 Docker 容器里。协议为 Apache 2.0。
-
-OpenPup 是一个**桌面个人助手**——不适合无服务器或边缘部署，但提供了 ZeroClaw 没有的东西：图形界面、多智能体路由、丰富的记忆管理 UI，以及以主人为核心的设计哲学。
-
-需要把 Agent 部署到服务器或嵌入式设备？ZeroClaw 是正确选择。需要一个随时间不断了解你的日常桌面伴侣？那就是 OpenPup。
+**OpenFang**
+核心：7个预构建的自治能力包（"Hands"）——Lead 生成、视频剪辑、信息收集等。自主执行，无需对话干预。适合需要自动化业务流程（销售、研究、运维）的团队。
 
 ---
 

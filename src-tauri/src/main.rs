@@ -7,9 +7,9 @@ mod config;
 mod llm;
 mod mcp;
 mod memory;
+mod skills;
 mod tools;
 mod workspace;
-mod skills;
 
 use std::sync::Arc;
 
@@ -17,233 +17,266 @@ use agents::alpha::AlphaPup;
 use agents::dev_pup::DevPup;
 use agents::life_admin_pup::LifeAdminPup;
 use agents::ops_pup::OpsPup;
+use agents::plugins::load_dynamic_pups;
 use agents::research_pup::ResearchPup;
 use agents::writer_pup::WriterPup;
-use agents::plugins::load_dynamic_pups;
 use commands::AppState;
 use llm::client::LlmClient;
-use mcp::orchestrator::{McpServerEntry, MCPOrchestrator};
+use mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use memory::file_layer::FileLayer;
 use memory::system::MemorySystem;
 use skills::executor::SkillExecutor;
 use skills::permissions::PermissionChecker;
 use skills::registry::SkillRegistry;
-use tools::primitive::ToolRegistry;
 use skills::scheduler::SkillScheduler;
 use tokio::runtime::Runtime;
+use tools::primitive::ToolRegistry;
 
 fn main() {
-  let _ = dotenvy::dotenv();
+    let _ = dotenvy::dotenv();
 
-  let rt = Runtime::new().expect("failed to create tokio runtime");
+    let rt = Runtime::new().expect("failed to create tokio runtime");
 
-  let (app_state, permission_checker, scheduler) = rt.block_on(async {
-    let home_dir = dirs::home_dir().expect("cannot determine home directory");
-    let workspace_root = home_dir.join(".openpup");
-    let db_path = workspace_root.join("database.db");
+    let (app_state, permission_checker, scheduler) = rt.block_on(async {
+        let home_dir = dirs::home_dir().expect("cannot determine home directory");
+        let workspace_root = home_dir.join(".openpup");
+        let db_path = workspace_root.join("database.db");
 
-    let file_layer = Arc::new(FileLayer::new(&workspace_root));
-    file_layer.ensure_workspace_initialized().expect("ensure workspace");
+        let file_layer = Arc::new(FileLayer::new(&workspace_root));
+        file_layer
+            .ensure_workspace_initialized()
+            .expect("ensure workspace");
 
-    if let Some(parent) = db_path.parent() {
-      if let Err(e) = std::fs::create_dir_all(parent) {
-        panic!("failed to create db directory {:?}: {e}", parent);
-      }
-    }
+        if let Some(parent) = db_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                panic!("failed to create db directory {:?}: {e}", parent);
+            }
+        }
 
-    let db_path_str = db_path
-      .to_str()
-      .unwrap_or_else(|| panic!("invalid db path: {:?}", db_path));
+        let db_path_str = db_path
+            .to_str()
+            .unwrap_or_else(|| panic!("invalid db path: {:?}", db_path));
 
-    println!("db_path: {db_path_str}");
-    let llm_client = Arc::new(LlmClient::new_from_env());
+        println!("db_path: {db_path_str}");
+        let llm_client = Arc::new(LlmClient::new_from_env());
 
-    // Load unified config.toml
-    {
-      let cfg = crate::config::load_with_env();
-      let provider = if cfg.llm.provider == "ollama" {
-        crate::llm::client::Provider::Ollama
-      } else {
-        crate::llm::client::Provider::OpenAI
-      };
-      let api_key   = if cfg.llm.api_key.is_empty()     { None } else { Some(cfg.llm.api_key) };
-      let api_base  = if cfg.llm.api_base.is_empty()    { None } else { Some(cfg.llm.api_base) };
-      let mini      = if cfg.llm.mini_model.is_empty()  { None } else { Some(cfg.llm.mini_model) };
-      let embed     = if cfg.llm.embed_model.is_empty() { None } else { Some(cfg.llm.embed_model) };
-      llm_client.reconfigure(provider, cfg.llm.model, mini, embed, api_key, api_base);
-    }
+        // Load unified config.toml
+        {
+            let cfg = crate::config::load_with_env();
+            let provider = if cfg.llm.provider == "ollama" {
+                crate::llm::client::Provider::Ollama
+            } else {
+                crate::llm::client::Provider::OpenAI
+            };
+            let api_key = if cfg.llm.api_key.is_empty() {
+                None
+            } else {
+                Some(cfg.llm.api_key)
+            };
+            let api_base = if cfg.llm.api_base.is_empty() {
+                None
+            } else {
+                Some(cfg.llm.api_base)
+            };
+            let mini = if cfg.llm.mini_model.is_empty() {
+                None
+            } else {
+                Some(cfg.llm.mini_model)
+            };
+            let embed = if cfg.llm.embed_model.is_empty() {
+                None
+            } else {
+                Some(cfg.llm.embed_model)
+            };
+            llm_client.reconfigure(provider, cfg.llm.model, mini, embed, api_key, api_base);
+        }
 
-    let memory = Arc::new(
-      MemorySystem::new(db_path_str, llm_client.clone())
-        .await
-        .expect("init memory system"),
-    );
+        let memory = Arc::new(
+            MemorySystem::new(db_path_str, llm_client.clone())
+                .await
+                .expect("init memory system"),
+        );
 
-    // MCP — load persisted server config
-    let mcp_config_path = workspace_root.join("mcp_servers.json");
-    let mcp_orchestrator = Arc::new(MCPOrchestrator::load(mcp_config_path));
+        // MCP — load persisted server config
+        let mcp_config_path = workspace_root.join("mcp_servers.json");
+        let mcp_orchestrator = Arc::new(MCPOrchestrator::load(mcp_config_path));
 
-    // Optional env-var bootstrap for first-run
-    if let Ok(base_url) = std::env::var("OPENPUP_MCP_SERVER_URL") {
-      let token = std::env::var("OPENPUP_MCP_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
-      let _ = mcp_orchestrator.add_server(McpServerEntry {
-        name: "env".to_string(),
-        base_url,
-        token,
-        description: "Server from OPENPUP_MCP_SERVER_URL".to_string(),
-        enabled: true,
-      }).await;
-    }
+        // Optional env-var bootstrap for first-run
+        if let Ok(base_url) = std::env::var("OPENPUP_MCP_SERVER_URL") {
+            let token =
+                std::env::var("OPENPUP_MCP_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
+            let _ = mcp_orchestrator
+                .add_server(McpServerEntry {
+                    name: "env".to_string(),
+                    base_url,
+                    token,
+                    description: "Server from OPENPUP_MCP_SERVER_URL".to_string(),
+                    enabled: true,
+                })
+                .await;
+        }
 
-    // Skills registry — load persisted + built-ins
-    let skills_state_dir = workspace_root.join("skills_state");
-    let skills_state_path = skills_state_dir.join("installed_skills.json");
-    let skill_registry = SkillRegistry::new(skills_state_path);
+        // Skills registry — load persisted + built-ins
+        let skills_state_dir = workspace_root.join("skills_state");
+        let skills_state_path = skills_state_dir.join("installed_skills.json");
+        let skill_registry = SkillRegistry::new(skills_state_path);
 
-    // Seed default registry sources (ClaWHub) on first run
-    skill_registry.seed_default_sources_if_empty().await;
+        // Seed default registry sources (ClaWHub) on first run
+        skill_registry.seed_default_sources_if_empty().await;
 
-    // Register built-in skills at compile time
-    skill_registry.register_builtin(include_str!("../../skills/core/browser_control.toml")).await;
-    skill_registry.register_builtin(include_str!("../../skills/core/skill_vetting.toml")).await;
-    skill_registry.register_builtin(include_str!("../../skills/personal/weekly_summary.toml")).await;
-    skill_registry.register_builtin(include_str!("../../skills/personal/daily_summary.toml")).await;
+        // Register built-in skills at compile time
+        skill_registry
+            .register_builtin(include_str!("../../skills/core/browser_control.toml"))
+            .await;
+        skill_registry
+            .register_builtin(include_str!("../../skills/core/skill_vetting.toml"))
+            .await;
+        skill_registry
+            .register_builtin(include_str!("../../skills/personal/weekly_summary.toml"))
+            .await;
+        skill_registry
+            .register_builtin(include_str!("../../skills/personal/daily_summary.toml"))
+            .await;
 
-    // Single shared PermissionChecker — all clones share the same Arc-wrapped state
-    let permission_checker = PermissionChecker::new();
-    permission_checker.set_persist_path(workspace_root.join("skills_state").join("trusted_skills.json"));
+        // Single shared PermissionChecker — all clones share the same Arc-wrapped state
+        let permission_checker = PermissionChecker::new();
+        permission_checker.set_persist_path(
+            workspace_root
+                .join("skills_state")
+                .join("trusted_skills.json"),
+        );
 
-    // ToolRegistry — primitive tool execution surface for skills
-    let tool_registry = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
+        // ToolRegistry — primitive tool execution surface for skills
+        let tool_registry = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
 
-    // SkillExecutor — shares the same PermissionChecker clone
-    let skill_executor = Arc::new(SkillExecutor {
-      registry: skill_registry,
-      permissions: permission_checker.clone(),
-      mcp: mcp_orchestrator.clone(),
-      llm: llm_client.clone(),
-      memory: memory.clone(),
-      tools: tool_registry,
+        // SkillExecutor — shares the same PermissionChecker clone
+        let skill_executor = Arc::new(SkillExecutor {
+            registry: skill_registry,
+            permissions: permission_checker.clone(),
+            mcp: mcp_orchestrator.clone(),
+            llm: llm_client.clone(),
+            memory: memory.clone(),
+            tools: tool_registry,
+        });
+
+        let pup_config_path = workspace_root.join("pups_config.json");
+        let alpha = Arc::new(AlphaPup::new(
+            memory.clone(),
+            llm_client.clone(),
+            mcp_orchestrator.clone(),
+            file_layer.clone(),
+            skill_executor.clone(),
+            Some(pup_config_path),
+        ));
+
+        // Register built-in specialist pups
+        alpha.register_pup(Arc::new(DevPup::new())).await;
+        alpha.register_pup(Arc::new(WriterPup::new())).await;
+        alpha.register_pup(Arc::new(OpsPup::new())).await;
+        alpha.register_pup(Arc::new(LifeAdminPup::new())).await;
+        alpha.register_pup(Arc::new(ResearchPup::new())).await;
+
+        // Load dynamic plugins from ~/.openpup/plugins
+        for pup in load_dynamic_pups() {
+            alpha.register_pup(pup).await;
+        }
+
+        // Seed the message counter from DB so memory extraction survives restarts
+        alpha.init_msg_count().await;
+
+        // Scheduler — owns clones of executor/memory/permissions/file_layer
+        let scheduler = SkillScheduler {
+            executor: skill_executor,
+            memory: memory.clone(),
+            permissions: permission_checker.clone(),
+            file_layer: file_layer.clone(),
+        };
+
+        let app_state = AppState { alpha, file_layer };
+        (app_state, permission_checker, scheduler)
     });
 
-    let pup_config_path = workspace_root.join("pups_config.json");
-    let alpha = Arc::new(AlphaPup::new(
-      memory.clone(),
-      llm_client.clone(),
-      mcp_orchestrator.clone(),
-      file_layer.clone(),
-      skill_executor.clone(),
-      Some(pup_config_path),
-    ));
+    let checker_for_setup = permission_checker.clone();
+    // Scheduler is moved into setup closure where AppHandle is available
+    let scheduler_for_setup = scheduler;
 
-    // Register built-in specialist pups
-    alpha.register_pup(Arc::new(DevPup::new())).await;
-    alpha.register_pup(Arc::new(WriterPup::new())).await;
-    alpha.register_pup(Arc::new(OpsPup::new())).await;
-    alpha.register_pup(Arc::new(LifeAdminPup::new())).await;
-    alpha.register_pup(Arc::new(ResearchPup::new())).await;
-
-    // Load dynamic plugins from ~/.openpup/plugins
-    for pup in load_dynamic_pups() {
-      alpha.register_pup(pup).await;
-    }
-
-    // Seed the message counter from DB so memory extraction survives restarts
-    alpha.init_msg_count().await;
-
-    // Scheduler — owns clones of executor/memory/permissions/file_layer
-    let scheduler = SkillScheduler {
-      executor: skill_executor,
-      memory: memory.clone(),
-      permissions: permission_checker.clone(),
-      file_layer: file_layer.clone(),
-    };
-
-    let app_state = AppState { alpha, file_layer };
-    (app_state, permission_checker, scheduler)
-  });
-
-  let checker_for_setup = permission_checker.clone();
-  // Scheduler is moved into setup closure where AppHandle is available
-  let scheduler_for_setup = scheduler;
-
-  tauri::Builder::default()
-    .manage(app_state)
-    .manage(permission_checker)
-    .invoke_handler(tauri::generate_handler![
-      commands::send_message,
-      commands::abort_message,
-      commands::check_onboarding_completed,
-      commands::save_onboarding_data,
-      commands::get_owner_profile,
-      // Skills
-      commands::list_skills,
-      commands::install_skill_from_git,
-      commands::uninstall_skill,
-      commands::set_skill_enabled,
-      commands::run_skill,
-      // MCP servers
-      commands::list_mcp_servers,
-      commands::add_mcp_server,
-      commands::remove_mcp_server,
-      commands::toggle_mcp_server,
-      // Workspace backup
-      commands::export_workspace,
-      commands::import_workspace,
-      // Memory
-      commands::list_long_term_memories,
-      commands::update_long_term_memory,
-      commands::delete_long_term_memory,
-      commands::get_top_memories,
-      commands::list_timeline_events,
-      // Diary
-      commands::list_diary_dates,
-      commands::read_diary_entry,
-      // Config
-      commands::get_llm_provider,
-      commands::get_llm_config,
-      commands::set_llm_provider,
-      commands::quick_set_model,
-      // Pup management
-      commands::list_pups,
-      commands::update_pup,
-      commands::add_custom_pup,
-      commands::remove_custom_pup,
-      // MCP tools
-      commands::list_mcp_tools,
-      commands::refresh_mcp_tools,
-      // Permissions
-      commands::approve_permission,
-      commands::deny_permission,
-      commands::get_execution_mode,
-      commands::set_execution_mode,
-      // Skill history
-      commands::list_skill_runs,
-      // Conversation search
-      commands::search_conversations,
-      // Task tracking
-      commands::create_task,
-      commands::list_tasks,
-      commands::update_task_status,
-      commands::delete_task,
-      // Skill manifest fetch (vetting)
-      commands::fetch_skill_manifest,
-      // System
-      commands::open_url,
-      // Pack Channel
-      commands::list_channels,
-      commands::get_channel_messages,
-      // Pack page per-pup conversation
-      commands::get_pup_conversation,
-      commands::get_pup_message_count,
-      commands::clear_pup_history,
-      commands::compress_pup_context,
-    ])
-    .setup(move |app| {
-      checker_for_setup.init_handle(app.handle().clone());
-      scheduler_for_setup.start(app.handle().clone());
-      Ok(())
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running openpup tauri application");
+    tauri::Builder::default()
+        .manage(app_state)
+        .manage(permission_checker)
+        .invoke_handler(tauri::generate_handler![
+            commands::send_message,
+            commands::abort_message,
+            commands::check_onboarding_completed,
+            commands::save_onboarding_data,
+            commands::get_owner_profile,
+            // Skills
+            commands::list_skills,
+            commands::install_skill_from_git,
+            commands::uninstall_skill,
+            commands::set_skill_enabled,
+            commands::run_skill,
+            // MCP servers
+            commands::list_mcp_servers,
+            commands::add_mcp_server,
+            commands::remove_mcp_server,
+            commands::toggle_mcp_server,
+            // Workspace backup
+            commands::export_workspace,
+            commands::import_workspace,
+            // Memory
+            commands::list_long_term_memories,
+            commands::update_long_term_memory,
+            commands::delete_long_term_memory,
+            commands::get_top_memories,
+            commands::list_timeline_events,
+            // Diary
+            commands::list_diary_dates,
+            commands::read_diary_entry,
+            // Config
+            commands::get_llm_provider,
+            commands::get_llm_config,
+            commands::set_llm_provider,
+            commands::quick_set_model,
+            // Pup management
+            commands::list_pups,
+            commands::update_pup,
+            commands::add_custom_pup,
+            commands::remove_custom_pup,
+            // MCP tools
+            commands::list_mcp_tools,
+            commands::refresh_mcp_tools,
+            // Permissions
+            commands::approve_permission,
+            commands::deny_permission,
+            commands::get_execution_mode,
+            commands::set_execution_mode,
+            // Skill history
+            commands::list_skill_runs,
+            // Conversation search
+            commands::search_conversations,
+            // Task tracking
+            commands::create_task,
+            commands::list_tasks,
+            commands::update_task_status,
+            commands::delete_task,
+            // Skill manifest fetch (vetting)
+            commands::fetch_skill_manifest,
+            // System
+            commands::open_url,
+            // Pack Channel
+            commands::list_channels,
+            commands::get_channel_messages,
+            // Pack page per-pup conversation
+            commands::get_pup_conversation,
+            commands::get_pup_message_count,
+            commands::clear_pup_history,
+            commands::compress_pup_context,
+        ])
+        .setup(move |app| {
+            checker_for_setup.init_handle(app.handle().clone());
+            scheduler_for_setup.start(app.handle().clone());
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running openpup tauri application");
 }

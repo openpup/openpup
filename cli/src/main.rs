@@ -1,6 +1,6 @@
+mod chat;
 mod config;
 mod db;
-mod chat;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -10,7 +10,7 @@ use colored::Colorize;
 #[command(
     name = "openpup",
     about = "🐾 openpup CLI — your pup pack, at the terminal",
-    version = "0.1.0",
+    version = "0.1.0"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -114,7 +114,11 @@ async fn main() -> Result<()> {
             SkillCommands::List => {
                 skill_list(&db_path).await?;
             }
-            SkillCommands::Run { name, input, dry_run } => {
+            SkillCommands::Run {
+                name,
+                input,
+                dry_run,
+            } => {
                 skill_run(&db_path, &name, input.as_deref(), dry_run).await?;
             }
         },
@@ -151,12 +155,7 @@ async fn memory_list(db_path: &str, filter_type: Option<&str>, limit: i64) -> Re
     for m in &memories {
         let icon = memory_type_icon(&m.memory_type);
         let importance = format!("({:.2})", m.importance);
-        println!(
-            "{} {} {}",
-            icon,
-            m.content.white(),
-            importance.dimmed()
-        );
+        println!("{} {} {}", icon, m.content.white(), importance.dimmed());
     }
 
     println!("\n{}", format!("共 {} 条", memories.len()).dimmed());
@@ -198,8 +197,17 @@ async fn skill_list(db_path: &str) -> Result<()> {
     }
 
     for s in &skills {
-        let enabled = if s.enabled { "●".green() } else { "○".dimmed() };
-        println!("{} {} — {}", enabled, s.name.white().bold(), s.description.dimmed());
+        let enabled = if s.enabled {
+            "●".green()
+        } else {
+            "○".dimmed()
+        };
+        println!(
+            "{} {} — {}",
+            enabled,
+            s.name.white().bold(),
+            s.description.dimmed()
+        );
     }
     Ok(())
 }
@@ -220,7 +228,8 @@ async fn skill_run(db_path: &str, name: &str, input: Option<&str>, dry_run: bool
         println!("输入: {}", input.unwrap_or("(无)").dimmed());
 
         // Estimate tokens from manifest
-        let token_estimate = skill.manifest.len() / 4 + input.map(|i| i.len() / 4).unwrap_or(0) + 200;
+        let token_estimate =
+            skill.manifest.len() / 4 + input.map(|i| i.len() / 4).unwrap_or(0) + 200;
         println!("预计 ~{} tokens", token_estimate.to_string().yellow());
         print!("\n确认执行? [y/N] ");
         use std::io::Write;
@@ -263,7 +272,11 @@ async fn show_status(db_path: &str) -> Result<()> {
             );
         }
         Err(e) => {
-            println!("  {} {}", "模型:".dimmed(), format!("配置未找到 — {}", e).red());
+            println!(
+                "  {} {}",
+                "模型:".dimmed(),
+                format!("配置未找到 — {}", e).red()
+            );
         }
     }
 
@@ -279,7 +292,11 @@ async fn show_status(db_path: &str) -> Result<()> {
             println!("  {} {}", "数据库:".dimmed(), db_path.dimmed());
         }
         Err(e) => {
-            println!("  {} {}", "数据库:".dimmed(), format!("无法连接 — {}", e).red());
+            println!(
+                "  {} {}",
+                "数据库:".dimmed(),
+                format!("无法连接 — {}", e).red()
+            );
         }
     }
 
