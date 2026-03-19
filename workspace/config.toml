@@ -38,3 +38,11 @@ language = "zh"
 [pups]
 # Which specialist pups are active
 enabled = ["alpha", "dev", "writer", "ops", "research", "life_admin"]
+
+[skills]
+# Extra directories to scan for user-created skills.
+# Supports ~ expansion (e.g., "~/.openpup/my_skills").
+# Built-in and ~/.openpup/skills_cache/ are always loaded automatically.
+search_paths = []
+# Examples:
+#   search_paths = ["~/.openpup/my_skills", "~/custom_skills"]

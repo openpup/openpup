@@ -1,4 +1,5 @@
 use crate::agents::specialist::{SpecialistPup, Task};
+use crate::agents::truncate_utf8;
 
 pub struct WriterPup;
 
@@ -41,7 +42,7 @@ impl SpecialistPup for WriterPup {
             let bullets: String = task
                 .relevant_memories
                 .iter()
-                .map(|m| format!("- {}", if m.len() > 200 { &m[..200] } else { m.as_str() }))
+                .map(|m| format!("- {}", truncate_utf8(m, 200)))
                 .collect::<Vec<_>>()
                 .join("\n");
             system.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));

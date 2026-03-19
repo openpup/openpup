@@ -79,13 +79,8 @@ function buildOwnerMd(answers: Partial<OnboardingData>): string {
 const PRESET_MODELS = [
   { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '' },
   { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '' },
-  { label: 'DeepSeek V3 (api.deepseek.com)', value: 'deepseek-chat', base: 'https://api.deepseek.com/v1' },
-  { label: 'DeepSeek Reasoner (api.deepseek.com)', value: 'deepseek-reasoner', base: 'https://api.deepseek.com/v1' },
-  { label: 'DeepSeek V3 (SiliconFlow)', value: 'deepseek-ai/DeepSeek-V3', base: 'https://api.siliconflow.cn/v1' },
   { label: '自定义…', value: '__custom__', base: '' },
 ];
-
-const INPUT_CLS = 'w-full rounded-xl bg-stone-900 border border-stone-700 px-3.5 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 transition-colors';
 
 interface Props {
   onComplete: () => void;
@@ -98,6 +93,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const [saving, setSaving] = useState(false);
   const [editableOwnerMd, setEditableOwnerMd] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const scrollEndRef = useRef<HTMLDivElement>(null);
 
   // LLM config state
   const [llmPreset, setLlmPreset] = useState(PRESET_MODELS[0].value);
@@ -106,6 +102,10 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
   useEffect(() => {
     if (step < TOTAL_PROFILE) inputRef.current?.focus();
+  }, [step]);
+
+  useEffect(() => {
+    scrollEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [step]);
 
   const ownerMdPreview = buildOwnerMd(answers);
@@ -143,7 +143,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   };
 
   const handleLlmNext = () => {
-    if (!llmConfig.api_key.trim()) { setLlmError('请填写 API Key'); return; }
+    if (!llmConfig.api_key.trim()) { setLlmError('API Key 为必需项，请填写后继续'); return; }
     if (!llmConfig.model.trim()) { setLlmError('请填写模型名称'); return; }
     setLlmError('');
     setEditableOwnerMd(buildOwnerMd(answers));
@@ -155,7 +155,20 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // 1. Save OWNER.md profile
+      // 1. Save LLM config first — so the embed API key is available when
+      //    save_onboarding_data seeds long-term memory (prevents timeout hang).
+      if (llmConfig.api_key.trim()) {
+        await invoke('set_llm_provider', {
+          provider: 'openai',
+          model: llmConfig.model.trim(),
+          miniModel: llmConfig.model.trim(),
+          embedModel: null,
+          apiKey: llmConfig.api_key.trim(),
+          apiBase: llmConfig.api_base.trim() || null,
+        });
+      }
+
+      // 2. Save OWNER.md profile + seed memory (embedding now has a valid key)
       await invoke('save_onboarding_data', {
         data: {
           name: answers.name ?? '',
@@ -167,22 +180,12 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
         },
       });
 
-      // 2. Save LLM config
-      if (llmConfig.api_key.trim()) {
-        await invoke('set_llm_provider', {
-          provider: 'openai',
-          model: llmConfig.model.trim(),
-          miniModel: null,
-          embedModel: null,
-          apiKey: llmConfig.api_key.trim(),
-          apiBase: llmConfig.api_base.trim() || null,
-        });
-      }
-
+      // 3. Done — transition immediately
       onComplete();
     } catch (e) {
-      console.error(e);
+      console.error('Onboarding save error:', e);
       setSaving(false);
+      setLlmError(`保存失败：${e}`);
     }
   };
 
@@ -196,38 +199,42 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
       {/* Header */}
-      <div className="border-b border-stone-800 px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-base">🐾</span>
-          <span className="font-bold text-sm tracking-tight">openpup</span>
-          <span className="text-stone-600 text-xs">· 初次见面</span>
+      <div className="border-b border-stone-800/50 px-6 py-4 flex items-center justify-between shrink-0 bg-gradient-to-r from-stone-950 via-stone-950 to-stone-900/50">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">🐾</span>
+          <div>
+            <div className="font-bold text-sm tracking-tight">openpup</div>
+            <div className="text-stone-500 text-xs mt-0.5">初次见面</div>
+          </div>
         </div>
-        <div className="text-xs text-stone-500">{stepLabel}</div>
+        <div className="text-xs text-stone-400 font-medium">{stepLabel}</div>
       </div>
 
       {/* Progress */}
-      <div className="h-0.5 bg-stone-800 shrink-0">
-        <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${progressPct}%` }} />
+      <div className="h-1 bg-stone-900 shrink-0 relative overflow-hidden">
+        <div className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 transition-all duration-700 ease-out shadow-lg shadow-amber-500/20" style={{ width: `${progressPct}%` }} />
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Conversation / LLM config */}
-        <div className="flex-1 flex flex-col p-6 overflow-auto">
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Scrollable messages area */}
+          <div className="flex-1 overflow-auto p-8 bg-gradient-to-b from-stone-950 via-stone-950 to-stone-900/30">
 
           {/* Answered profile questions */}
-          {QUESTIONS.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q) => (
-            <div key={q.key} className="mb-5">
-              <div className="flex items-start gap-3 mb-2">
-                <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-xs font-bold shrink-0 shadow-sm shadow-emerald-500/30">
+          {QUESTIONS.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q, idx) => (
+            <div key={q.key} className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationDelay: `${idx * 50}ms` }}>
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
                   🐾
                 </div>
-                <div className="bg-stone-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-stone-200 whitespace-pre-line max-w-sm shadow-sm">
+                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 whitespace-pre-line max-w-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
                   {q.pup_text}
                 </div>
               </div>
               {answers[q.key] && (
-                <div className="flex justify-end">
-                  <div className="bg-amber-700 rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-white max-w-sm shadow-sm">
+                <div className="flex justify-end animate-in fade-in slide-in-from-right-2 duration-300">
+                  <div className="bg-gradient-to-br from-amber-600/90 to-amber-700/80 backdrop-blur-sm border border-amber-500/30 rounded-3xl px-5 py-3.5 text-sm text-white max-w-2xl shadow-lg">
                     {answers[q.key]}
                   </div>
                 </div>
@@ -237,55 +244,37 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
           {/* Current profile question */}
           {step < TOTAL_PROFILE && (
-            <div className="mb-4">
+            <div className="mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
               <div className="flex items-start gap-3 mb-4">
-                <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-xs font-bold shrink-0 shadow-sm shadow-emerald-500/30">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
                   🐾
                 </div>
-                <div className="bg-stone-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-stone-200 whitespace-pre-line max-w-sm shadow-sm">
+                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 whitespace-pre-line max-w-2xl shadow-lg">
                   {QUESTIONS[step].pup_text}
                 </div>
-              </div>
-              <div className="flex gap-2 mt-2">
-                <textarea
-                  ref={inputRef}
-                  className="flex-1 resize-none rounded-xl bg-stone-800 border border-stone-700 px-3.5 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 transition-colors"
-                  rows={2}
-                  placeholder={QUESTIONS[step].placeholder}
-                  value={currentInput}
-                  onChange={(e) => setCurrentInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                />
-                <button
-                  className="self-end px-4 py-2.5 rounded-xl bg-amber-500 text-stone-950 text-sm font-medium disabled:opacity-40 hover:bg-amber-400 transition-colors shadow-sm shadow-amber-500/20"
-                  onClick={handleNext}
-                  disabled={!currentInput.trim()}
-                >
-                  {step < TOTAL_PROFILE - 1 ? '下一步 →' : '下一步 →'}
-                </button>
               </div>
             </div>
           )}
 
           {/* LLM config step */}
           {step === STEP_LLM && (
-            <div className="max-w-md space-y-4">
-              <div className="flex items-start gap-3 mb-2">
-                <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-xs font-bold shrink-0 shadow-sm shadow-emerald-500/30">
+            <div className="max-w-2xl space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+              <div className="flex items-start gap-3 mb-6">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
                   🐾
                 </div>
-                <div className="bg-stone-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-stone-200 max-w-sm shadow-sm">
+                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 max-w-md shadow-lg">
                   最后一步——我需要 AI 接口才能工作。<br /><br />
                   请选择你的模型供应商并填入 API Key。
                 </div>
               </div>
 
-              <div className="space-y-3 pl-10">
+              <div className="space-y-4 pl-8">
                 {/* Preset picker */}
                 <div>
-                  <label className="block text-xs text-stone-400 mb-1.5">选择模型</label>
+                  <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">选择模型</label>
                   <select
-                    className={INPUT_CLS + ' bg-stone-900'}
+                    className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
                     value={llmPreset}
                     onChange={(e) => handlePresetChange(e.target.value)}
                   >
@@ -295,12 +284,12 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   </select>
                 </div>
 
-                {/* Custom model name — shown only in custom mode */}
+                {/* Custom model name */}
                 {isCustomPreset && (
-                  <div>
-                    <label className="block text-xs text-stone-400 mb-1.5">模型名称</label>
+                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">模型名称</label>
                     <input
-                      className={INPUT_CLS}
+                      className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
                       placeholder="例如：gpt-4o、claude-3-5-sonnet-20241022"
                       value={llmConfig.model}
                       onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
@@ -310,9 +299,9 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
                 {/* API Key */}
                 <div>
-                  <label className="block text-xs text-stone-400 mb-1.5">API Key</label>
+                  <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">API Key</label>
                   <input
-                    className={INPUT_CLS}
+                    className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
                     type="password"
                     placeholder="sk-..."
                     value={llmConfig.api_key}
@@ -320,14 +309,14 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   />
                 </div>
 
-                {/* Base URL — shown in custom mode or if preset has a non-default base */}
+                {/* Base URL */}
                 {(isCustomPreset || llmConfig.api_base) && (
-                  <div>
-                    <label className="block text-xs text-stone-400 mb-1.5">
-                      Base URL <span className="text-stone-600">（可选，留空使用 OpenAI 默认）</span>
+                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">
+                      Base URL <span className="text-stone-500 normal-case">（可选）</span>
                     </label>
                     <input
-                      className={INPUT_CLS}
+                      className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
                       placeholder="https://api.openai.com/v1"
                       value={llmConfig.api_base}
                       onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_base: e.target.value }))}
@@ -336,63 +325,81 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 )}
 
                 {llmError && (
-                  <p className="text-xs text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{llmError}</p>
+                  <div className="text-xs text-red-300 bg-red-900/30 border border-red-800/50 px-4 py-3 rounded-xl backdrop-blur-sm animate-in fade-in duration-300">
+                    ⚠️ {llmError}
+                  </div>
                 )}
 
-                <div className="flex gap-2 pt-1">
-                  <button
-                    className="text-xs text-stone-500 hover:text-stone-400 transition-colors"
-                    onClick={() => { setLlmError(''); setStep(STEP_CONFIRM); setEditableOwnerMd(buildOwnerMd(answers)); }}
-                  >
-                    跳过，稍后配置
-                  </button>
-                  <button
-                    className="ml-auto px-4 py-2.5 rounded-xl bg-amber-500 text-stone-950 text-sm font-medium hover:bg-amber-400 transition-colors shadow-sm shadow-amber-500/20"
-                    onClick={handleLlmNext}
-                  >
-                    下一步 →
-                  </button>
-                </div>
+                <button
+                  className="w-full mt-3 px-4 py-3.5 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 transition-all duration-300 shadow-md"
+                  onClick={handleLlmNext}
+                >
+                  下一步 →
+                </button>
               </div>
             </div>
           )}
 
           {/* Confirm step */}
           {step === STEP_CONFIRM && (
-            <div className="flex items-start gap-3 mb-4">
-              <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-xs font-bold shrink-0 shadow-sm shadow-emerald-500/30">
+            <div className="flex items-start gap-3 mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
                 🐾
               </div>
-              <div className="bg-stone-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-stone-200 max-w-sm shadow-sm">
+              <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 max-w-2xl shadow-lg">
                 好了，{answers.name ? `${answers.name}！` : ''}我对你有了初步了解 🐾
                 <br /><br />
                 这些都会写在{' '}
-                <span className="font-mono text-stone-400 text-xs">~/.openpup/OWNER.md</span>{' '}
+                <span className="font-mono text-amber-300 text-xs bg-stone-900/50 px-2 py-1 rounded">~/.openpup/OWNER.md</span>{' '}
                 里，你随时可以打开直接修改。
                 <br /><br />
                 右侧是预览，确认无误后点击「确认并开始」。
               </div>
             </div>
           )}
+          <div ref={scrollEndRef} />
+          </div>
+
+          {/* Fixed input area at bottom */}
+          {step < TOTAL_PROFILE && (
+            <div className="flex-shrink-0 border-t border-stone-800/50 px-8 py-4 bg-gradient-to-t from-stone-950 via-stone-950/80 to-stone-950/50 flex gap-3">
+              <textarea
+                ref={inputRef}
+                className="flex-1 resize-none rounded-2xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 shadow-sm"
+                rows={3}
+                placeholder={QUESTIONS[step].placeholder}
+                value={currentInput}
+                onChange={(e) => setCurrentInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+              />
+              <button
+                className="self-end px-5 py-3 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
+                onClick={handleNext}
+                disabled={!currentInput.trim()}
+              >
+                {step < TOTAL_PROFILE - 1 ? '下一步 →' : '下一步 →'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right: OWNER.md live preview */}
-        <div className="w-80 border-l border-stone-800 p-4 flex flex-col bg-stone-900/30 shrink-0">
-          <div className="text-xs text-stone-500 mb-2.5 font-medium">自动生成 OWNER.md 预览</div>
+        <div className="w-96 border-l border-stone-800/50 p-6 flex flex-col bg-gradient-to-b from-stone-900/50 via-stone-900/30 to-stone-900/10 shrink-0 backdrop-blur-sm">
+          <div className="text-xs font-semibold text-stone-400 mb-3 uppercase tracking-wider">预览 OWNER.md</div>
           {step < STEP_CONFIRM ? (
-            <pre className="flex-1 bg-stone-900 border border-stone-800 rounded-xl p-3.5 text-xs text-stone-300 font-mono leading-relaxed overflow-auto whitespace-pre-wrap">
+            <pre className="flex-1 bg-stone-900/60 backdrop-blur border border-stone-700/50 rounded-2xl p-4 text-xs text-stone-300 font-mono leading-relaxed overflow-auto whitespace-pre-wrap shadow-inner">
               {ownerMdPreview}
             </pre>
           ) : (
             <>
               <textarea
-                className="flex-1 bg-stone-900 border border-stone-800 rounded-xl p-3.5 text-xs text-stone-300 font-mono leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-amber-500/50 overflow-auto"
+                className="flex-1 bg-stone-900/60 backdrop-blur border border-stone-700/50 rounded-2xl p-4 text-xs text-stone-300 font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/50 overflow-auto shadow-inner transition-all duration-300"
                 value={editableOwnerMd}
                 onChange={(e) => setEditableOwnerMd(e.target.value)}
                 spellCheck={false}
               />
               <button
-                className="mt-3 w-full py-2.5 rounded-xl bg-amber-500 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:bg-amber-400 transition-colors shadow-sm shadow-amber-500/20"
+                className="mt-4 w-full py-3.5 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
                 onClick={() => void handleSave()}
                 disabled={saving}
               >

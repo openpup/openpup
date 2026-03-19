@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useLang, t } from '../i18n';
 
 interface InstalledSkill {
@@ -55,7 +56,12 @@ export const SkillStore: React.FC = () => {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void loadInstalled(); }, []);
+  useEffect(() => {
+    void loadInstalled();
+    // Hot-reload: any skill install (git, LLM-generated, suggestion banner) fires this
+    const unlisten = listen('skill_installed', () => { void loadInstalled(); });
+    return () => { void unlisten.then((f) => f()); };
+  }, []);
 
   const toggleEnabled = async (skill: InstalledSkill) => {
     try {

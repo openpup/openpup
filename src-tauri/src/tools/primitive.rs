@@ -232,6 +232,7 @@ impl ToolRegistry {
         let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
+            .current_dir(&self.workspace_root)
             .output()
             .await
             .map_err(|e| anyhow!("shell_exec failed to spawn: {e}"))?;

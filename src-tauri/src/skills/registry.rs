@@ -191,6 +191,8 @@ pub struct SkillRegistry {
     sources: Arc<RwLock<Vec<SkillRegistrySource>>>,
     persist_path: PathBuf,
     sources_path: PathBuf,
+    /// Directories to re-scan on refresh() — populated at startup and on git-install.
+    scan_roots: Arc<RwLock<Vec<(PathBuf, String)>>>,
 }
 
 impl SkillRegistry {
@@ -206,10 +208,49 @@ impl SkillRegistry {
             sources: Arc::new(RwLock::new(Vec::new())),
             persist_path,
             sources_path,
+            scan_roots: Arc::new(RwLock::new(Vec::new())),
         };
         registry.load_installed_snapshot();
         registry.load_sources_snapshot();
         registry
+    }
+
+    /// Register a directory as a scan root so `refresh()` can re-discover skills written there.
+    pub async fn add_scan_root(&self, path: PathBuf, source: impl Into<String>) {
+        let source = source.into();
+        let mut roots = self.scan_roots.write().await;
+        if !roots.iter().any(|(p, _)| p == &path) {
+            roots.push((path, source));
+        }
+    }
+
+    /// Re-scan all registered directories and pick up any new skill files.
+    /// Called after file_write / shell_exec tool calls so LLM-written skills are live immediately.
+    pub async fn refresh(&self) {
+        let roots = self.scan_roots.read().await.clone();
+        for (path, source) in roots {
+            if let Err(e) = self.register_from_dir(&path, &source).await {
+                eprintln!("warn: skill refresh {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// Returns enabled skills as (name, description, triggers) for injection into LLM tool lists.
+    pub async fn enabled_skills_for_tools(&self) -> Vec<(String, String, Vec<String>)> {
+        let installed = self.installed.read().await;
+        let skills = self.skills.read().await;
+        installed
+            .values()
+            .filter(|s| s.enabled)
+            .filter_map(|s| {
+                let manifest = skills.get(&s.name)?;
+                Some((
+                    s.name.clone(),
+                    manifest.metadata.description.clone(),
+                    manifest.metadata.triggers.clone(),
+                ))
+            })
+            .collect()
     }
 
     // ── Built-in skills ────────────────────────────────────────────────────────
@@ -255,6 +296,223 @@ impl SkillRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Load skill manifests from `root` and register them as installed.
+    ///
+    /// Supports two formats, detected automatically:
+    /// - **TOML** (`*.toml`): native openpup manifest
+    /// - **SkillHub / ClawHub** (`SKILL.md` + optional `_meta.json`): community hub format
+    ///
+    /// Uses `or_insert_with` so existing enabled/disabled state is preserved.
+    pub async fn register_from_dir(&self, root: impl AsRef<Path>, source: &str) -> Result<()> {
+        let root = root.as_ref();
+        if !root.exists() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp();
+        let mut any = false;
+
+        // Collect immediate subdirectories (SkillHub packs) and TOML files.
+        // We walk depth=2 so that a flat dir of .toml files and a dir of skill
+        // subdirectories (each containing SKILL.md) both work.
+        for entry in walkdir::WalkDir::new(root)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+
+            // ── TOML format ──────────────────────────────────────────────────
+            if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+                let text = match fs::read_to_string(path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("warn: read {}: {e}", path.display());
+                        continue;
+                    }
+                };
+                let manifest: SkillManifest = match toml::from_str(&text) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("warn: parse {}: {e}", path.display());
+                        continue;
+                    }
+                };
+                self.register_manifest(manifest, source, now).await;
+                any = true;
+                continue;
+            }
+
+            // ── SkillHub / ClawHub format ─────────────────────────────────────
+            // Detect: directory containing SKILL.md
+            if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() {
+                    match Self::parse_skill_hub_dir(path) {
+                        Ok(manifest) => {
+                            self.register_manifest(manifest, source, now).await;
+                            any = true;
+                        }
+                        Err(e) => eprintln!("warn: parse SkillHub {}: {e}", path.display()),
+                    }
+                }
+            }
+        }
+
+        if any {
+            self.save_installed_snapshot();
+        }
+        Ok(())
+    }
+
+    /// Register a parsed manifest into both `skills` and `installed` maps.
+    async fn register_manifest(&self, manifest: SkillManifest, source: &str, now: i64) {
+        let name = manifest.metadata.name.clone();
+        let description = manifest.metadata.description.clone();
+        let category = manifest.metadata.category.clone();
+        self.skills.write().await.insert(name.clone(), manifest);
+        self.installed
+            .write()
+            .await
+            .entry(name.clone())
+            .or_insert_with(|| InstalledSkill {
+                name,
+                description,
+                category,
+                source: source.to_string(),
+                repo_url: None,
+                installed_at: now,
+                enabled: true,
+            });
+    }
+
+    /// Parse a SkillHub / ClawHub skill directory (contains `SKILL.md` and
+    /// optionally `_meta.json`) into a native `SkillManifest`.
+    ///
+    /// SKILL.md format:
+    /// ```
+    /// ---
+    /// name: my_skill
+    /// description: What it does.
+    /// metadata: {"clawdbot":{"requires":{"bins":["curl"],"network":true}}}
+    /// ---
+    /// # Body used as system prompt
+    /// ```
+    fn parse_skill_hub_dir(dir: &Path) -> Result<SkillManifest> {
+        // ── Parse SKILL.md ────────────────────────────────────────────────────
+        let md_text = fs::read_to_string(dir.join("SKILL.md"))?;
+        let md = md_text.trim();
+
+        // Extract YAML frontmatter between leading `---` and next `---`
+        let md = md
+            .strip_prefix("---")
+            .ok_or_else(|| anyhow!("missing opening ---"))?;
+        let (frontmatter, body) = md
+            .split_once("\n---")
+            .ok_or_else(|| anyhow!("missing closing ---"))?;
+        let body = body.trim();
+
+        // Parse frontmatter: simple `key: rest-of-line` (value may contain colons)
+        let mut name = String::new();
+        let mut description = String::new();
+        let mut meta_value: Option<serde_json::Value> = None;
+
+        for line in frontmatter.lines() {
+            if let Some((k, v)) = line.split_once(':') {
+                let k = k.trim();
+                let v = v.trim();
+                match k {
+                    "name" => name = v.to_string(),
+                    "description" => description = v.to_string(),
+                    "metadata" => {
+                        // Value is a JSON object inline in YAML
+                        // Reconstruct full value including any colons after the key
+                        let full_val = line[k.len() + 1..].trim();
+                        meta_value = serde_json::from_str(full_val).ok();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if name.is_empty() {
+            // Fall back to directory name
+            name = dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+        }
+
+        // ── Parse _meta.json for version ──────────────────────────────────────
+        let version = dir
+            .join("_meta.json")
+            .exists()
+            .then(|| fs::read_to_string(dir.join("_meta.json")).ok())
+            .flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v["version"].as_str().map(String::from))
+            .unwrap_or_else(|| "1.0.0".to_string());
+
+        // ── Derive permissions ────────────────────────────────────────────────
+        let mut shell = false;
+        let mut network = false;
+
+        // From clawdbot / generic `requires` block in metadata
+        if let Some(ref mv) = meta_value {
+            // Support both {"clawdbot":{...}} and {"requires":{...}} layouts
+            let requires = mv
+                .pointer("/clawdbot/requires")
+                .or_else(|| mv.get("requires"));
+            if let Some(req) = requires {
+                if req["bins"]
+                    .as_array()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false)
+                {
+                    shell = true;
+                }
+                if req["network"].as_bool().unwrap_or(false) {
+                    network = true;
+                }
+            }
+        }
+
+        // Heuristic: body mentions curl / http → needs shell + network
+        if body.contains("curl ") || body.contains("https://") || body.contains("http://") {
+            shell = true;
+            network = true;
+        }
+
+        // ── Derive triggers from name words ───────────────────────────────────
+        let triggers: Vec<String> = std::iter::once(name.replace('_', " "))
+            .chain(name.split('_').map(String::from))
+            .filter(|s| s.len() > 2)
+            .collect();
+
+        Ok(SkillManifest {
+            metadata: SkillMetadata {
+                name,
+                version,
+                author: String::new(),
+                description,
+                category: "skillhub".to_string(),
+                triggers,
+            },
+            permissions: SkillPermissions {
+                shell,
+                network,
+                ..Default::default()
+            },
+            execution: ExecutionConfig::default(),
+            dependencies: Dependencies::default(),
+            prompt: Some(SkillPrompt {
+                system: body.to_string(),
+            }),
+            implementation: None,
+            schedule: None,
+        })
     }
 
     async fn load_one(&self, path: &Path) -> Result<()> {
@@ -364,6 +622,43 @@ impl SkillRegistry {
         drop(guard);
         self.save_installed_snapshot();
         Ok(names)
+    }
+
+    /// Write a skill TOML string directly to `skills_cache/` and register it
+    /// in memory.  Used by the LLM to create or update a skill without git.
+    pub async fn install_skill_toml(&self, toml_content: &str) -> Result<String> {
+        let manifest: SkillManifest =
+            toml::from_str(toml_content).map_err(|e| anyhow!("invalid skill TOML: {e}"))?;
+        let name = manifest.metadata.name.clone();
+
+        // Persist to skills_cache so it survives restarts
+        let cache_root = Self::skills_cache_root();
+        fs::create_dir_all(&cache_root)?;
+        let file_path = cache_root.join(format!("{}.toml", name));
+        fs::write(&file_path, toml_content)?;
+
+        // Register manifest in memory
+        self.skills
+            .write()
+            .await
+            .insert(name.clone(), manifest.clone());
+
+        // Mark as installed
+        let now = chrono::Utc::now().timestamp();
+        self.installed.write().await.insert(
+            name.clone(),
+            InstalledSkill {
+                name: name.clone(),
+                description: manifest.metadata.description.clone(),
+                category: manifest.metadata.category.clone(),
+                source: "llm_generated".to_string(),
+                repo_url: None,
+                installed_at: now,
+                enabled: true,
+            },
+        );
+        self.save_installed_snapshot();
+        Ok(name)
     }
 
     pub async fn uninstall(&self, name: &str) -> Result<()> {

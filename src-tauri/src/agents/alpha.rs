@@ -319,7 +319,12 @@ impl AlphaPup {
         if let Some(skill_name) = pup_key.strip_prefix("skill:") {
             let handle = app_handle.clone();
             let handle2 = app_handle.clone();
-            let output = self
+            let run_id = Uuid::new_v4().to_string();
+            let _ = self
+                .memory
+                .record_skill_run(&run_id, skill_name, "conversation")
+                .await;
+            let result = self
                 .skill_executor
                 .execute_skill_stream(
                     skill_name,
@@ -332,8 +337,23 @@ impl AlphaPup {
                     }),
                     self.abort_flag.clone(),
                 )
-                .await
-                .unwrap_or_else(|e| format!("Skill error: {e}"));
+                .await;
+            let (status, output) = match result {
+                Ok(o) => ("completed".to_string(), o),
+                Err(e) => ("failed".to_string(), format!("Skill error: {e}")),
+            };
+            let _ = self
+                .memory
+                .complete_skill_run(&run_id, &status, &output)
+                .await;
+            let _ = app_handle.emit(
+                "skill_run_completed",
+                serde_json::json!({
+                    "skill_name": skill_name,
+                    "triggered_by": "conversation",
+                    "status": status,
+                }),
+            );
             return Ok((output, pup_key));
         }
 
@@ -363,10 +383,12 @@ impl AlphaPup {
             if !pending_tasks.is_empty() {
                 let task_lines: String = pending_tasks
                     .iter()
-                    .map(|t| format!("[{}] {}", t.status, t.description))
+                    .map(|t| format!("id:{} [{}] {}", t.id, t.status, t.description))
                     .collect::<Vec<_>>()
                     .join("；");
-                enriched_memories.push(format!("当前待处理任务：{task_lines}"));
+                enriched_memories.push(format!(
+                    "当前待处理任务（用 task_update 工具更新状态）：{task_lines}"
+                ));
             }
             let pup_history = self.build_history(&pup_key).await;
             let task = Task {
@@ -470,10 +492,29 @@ impl AlphaPup {
         if !pending_tasks.is_empty() {
             let tasks_str: String = pending_tasks
                 .iter()
-                .map(|t| format!("- [{}] {}", t.status, t.description))
+                .map(|t| format!("- id:{} [{}] {}", t.id, t.status, t.description))
                 .collect::<Vec<_>>()
                 .join("\n");
-            system_content.push_str(&format!("\n\n## 当前任务\n{tasks_str}"));
+            system_content.push_str(&format!(
+                "\n\n## 当前任务\n{tasks_str}\n\n使用 task_update 工具更新任务状态（开始时设为 in_progress，完成时设为 done）。"
+            ));
+        }
+
+        // Inject installed skills so Alpha knows what capabilities are available
+        let skill_list = self
+            .skill_executor
+            .registry
+            .enabled_skills_for_tools()
+            .await;
+        if !skill_list.is_empty() {
+            let lines: String = skill_list
+                .iter()
+                .map(|(name, desc, _)| format!("- skill__{name}: {desc}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            system_content.push_str(&format!(
+                "\n\n## 已安装技能\n{lines}\n\n可通过工具调用 skill__<name> 直接执行，也可告知用户已具备该能力。"
+            ));
         }
 
         // Build messages as JSON values for the unified tool-call loop
@@ -530,6 +571,43 @@ impl AlphaPup {
     /// than this, `tools_for_task` keeps only the most relevant ones.
     const MAX_MCP_TOOLS: usize = 20;
 
+    /// Build tool schemas for all currently enabled installed skills.
+    /// Reads from the live in-memory registry — no disk I/O, safe to call each iteration.
+    async fn build_skill_tools(&self) -> Vec<serde_json::Value> {
+        use crate::mcp::orchestrator::sanitize_tool_name;
+        self.skill_executor
+            .registry
+            .enabled_skills_for_tools()
+            .await
+            .into_iter()
+            .map(|(name, description, triggers)| {
+                let desc = if triggers.is_empty() {
+                    description
+                } else {
+                    format!("{description}（触发词: {}）", triggers.join(", "))
+                };
+                let safe_name = sanitize_tool_name(&name);
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": format!("skill__{safe_name}"),
+                        "description": desc,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "input": {
+                                    "type": "string",
+                                    "description": "用户的请求或任务描述，原文传入"
+                                }
+                            },
+                            "required": ["input"]
+                        }
+                    }
+                })
+            })
+            .collect()
+    }
+
     async fn run_agent_with_tools(
         &self,
         agent_name: &str,
@@ -546,6 +624,24 @@ impl AlphaPup {
         };
 
         let mut available_tools = self.skill_executor.tools.available_tools(&primitive_perms);
+
+        // Always expose task_update so the LLM can mark tasks done/in_progress
+        available_tools.push(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "task_update",
+                "description": "Update the status of a task. Use this when you start working on a task (set in_progress) or complete it (set done). Valid statuses: pending, in_progress, done, failed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Task ID" },
+                        "status": { "type": "string", "enum": ["pending", "in_progress", "done", "failed"], "description": "New status" },
+                        "result": { "type": "string", "description": "Optional result summary" }
+                    },
+                    "required": ["id", "status"]
+                }
+            }
+        }));
 
         if tool_perms.mcp {
             // Extract the task from the last user message to drive tool selection
@@ -575,10 +671,21 @@ impl AlphaPup {
                 return Ok(String::new());
             }
 
-            let response = self
+            // Rebuild skill tools each iteration so newly installed skills are visible immediately.
+            let mut iter_tools = available_tools.clone();
+            iter_tools.extend(self.build_skill_tools().await);
+
+            let response = match self
                 .llm_client
-                .chat_with_tools(msgs.clone(), available_tools.clone())
-                .await?;
+                .chat_with_tools_abortable(msgs.clone(), iter_tools, abort)
+                .await?
+            {
+                Some(r) => r,
+                None => {
+                    eprintln!("[{agent_name}] aborted during LLM call");
+                    return Ok(String::new());
+                }
+            };
 
             if response.tool_calls.is_empty() {
                 let text = response.content.unwrap_or_default();
@@ -591,18 +698,70 @@ impl AlphaPup {
             msgs.push(response.raw_message);
             for tc in &response.tool_calls {
                 eprintln!("[{agent_name}] tool_call: {}", tc.name);
-                on_activity("tool_call".into(), tc.name.clone());
 
-                let result = if let Some(rest) = tc.name.strip_prefix("mcp__") {
-                    let mut parts = rest.splitn(2, "__");
-                    match (parts.next(), parts.next()) {
-                        (Some(server), Some(tool)) => self
+                // Emit a specific activity kind + human-readable label for each tool type
+                let (act_kind, act_label) = describe_tool_call(&tc.name, &tc.arguments);
+                on_activity(act_kind, act_label);
+
+                let result = if tc.name == "task_update" {
+                    let id = tc.arguments["id"].as_str().unwrap_or_default();
+                    let status = tc.arguments["status"].as_str().unwrap_or("done");
+                    let result_text = tc.arguments["result"].as_str();
+                    match self
+                        .memory
+                        .update_task_status(id, status, result_text)
+                        .await
+                    {
+                        Ok(_) => format!("Task {id} updated to {status}."),
+                        Err(e) => format!("task_update failed: {e}"),
+                    }
+                } else if let Some(safe_name) = tc.name.strip_prefix("skill__") {
+                    // LLM explicitly called an installed skill as a tool.
+                    // safe_name is sanitized; resolve to the original skill name from the registry.
+                    use crate::mcp::orchestrator::sanitize_tool_name;
+                    let skill_name = self
+                        .skill_executor
+                        .registry
+                        .enabled_skills_for_tools()
+                        .await
+                        .into_iter()
+                        .find(|(n, _, _)| sanitize_tool_name(n) == safe_name)
+                        .map(|(n, _, _)| n)
+                        .unwrap_or_else(|| safe_name.to_string());
+                    let input = tc.arguments["input"].as_str().unwrap_or("");
+                    let run_id = Uuid::new_v4().to_string();
+                    let _ = self
+                        .memory
+                        .record_skill_run(&run_id, &skill_name, agent_name)
+                        .await;
+                    let skill_result = self
+                        .skill_executor
+                        .execute_skill_stream(
+                            &skill_name,
+                            input,
+                            Arc::new(|_, _| {}), // output is returned as tool result, not streamed
+                            Arc::new(|_, _| {}),
+                            abort.clone(),
+                        )
+                        .await;
+                    let (status, output) = match skill_result {
+                        Ok(o) => ("completed".to_string(), o),
+                        Err(e) => ("failed".to_string(), format!("Skill error: {e}")),
+                    };
+                    let _ = self
+                        .memory
+                        .complete_skill_run(&run_id, &status, &output)
+                        .await;
+                    output
+                } else if tc.name.starts_with("mcp__") {
+                    match self.mcp_orchestrator.resolve_fn_name(&tc.name).await {
+                        Some((server, tool)) => self
                             .mcp_orchestrator
-                            .call_tool(server, tool, &tc.arguments)
+                            .call_tool(&server, &tool, &tc.arguments)
                             .await
                             .map(|v| v.to_string())
                             .unwrap_or_else(|e| format!("MCP error: {e}")),
-                        _ => format!("Invalid MCP tool name: '{}'", tc.name),
+                        None => format!("Unknown MCP tool: '{}'", tc.name),
                     }
                 } else {
                     self.skill_executor
@@ -618,6 +777,17 @@ impl AlphaPup {
                   "tool_call_id": tc.id,
                   "content": result,
                 }));
+
+                // After any file operation, refresh skill dirs so LLM-written skills are live.
+                if tc.name == "file_write" || tc.name == "shell_exec" {
+                    self.skill_executor.registry.refresh().await;
+                }
+
+                // Check abort after each tool so we don't continue a long tool chain
+                if abort.load(Ordering::Relaxed) {
+                    eprintln!("[{agent_name}] aborted after tool '{}'", tc.name);
+                    return Ok(String::new());
+                }
             }
         }
 
@@ -1306,6 +1476,65 @@ impl AlphaPup {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Build a (kind, label) pair for stream_activity based on the tool being called.
+/// `pub` so executor.rs can reuse it.
+/// kind maps to a specific icon in the frontend; label is a human-readable summary.
+pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, String) {
+    fn trunc(s: &str, max: usize) -> String {
+        if s.chars().count() > max {
+            format!("{}…", s.chars().take(max).collect::<String>())
+        } else {
+            s.to_string()
+        }
+    }
+
+    match name {
+        "shell_exec" => {
+            let cmd = args["command"].as_str().unwrap_or("");
+            ("shell".into(), format!("$ {}", trunc(cmd, 60)))
+        }
+        "file_read" => {
+            let path = args["path"].as_str().unwrap_or("");
+            ("file_read".into(), trunc(path, 60))
+        }
+        "file_write" => {
+            let path = args["path"].as_str().unwrap_or("");
+            ("file_write".into(), trunc(path, 60))
+        }
+        "http_get" => {
+            let url = args["url"].as_str().unwrap_or("");
+            // Show just host + path, not query params
+            let short = url.split('?').next().unwrap_or(url);
+            ("http".into(), trunc(short, 60))
+        }
+        "memory_search" => {
+            let q = args["query"].as_str().unwrap_or("");
+            ("memory".into(), trunc(q, 50))
+        }
+        "memory_store" => ("memory".into(), "保存记忆".into()),
+        "task_update" => {
+            let status = args["status"].as_str().unwrap_or("");
+            ("task".into(), format!("→ {status}"))
+        }
+        _ if name.starts_with("skill__") => {
+            let skill = name.strip_prefix("skill__").unwrap_or(name);
+            let input = args["input"].as_str().unwrap_or("");
+            ("skill".into(), format!("{skill}: {}", trunc(input, 40)))
+        }
+        _ if name.starts_with("mcp__") => {
+            // mcp__server__tool → "[server] tool"
+            let rest = name.strip_prefix("mcp__").unwrap_or(name);
+            let label = if let Some((server, tool)) = rest.split_once("__") {
+                format!("[{server}] {tool}")
+            } else {
+                rest.to_string()
+            };
+            ("mcp".into(), trunc(&label, 60))
+        }
+        other => ("tool_call".into(), other.to_string()),
+    }
+}
 
 pub fn pup_display_name(key: &str) -> String {
     if let Some(skill_name) = key.strip_prefix("skill:") {

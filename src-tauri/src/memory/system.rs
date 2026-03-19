@@ -993,6 +993,24 @@ impl MemorySystem {
         }))
     }
 
+    /// Returns compression status for a pup — whether it has been compressed
+    /// and which row is covered by the compression.
+    pub async fn get_compression_status(&self, pup: &str) -> Result<(bool, i64)> {
+        let row = sqlx::query("SELECT covers_through_row FROM context_summaries WHERE pup = ?1")
+            .bind(pup)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        match row {
+            Some(r) => {
+                let covers_through_row: i64 = r.get("covers_through_row");
+                let is_compressed = covers_through_row > 0;
+                Ok((is_compressed, covers_through_row))
+            }
+            None => Ok((false, 0)),
+        }
+    }
+
     /// Upsert the rolling summary for a pup.
     pub async fn save_context_summary(
         &self,

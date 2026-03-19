@@ -39,11 +39,27 @@ pub struct McpToolInfo {
     pub input_schema: serde_json::Value,
 }
 
+/// Sanitize a string so it matches `^[a-zA-Z0-9_-]+$` required by OpenAI-compatible APIs.
+/// Replaces any character outside that set with `_`.
+pub fn sanitize_tool_name(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct MCPOrchestrator {
     servers: Arc<RwLock<HashMap<String, McpServerEntry>>>,
     /// Cache of tools discovered from remote servers.
     tool_cache: Arc<RwLock<HashMap<String, Vec<McpToolInfo>>>>,
+    /// Maps sanitized fn_name → (original_server, original_tool_name) for dispatch.
+    fn_name_map: Arc<RwLock<HashMap<String, (String, String)>>>,
     config_path: Option<PathBuf>,
 }
 
@@ -52,6 +68,7 @@ impl MCPOrchestrator {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
+            fn_name_map: Arc::new(RwLock::new(HashMap::new())),
             config_path: None,
         }
     }
@@ -74,6 +91,7 @@ impl MCPOrchestrator {
         let orchestrator = Self {
             servers: Arc::new(RwLock::new(servers.clone())),
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
+            fn_name_map: Arc::new(RwLock::new(HashMap::new())),
             config_path: Some(path),
         };
 
@@ -292,14 +310,21 @@ impl MCPOrchestrator {
 
     /// Return all cached remote tools as OpenAI-compatible function tool specs.
     ///
-    /// Each tool is named `mcp__{server}__{tool}` so the executor can route it
+    /// Each tool is named `mcp__{server}__{tool}` (sanitized) so the executor can route it
     /// back to the right MCP server without ambiguity.
     pub async fn tools_as_openai_specs(&self) -> Vec<serde_json::Value> {
         let cache = self.tool_cache.read().await;
         let mut specs = Vec::new();
+        let mut map = self.fn_name_map.write().await;
         for tools in cache.values() {
             for t in tools {
-                let fn_name = format!("mcp__{}__{}", t.server, t.name);
+                let fn_name = format!(
+                    "mcp__{}__{}",
+                    sanitize_tool_name(&t.server),
+                    sanitize_tool_name(&t.name)
+                );
+                // Store reverse mapping so dispatch can find the original names
+                map.insert(fn_name.clone(), (t.server.clone(), t.name.clone()));
                 let schema = if t.input_schema.is_null() {
                     serde_json::json!({ "type": "object", "properties": {} })
                 } else {
@@ -316,6 +341,12 @@ impl MCPOrchestrator {
             }
         }
         specs
+    }
+
+    /// Resolve a sanitized fn_name (as returned by the LLM) back to the original
+    /// (server, tool_name) pair needed to call the remote MCP server.
+    pub async fn resolve_fn_name(&self, fn_name: &str) -> Option<(String, String)> {
+        self.fn_name_map.read().await.get(fn_name).cloned()
     }
 
     // ── Tool dispatch ───────────────────────────────────────────────────────────

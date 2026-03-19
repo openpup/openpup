@@ -494,6 +494,33 @@ impl LlmClient {
         })
     }
 
+    /// Same as `chat_with_tools` but cancels the HTTP request if `abort` is set.
+    /// Polls the abort flag every 100 ms via `tokio::select!`.
+    pub async fn chat_with_tools_abortable(
+        &self,
+        messages: Vec<serde_json::Value>,
+        tools: Vec<serde_json::Value>,
+        abort: &AbortFlag,
+    ) -> anyhow::Result<Option<ChatWithToolsResponse>> {
+        let abort_clone = abort.clone();
+        tokio::select! {
+            result = self.chat_with_tools(messages, tools) => {
+                Ok(Some(result?))
+            }
+            _ = async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if abort_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+            } => {
+                eprintln!("[llm] chat_with_tools cancelled by abort flag");
+                Ok(None)
+            }
+        }
+    }
+
     // ── Embeddings ─────────────────────────────────────────────────────────────
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {

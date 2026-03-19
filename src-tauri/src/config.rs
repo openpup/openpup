@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub app: AppSettings,
     #[serde(default)]
     pub pups: PupsConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +59,16 @@ pub struct AppSettings {
 pub struct PupsConfig {
     #[serde(default = "default_enabled_pups")]
     pub enabled: Vec<String>,
+}
+
+/// Skills configuration — user-installed skill directory search paths.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Extra directories to scan for user-created skills.
+    /// Supports `~` expansion (e.g. "~/.openpup/my_skills" or "~/custom_skills").
+    /// If empty, only built-in skills and ~/.openpup/skills_cache/ are loaded.
+    #[serde(default)]
+    pub search_paths: Vec<String>,
 }
 
 // ── default helpers ──────────────────────────────────────────────────────────
@@ -115,6 +127,16 @@ impl Default for PupsConfig {
     }
 }
 
+/// Expand `~` in a path string to the home directory.
+pub fn expand_tilde(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(&path[2..])
+    } else {
+        PathBuf::from(path)
+    }
+}
+
 // ── I/O ──────────────────────────────────────────────────────────────────────
 
 pub fn config_path() -> Result<PathBuf> {
@@ -124,6 +146,7 @@ pub fn config_path() -> Result<PathBuf> {
 
 /// Load config from `~/.openpup/config.toml`.
 /// Returns defaults if the file does not exist.
+/// `api_key` is transparently decrypted if stored as enc2.
 pub fn load() -> AppConfig {
     let Ok(path) = config_path() else {
         return AppConfig::default();
@@ -134,16 +157,29 @@ pub fn load() -> AppConfig {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return AppConfig::default();
     };
-    toml::from_str(&text).unwrap_or_default()
+    let mut cfg: AppConfig = toml::from_str(&text).unwrap_or_default();
+    // Transparent decrypt — in-memory value is always plaintext
+    match crate::crypto::ensure_decrypted(&cfg.llm.api_key) {
+        Ok(plain) => cfg.llm.api_key = plain,
+        Err(e) => eprintln!("warn: failed to decrypt api_key: {e}"),
+    }
+    cfg
 }
 
 /// Persist config to `~/.openpup/config.toml`.
+/// `api_key` is transparently encrypted before writing (enc2 scheme).
 pub fn save(cfg: &AppConfig) -> Result<()> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = toml::to_string_pretty(cfg).context("serialize config")?;
+    // Clone and encrypt api_key — never write plaintext to disk
+    let mut cfg_to_write = cfg.clone();
+    if !cfg_to_write.llm.api_key.is_empty() {
+        cfg_to_write.llm.api_key = crate::crypto::ensure_encrypted(&cfg_to_write.llm.api_key)
+            .context("encrypt api_key")?;
+    }
+    let text = toml::to_string_pretty(&cfg_to_write).context("serialize config")?;
     std::fs::write(&path, text).context("write config.toml")?;
     Ok(())
 }

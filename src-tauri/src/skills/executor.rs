@@ -149,10 +149,17 @@ impl SkillExecutor {
                 return Ok(String::new());
             }
 
-            let response = self
+            let response = match self
                 .llm
-                .chat_with_tools(messages.clone(), available_tools.clone())
-                .await?;
+                .chat_with_tools_abortable(messages.clone(), available_tools.clone(), &abort)
+                .await?
+            {
+                Some(r) => r,
+                None => {
+                    eprintln!("[skill/{skill_name}] aborted during LLM call");
+                    return Ok(String::new());
+                }
+            };
 
             if response.tool_calls.is_empty() {
                 // Model returned a text answer — stream it and finish
@@ -166,20 +173,26 @@ impl SkillExecutor {
             messages.push(response.raw_message);
 
             for tc in &response.tool_calls {
+                if abort.load(Ordering::Relaxed) {
+                    eprintln!("[skill/{skill_name}] aborted before tool '{}'", tc.name);
+                    return Ok(String::new());
+                }
+
                 eprintln!("[skill/{skill_name}] tool_call: {}", tc.name);
-                on_activity("tool_call".into(), tc.name.clone());
+                let (act_kind, act_label) =
+                    crate::agents::alpha::describe_tool_call(&tc.name, &tc.arguments);
+                on_activity(act_kind, act_label);
 
                 // Route mcp__<server>__<tool> calls to the MCP orchestrator
-                let result = if let Some(rest) = tc.name.strip_prefix("mcp__") {
-                    let mut parts = rest.splitn(2, "__");
-                    match (parts.next(), parts.next()) {
-                        (Some(server), Some(tool)) => self
+                let result = if tc.name.starts_with("mcp__") {
+                    match self.mcp.resolve_fn_name(&tc.name).await {
+                        Some((server, tool)) => self
                             .mcp
-                            .call_tool(server, tool, &tc.arguments)
+                            .call_tool(&server, &tool, &tc.arguments)
                             .await
                             .map(|v| v.to_string())
                             .unwrap_or_else(|e| format!("MCP error: {e}")),
-                        _ => format!("Invalid MCP tool name: '{}'", tc.name),
+                        None => format!("Unknown MCP tool: '{}'", tc.name),
                     }
                 } else {
                     self.tools

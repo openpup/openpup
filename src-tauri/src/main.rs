@@ -4,6 +4,7 @@ mod agents;
 mod channel;
 mod commands;
 mod config;
+mod crypto;
 mod llm;
 mod mcp;
 mod memory;
@@ -138,6 +139,36 @@ fn main() {
             .register_builtin(include_str!("../../skills/personal/daily_summary.toml"))
             .await;
 
+        // Ensure skills_cache/ exists so LLM-generated skills can be written there
+        // even before any git-install has run.
+        let skills_cache_path = workspace_root.join("skills_cache");
+        let _ = std::fs::create_dir_all(&skills_cache_path);
+        // register_from_dir updates both `skills` and `installed` maps so
+        // these skills are immediately visible to routing after restart.
+        if let Err(e) = skill_registry
+            .register_from_dir(&skills_cache_path, "git")
+            .await
+        {
+            eprintln!("warn: failed to load skills from cache: {e}");
+        }
+        skill_registry.add_scan_root(skills_cache_path, "git").await;
+
+        // Load user-configured skill search paths from config.toml
+        let cfg = crate::config::load_with_env();
+        for search_path in &cfg.skills.search_paths {
+            let expanded_path = crate::config::expand_tilde(search_path);
+            if let Err(e) = skill_registry
+                .register_from_dir(&expanded_path, "local")
+                .await
+            {
+                eprintln!(
+                    "warn: failed to load skills from {}: {e}",
+                    expanded_path.display()
+                );
+            }
+            skill_registry.add_scan_root(expanded_path, "local").await;
+        }
+
         // Single shared PermissionChecker — all clones share the same Arc-wrapped state
         let permission_checker = PermissionChecker::new();
         permission_checker.set_persist_path(
@@ -212,6 +243,7 @@ fn main() {
             // Skills
             commands::list_skills,
             commands::install_skill_from_git,
+            commands::write_skill_toml,
             commands::uninstall_skill,
             commands::set_skill_enabled,
             commands::run_skill,
@@ -235,6 +267,7 @@ fn main() {
             // Config
             commands::get_llm_provider,
             commands::get_llm_config,
+            commands::get_safe_config,
             commands::set_llm_provider,
             commands::quick_set_model,
             // Pup management
@@ -271,6 +304,7 @@ fn main() {
             commands::get_pup_message_count,
             commands::clear_pup_history,
             commands::compress_pup_context,
+            commands::get_context_stats,
         ])
         .setup(move |app| {
             checker_for_setup.init_handle(app.handle().clone());

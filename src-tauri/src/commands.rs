@@ -107,6 +107,22 @@ pub async fn save_onboarding_data(
         .write_owner_profile(&content)
         .map_err(|e| e.to_string())?;
 
+    // ── Skills path first-run init ────────────────────────────────────────────
+    // Ensure ~/.openpup/skills/ is created and registered in search_paths so
+    // the LLM always has a known, writable directory for user-generated skills.
+    {
+        let mut cfg = crate::config::load();
+        if cfg.skills.search_paths.is_empty() {
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let default_skills_dir = home.join(".openpup").join("skills");
+            let _ = std::fs::create_dir_all(&default_skills_dir);
+            cfg.skills.search_paths = vec!["~/.openpup/skills/".to_string()];
+            if let Err(e) = crate::config::save(&cfg) {
+                eprintln!("warn: failed to persist default skills path: {e}");
+            }
+        }
+    }
+
     // Seed long-term memory DB with the key facts from onboarding
     let memory: Arc<MemorySystem> = state.alpha.memory.clone();
     let _ = memory
@@ -299,13 +315,31 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<InstalledSkil
 #[tauri::command]
 pub async fn install_skill_from_git(
     state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     repo_url: String,
     subdir: Option<String>,
 ) -> Result<Vec<String>, String> {
-    registry(&state)
+    let names = registry(&state)
         .install_from_git(&repo_url, subdir.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Notify all views so SkillStore can hot-reload
+    let _ = app_handle.emit("skill_installed", &names);
+    Ok(names)
+}
+
+#[tauri::command]
+pub async fn write_skill_toml(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    toml_content: String,
+) -> Result<String, String> {
+    let name = registry(&state)
+        .install_skill_toml(&toml_content)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("skill_installed", vec![name.clone()]);
+    Ok(name)
 }
 
 #[tauri::command]
@@ -577,6 +611,44 @@ pub async fn get_llm_config(state: State<'_, AppState>) -> Result<LlmConfigInfo,
         mini_model,
         embed_model,
         api_base,
+    })
+}
+
+// ─── Safe config (LLM-visible, no secrets) ───────────────────────────────────
+
+/// A sanitised view of the app config that the LLM can safely read.
+/// `api_key` is intentionally absent — the LLM must never see it.
+#[derive(Serialize)]
+pub struct SafeConfig {
+    /// Where `install_from_git` puts downloaded skills (always this path).
+    pub skills_cache_path: String,
+    /// User-configured extra skill directories (from config.toml [skills]).
+    pub skills_search_paths: Vec<String>,
+    /// Primary LLM model name.
+    pub llm_model: String,
+    /// LLM provider ("openai" | "ollama").
+    pub llm_provider: String,
+    /// Base URL override (empty = provider default).
+    pub llm_api_base: String,
+    /// Whether the api_key is configured (without revealing it).
+    pub llm_api_key_set: bool,
+}
+
+#[tauri::command]
+pub async fn get_safe_config() -> Result<SafeConfig, String> {
+    let cfg = crate::config::load(); // api_key decrypted in memory but not returned
+    let skills_cache_path = dirs::home_dir()
+        .map(|h| h.join(".openpup").join("skills_cache"))
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.openpup/skills_cache"))
+        .to_string_lossy()
+        .to_string();
+    Ok(SafeConfig {
+        skills_cache_path,
+        skills_search_paths: cfg.skills.search_paths,
+        llm_model: cfg.llm.model,
+        llm_provider: cfg.llm.provider,
+        llm_api_base: cfg.llm.api_base,
+        llm_api_key_set: !cfg.llm.api_key.is_empty(),
     })
 }
 
@@ -949,4 +1021,54 @@ pub async fn compress_pup_context(
         .compress_pup_context_now(&pup_key)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Compression status for a pup's context.
+#[derive(Serialize)]
+pub struct CompressionStatus {
+    pub is_compressed: bool,
+    pub last_compression_row: i64,
+}
+
+/// Overall context statistics for a pup.
+#[derive(Serialize)]
+pub struct ContextStats {
+    pub pup_key: String,
+    pub message_count: i64,
+    pub estimated_tokens: usize,
+    pub compression_status: CompressionStatus,
+}
+
+/// Fetch comprehensive context statistics for a pup (message count, estimated tokens, compression status).
+#[tauri::command]
+pub async fn get_context_stats(
+    state: State<'_, AppState>,
+    pup_key: String,
+) -> Result<ContextStats, String> {
+    let memory = memory_system_from_state(&state);
+
+    // Get message count
+    let message_count = memory
+        .get_pup_message_count(&pup_key)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Get compression status
+    let (is_compressed, last_compression_row) = memory
+        .get_compression_status(&pup_key)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Estimate tokens: conservatively assume ~100 tokens per message
+    let estimated_tokens = (message_count as usize) * 100;
+
+    Ok(ContextStats {
+        pup_key,
+        message_count,
+        estimated_tokens,
+        compression_status: CompressionStatus {
+            is_compressed,
+            last_compression_row,
+        },
+    })
 }

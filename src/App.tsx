@@ -39,9 +39,35 @@ interface SkillSuggestion {
 }
 
 interface ActivityStep {
-  kind: 'routing' | 'skill' | 'tool_call' | string;
+  kind: 'routing' | 'skill' | 'shell' | 'file_read' | 'file_write' | 'http' | 'memory' | 'task' | 'mcp' | 'tool_call' | string;
   label: string;
 }
+
+const ACTIVITY_ICON: Record<string, string> = {
+  routing:    '→',
+  skill:      '⚡',
+  shell:      '$',
+  file_read:  '📄',
+  file_write: '✏️',
+  http:       '🌐',
+  memory:     '🧠',
+  task:       '✓',
+  mcp:        '🔌',
+  tool_call:  '⚙',
+};
+
+const ACTIVITY_COLOR: Record<string, string> = {
+  routing:    'text-stone-400',
+  skill:      'text-amber-400',
+  shell:      'text-cyan-400 font-mono',
+  file_read:  'text-sky-400',
+  file_write: 'text-violet-400',
+  http:       'text-teal-400',
+  memory:     'text-purple-400',
+  task:       'text-emerald-400',
+  mcp:        'text-orange-400',
+  tool_call:  'text-stone-400',
+};
 
 
 interface PupConfig {
@@ -50,6 +76,16 @@ interface PupConfig {
   description: string;
   enabled: boolean;
   is_custom: boolean;
+}
+
+interface ContextStats {
+  pup_key: string;
+  message_count: number;
+  estimated_tokens: number;
+  compression_status: {
+    is_compressed: boolean;
+    last_compression_row: number;
+  };
 }
 
 type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'settings';
@@ -227,6 +263,9 @@ const AppInner: React.FC = () => {
   const [pups, setPups] = useState<PupConfig[]>([]);
   const [selectedPupKey, setSelectedPupKey] = useState<string>('alpha');
   const [memoriesTab, setMemoriesTab] = useState<'long_term' | 'diary'>('long_term');
+  // Context stats & message pagination
+  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
+  const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
   // Settings state
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -313,6 +352,13 @@ const AppInner: React.FC = () => {
             { id: crypto.randomUUID(), role: 'assistant', content, pup_name },
           ]);
           void loadMemoryChips();
+          // Load context stats after message completes
+          void invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey })
+            .then((stats) => {
+              setContextStats(stats);
+              setAllMessagesLoaded(stats.message_count <= messages.length + 1);
+            })
+            .catch(() => {});
         }
       }),
       listen<string>('stream_error', (e) => {
@@ -347,6 +393,29 @@ const AppInner: React.FC = () => {
 
   const loadMemoryChips = async () => {
     try { setMemoryChips(await invoke<MemoryChip[]>('get_top_memories', { limit: 5 })); } catch {}
+  };
+
+  const loadOlderMessages = async () => {
+    try {
+      const older = await invoke<Array<{ role: string; content: string; timestamp: number }>>('get_pup_conversation', {
+        pup_key: selectedPupKey,
+        limit: 20
+      });
+      if (older.length > 0) {
+        // Prepend older messages (reverse chronological, so newest of the old messages first)
+        const newMsgs = older.map((m) => ({
+          id: crypto.randomUUID(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          pup_name: selectedPupKey === 'alpha' ? 'Alpha' : pups.find((p) => p.key === selectedPupKey)?.display_name || selectedPupKey,
+        }));
+        setMessages((prev) => [...newMsgs, ...prev]);
+        // Check if we've loaded everything
+        if (older.length < 20) {
+          setAllMessagesLoaded(true);
+        }
+      }
+    } catch {}
   };
 
   const handleApprove = async (remember: boolean) => {
@@ -429,10 +498,10 @@ const AppInner: React.FC = () => {
   const NavBtn: React.FC<{ label: string; navKey: NavItem; onClick?: () => void }> = ({ label, navKey, onClick }) => (
     <button
       onClick={() => { setActiveNav(navKey); onClick?.(); }}
-      className={`w-full text-left px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-2 ${
+      className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-2 ${
         activeNav === navKey
-          ? 'bg-stone-800 text-stone-100 border-l-2 border-amber-500 pl-[10px]'
-          : 'text-stone-400 hover:text-stone-300 hover:bg-stone-900/60 border-l-2 border-transparent pl-[10px]'
+          ? 'bg-stone-800/80 text-stone-100 border-l-2 border-amber-500/80 pl-[10px] shadow-sm'
+          : 'text-stone-400 hover:text-stone-300 hover:bg-stone-800/40 border-l-2 border-transparent pl-[10px]'
       }`}
     >
       {label}
@@ -442,7 +511,7 @@ const AppInner: React.FC = () => {
   return (
     <div className="h-screen flex flex-col bg-stone-950 text-stone-100 overflow-hidden">
       {/* Header */}
-      <header className="bg-stone-900 border-b border-stone-800 px-4 py-2.5 flex items-center justify-between shrink-0">
+      <header className="bg-gradient-to-r from-stone-950 via-stone-900 to-stone-950 border-b border-stone-800/60 px-4 py-2.5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2.5">
           <span className="text-lg leading-none">🐾</span>
           <div className="flex flex-col leading-none">
@@ -481,7 +550,7 @@ const AppInner: React.FC = () => {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="w-38 border-r border-stone-800 flex flex-col px-2 py-3 shrink-0 bg-stone-900/50 overflow-y-auto" style={{ width: '152px' }}>
+        <div className="w-38 border-r border-stone-800/60 flex flex-col px-2 py-3 shrink-0 bg-gradient-to-b from-stone-900/70 via-stone-900/50 to-stone-950/50 overflow-y-auto backdrop-blur-sm" style={{ width: '152px' }}>
           {/* Pack group — collapsible pup list */}
           <button
             className="flex items-center justify-between px-3 mb-1 w-full group"
@@ -542,18 +611,28 @@ const AppInner: React.FC = () => {
           {/* ── Chat ── */}
           {activeNav === 'chat' && (
             <>
-              {/* Memory chips */}
-              {memoryChips.length > 0 && (
-                <div className="border-b border-stone-800/60 px-4 py-2 flex items-center gap-2 bg-stone-900/30">
-                  <span className="text-[10px] text-stone-600 shrink-0 font-medium">记忆</span>
-                  <div className="flex gap-1.5 flex-wrap flex-1 min-w-0">
-                    {memoryChips.slice(0, 4).map((chip, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-stone-800/80 text-stone-300 border border-stone-700/50 hover:border-stone-600 transition-colors">
-                        <span className="shrink-0">{memoryTypeIcon(chip.memory_type)}</span>
-                        <span className="truncate max-w-[140px]">{chip.content}</span>
-                      </span>
-                    ))}
+              {/* Memory chips + Context Status */}
+              {(memoryChips.length > 0 || contextStats) && (
+                <div className="border-b border-stone-800/60 px-4 py-2 flex items-center justify-between gap-3 bg-stone-900/30">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="text-[10px] text-stone-600 shrink-0 font-medium">记忆</span>
+                    <div className="flex gap-1.5 flex-wrap flex-1 min-w-0">
+                      {memoryChips.slice(0, 4).map((chip, i) => (
+                        <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-stone-800/80 text-stone-300 border border-stone-700/50 hover:border-stone-600 transition-colors">
+                          <span className="shrink-0">{memoryTypeIcon(chip.memory_type)}</span>
+                          <span className="truncate max-w-[140px]">{chip.content}</span>
+                        </span>
+                      ))}
+                    </div>
                   </div>
+                  {contextStats && (
+                    <div className="text-[10px] text-stone-600 shrink-0 whitespace-nowrap">
+                      📊 {contextStats.message_count} msgs | ~{Math.round(contextStats.estimated_tokens / 1000)}k tokens
+                      {contextStats.compression_status.is_compressed && (
+                        <span className="ml-1.5 text-stone-500">[compressed]</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -579,68 +658,93 @@ const AppInner: React.FC = () => {
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
-                {messages.map((m) =>
-                  m.role === 'user' ? (
-                    <div key={m.id} className="flex justify-end">
-                      <div className="max-w-sm bg-amber-700 text-white text-sm px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm">
-                        {m.content}
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={m.id} className="flex flex-col gap-1.5 max-w-[32rem]">
-                      {m.pup_name && (
-                        <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[m.pup_name] ?? 'bg-stone-700 text-stone-300'}`}>
-                          {m.pup_name}
-                        </span>
-                      )}
-                      <div className="bg-stone-800 text-stone-100 text-sm px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm prose prose-invert prose-sm max-w-none">
-                        <MarkdownRenderer>{m.content}</MarkdownRenderer>
-                      </div>
-                    </div>
-                  )
+              <div className="flex-1 overflow-auto px-5 py-4 flex flex-col">
+                {/* Load More button */}
+                {!allMessagesLoaded && messages.length > 1 && (
+                  <div className="flex justify-center py-2">
+                    <button
+                      className="px-3 py-1.5 text-xs bg-stone-800 text-stone-400 rounded-lg hover:bg-stone-700 hover:text-stone-300 transition-colors"
+                      onClick={() => void loadOlderMessages()}
+                    >
+                      ↑ 加载更多历史消息
+                    </button>
+                  </div>
                 )}
-                {sending && (
-                  <div className="flex flex-col gap-1.5 max-w-[32rem]">
-                    <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[streamingPupName] ?? 'bg-emerald-900/60 text-emerald-300'}`}>
-                      {streamingPupName || 'Alpha'}
-                    </span>
-                    {streamingSteps.length > 0 && (
-                      <div className="flex flex-col gap-0.5">
-                        {streamingSteps.map((step, i) => (
-                          <div key={i} className="flex items-center gap-1.5 text-[11px] text-stone-500">
-                            <span className="shrink-0">
-                              {step.kind === 'routing' ? '→' : step.kind === 'skill' ? '⚡' : '⚙'}
+                {/* Messages container - space-y-4 for gaps between messages */}
+                <div className="space-y-4">
+                  {messages.map((m) =>
+                    m.role === 'user' ? (
+                      <div key={m.id} className="flex justify-end">
+                        <div className="max-w-sm bg-gradient-to-br from-amber-600/90 to-amber-700/80 backdrop-blur-sm border border-amber-500/30 text-white text-sm px-5 py-3 rounded-3xl rounded-tr-sm shadow-lg">
+                          {m.content}
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={m.id} className="flex items-start gap-2.5 max-w-[32rem]">
+                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-xs shrink-0 mt-0.5 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-500/20">
+                          🐾
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {m.pup_name && (
+                            <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[m.pup_name] ?? 'bg-stone-700 text-stone-300'}`}>
+                              {m.pup_name}
                             </span>
-                            <span className={step.kind === 'routing' ? 'text-stone-400' : 'font-mono text-stone-500'}>
-                              {step.label}
-                            </span>
+                          )}
+                          <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 text-stone-100 text-sm px-4 py-3 rounded-3xl rounded-tl-sm shadow-md prose prose-invert prose-sm max-w-none">
+                            <MarkdownRenderer>{m.content}</MarkdownRenderer>
                           </div>
-                        ))}
+                        </div>
                       </div>
-                    )}
-                    {streamingReasoningContent && (
-                      <div className="bg-stone-900/60 border border-stone-700/50 text-stone-400 text-xs px-3 py-2 rounded-xl italic leading-relaxed max-h-24 overflow-y-auto">
-                        <span className="text-stone-500 not-italic mr-1">thinking…</span>
-                        {streamingReasoningContent}
+                    )
+                  )}
+                {sending && (
+                  <div className="flex items-start gap-2.5 max-w-[32rem]">
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-xs shrink-0 mt-0.5 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-500/20 animate-pulse">
+                      🐾
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[streamingPupName] ?? 'bg-emerald-900/60 text-emerald-300'}`}>
+                        {streamingPupName || 'Alpha'}
+                      </span>
+                      {streamingSteps.length > 0 && (
+                        <div className="flex flex-col gap-0.5 pl-1">
+                          {streamingSteps.map((step, i) => {
+                            const isLast = i === streamingSteps.length - 1;
+                            const icon = ACTIVITY_ICON[step.kind] ?? '⚙';
+                            const color = ACTIVITY_COLOR[step.kind] ?? 'text-stone-400';
+                            return (
+                              <div key={i} className={`flex items-center gap-1.5 text-[11px] transition-opacity ${isLast ? 'opacity-100' : 'opacity-40'}`}>
+                                <span className={`shrink-0 ${color}`}>{icon}</span>
+                                <span className={`truncate max-w-[260px] ${color}`}>{step.label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {streamingReasoningContent && (
+                        <div className="bg-stone-900/60 border border-stone-700/50 text-stone-400 text-xs px-3 py-2 rounded-xl italic leading-relaxed max-h-24 overflow-y-auto">
+                          <span className="text-stone-500 not-italic mr-1">thinking…</span>
+                          {streamingReasoningContent}
+                        </div>
+                      )}
+                      <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 text-stone-100 text-sm px-4 py-3 rounded-3xl rounded-tl-sm shadow-md prose prose-invert prose-sm max-w-none">
+                        {streamingContent
+                          ? <MarkdownRenderer>{streamingContent}</MarkdownRenderer>
+                          : <span className="text-stone-500 animate-pulse">{t('chat_thinking', lang)}</span>
+                        }
                       </div>
-                    )}
-                    <div className="bg-stone-800 text-stone-100 text-sm px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm prose prose-invert prose-sm max-w-none">
-                      {streamingContent
-                        ? <MarkdownRenderer>{streamingContent}</MarkdownRenderer>
-                        : <span className="text-stone-500 animate-pulse">{t('chat_thinking', lang)}</span>
-                      }
                     </div>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
+                </div>
               </div>
 
               {/* Input */}
-              <div className="border-t border-stone-800 px-4 py-3 flex gap-2.5 shrink-0 bg-stone-900/40">
+              <div className="border-t border-stone-800/50 px-4 py-3 flex gap-2.5 shrink-0 bg-gradient-to-t from-stone-950 via-stone-950/80 to-stone-950/50">
                 <textarea
                   ref={inputRef}
-                  className="flex-1 resize-none rounded-xl bg-stone-800 border border-stone-700 px-3.5 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 transition-colors"
+                  className="flex-1 resize-none rounded-2xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 shadow-sm transition-all duration-200"
                   rows={2}
                   placeholder={t('chat_placeholder_alpha', lang)}
                   value={input}
@@ -648,10 +752,10 @@ const AppInner: React.FC = () => {
                   onKeyDown={onKeyDown}
                 />
                 {sending ? (
-                  <button className="self-end px-4 py-2.5 rounded-xl bg-red-900/60 text-red-400 text-sm font-medium hover:bg-red-900/80 transition-colors border border-red-800/50"
+                  <button className="self-end px-4 py-3 rounded-xl bg-red-900/60 text-red-400 text-sm font-medium hover:bg-red-900/80 transition-colors border border-red-800/50"
                     onClick={() => void abort()}>■</button>
                 ) : (
-                  <button className="self-end px-4 py-2.5 rounded-xl bg-amber-500 text-stone-950 text-sm font-medium hover:bg-amber-400 disabled:opacity-40 transition-colors shadow-sm shadow-amber-500/20"
+                  <button className="self-end px-5 py-3 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
                     onClick={() => void send()} disabled={!input.trim()}>↑</button>
                 )}
               </div>
