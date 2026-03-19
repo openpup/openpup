@@ -10,6 +10,8 @@ use tauri::Emitter;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use tracing::debug;
+
 use crate::agents::custom_pup::CustomPup;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
@@ -152,7 +154,7 @@ impl AlphaPup {
             // Each exchange = 2 rows (user + assistant); use exchange count.
             let exchanges = (rows / 2) as u32;
             self.msg_count.store(exchanges, Ordering::Relaxed);
-            eprintln!("[alpha] init_msg_count: {exchanges} exchanges in DB");
+            debug!("[alpha] init_msg_count: {exchanges} exchanges in DB");
         }
     }
 
@@ -167,7 +169,7 @@ impl AlphaPup {
         forced_pup: Option<String>,
         app_handle: &tauri::AppHandle,
     ) {
-        eprintln!(
+        debug!(
             "[alpha] process_user_message_stream: msg_len={} forced_pup={forced_pup:?}",
             msg.len()
         );
@@ -176,14 +178,14 @@ impl AlphaPup {
         let result = self.do_stream(&msg, forced_pup, app_handle).await;
         match result {
             Ok((reply, pup_key)) => {
-                eprintln!(
+                debug!(
                     "[alpha] do_stream ok: pup={pup_key:?} reply_len={}",
                     reply.len()
                 );
                 let aborted = self.abort_flag.load(Ordering::Relaxed);
                 // Emit stream_done with authoritative content from the backend.
                 // Content is empty when the user aborted so the frontend discards partial output.
-                eprintln!(
+                debug!(
                     "[alpha] emitting stream_done pup={} aborted={aborted}",
                     pup_display_name(&pup_key)
                 );
@@ -246,7 +248,7 @@ impl AlphaPup {
                 }
             }
             Err(e) => {
-                eprintln!("[alpha] do_stream error: {e}");
+                debug!("[alpha] do_stream error: {e}");
                 let _ = app_handle.emit("stream_error", e.to_string());
             }
         }
@@ -284,7 +286,7 @@ impl AlphaPup {
             self.classify_intent(msg, &owner_summary, &classify_history)
                 .await
         };
-        eprintln!("[alpha] do_stream: pup_key={pup_key:?}");
+        debug!("[alpha] do_stream: pup_key={pup_key:?}");
 
         // Notify the UI which pup/skill is handling this request
         let _ = app_handle.emit(
@@ -297,7 +299,7 @@ impl AlphaPup {
 
         // If the user aborted while we were classifying intent, stop before hitting the LLM.
         if self.abort_flag.load(Ordering::Relaxed) {
-            eprintln!("[alpha] do_stream: aborted before LLM call");
+            debug!("[alpha] do_stream: aborted before LLM call");
             return Ok((String::new(), "alpha".into()));
         }
 
@@ -655,7 +657,7 @@ impl AlphaPup {
                 .mcp_orchestrator
                 .tools_for_task(task_hint, Self::MAX_MCP_TOOLS)
                 .await;
-            eprintln!(
+            debug!(
                 "[{agent_name}] injecting {} MCP tools (filtered)",
                 mcp_specs.len()
             );
@@ -667,7 +669,7 @@ impl AlphaPup {
 
         for iter in 0..MAX_ITER {
             if abort.load(Ordering::Relaxed) {
-                eprintln!("[{agent_name}] aborted at iteration {iter}");
+                debug!("[{agent_name}] aborted at iteration {iter}");
                 return Ok(String::new());
             }
 
@@ -682,14 +684,14 @@ impl AlphaPup {
             {
                 Some(r) => r,
                 None => {
-                    eprintln!("[{agent_name}] aborted during LLM call");
+                    debug!("[{agent_name}] aborted during LLM call");
                     return Ok(String::new());
                 }
             };
 
             if response.tool_calls.is_empty() {
                 let text = response.content.unwrap_or_default();
-                eprintln!("[{agent_name}] final answer: {} chars", text.len());
+                debug!("[{agent_name}] final answer: {} chars", text.len());
                 on_token(text.clone());
                 return Ok(text);
             }
@@ -697,7 +699,7 @@ impl AlphaPup {
             // Execute each tool call and feed results back
             msgs.push(response.raw_message);
             for tc in &response.tool_calls {
-                eprintln!("[{agent_name}] tool_call: {}", tc.name);
+                debug!("[{agent_name}] tool_call: {}", tc.name);
 
                 // Emit a specific activity kind + human-readable label for each tool type
                 let (act_kind, act_label) = describe_tool_call(&tc.name, &tc.arguments);
@@ -771,7 +773,7 @@ impl AlphaPup {
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 };
 
-                eprintln!("[{agent_name}] {} → {} chars", tc.name, result.len());
+                debug!("[{agent_name}] {} → {} chars", tc.name, result.len());
                 msgs.push(serde_json::json!({
                   "role": "tool",
                   "tool_call_id": tc.id,
@@ -785,7 +787,7 @@ impl AlphaPup {
 
                 // Check abort after each tool so we don't continue a long tool chain
                 if abort.load(Ordering::Relaxed) {
-                    eprintln!("[{agent_name}] aborted after tool '{}'", tc.name);
+                    debug!("[{agent_name}] aborted after tool '{}'", tc.name);
                     return Ok(String::new());
                 }
             }
@@ -812,7 +814,7 @@ impl AlphaPup {
             .map(|k| pup_display_name(k))
             .collect::<Vec<_>>()
             .join("、");
-        eprintln!("[alpha] parallel_pack: pups={required_pups:?}");
+        debug!("[alpha] parallel_pack: pups={required_pups:?}");
         let _ = app_handle.emit(
             "stream_activity",
             ActivityEvent {
@@ -850,7 +852,7 @@ impl AlphaPup {
         let pup_outputs: Vec<(String, String)> = match joined {
             Ok(results) => results.into_iter().filter_map(|r| r.ok()).collect(),
             Err(_) => {
-                eprintln!("[alpha] parallel_pack: timed out");
+                debug!("[alpha] parallel_pack: timed out");
                 vec![]
             }
         };
@@ -961,7 +963,7 @@ impl AlphaPup {
     ) -> String {
         let trimmed = msg.trim();
         if trimmed.len() < 8 {
-            eprintln!("[alpha] classify_intent: short msg → alpha");
+            debug!("[alpha] classify_intent: short msg → alpha");
             return "alpha".to_string();
         }
 
@@ -1053,13 +1055,13 @@ impl AlphaPup {
         let raw = match self.llm_client.chat_mini(classifier_msgs).await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[alpha] classify_intent chat_mini error: {e}");
+                debug!("[alpha] classify_intent chat_mini error: {e}");
                 return "alpha".to_string();
             }
         };
         let key = raw.trim().to_lowercase();
         let key = key.split_whitespace().next().unwrap_or("alpha");
-        eprintln!("[alpha] classify_intent: raw={raw:?} → key={key:?}");
+        debug!("[alpha] classify_intent: raw={raw:?} → key={key:?}");
 
         if key == "alpha" || enabled_pups.iter().any(|p| p == key) {
             return key.to_string();
@@ -1079,11 +1081,11 @@ impl AlphaPup {
                 .collect();
             if valid_pups.len() >= 2 {
                 let canonical = format!("channel:{}", valid_pups.join(","));
-                eprintln!("[alpha] classify_intent: multi-pup channel → {canonical}");
+                debug!("[alpha] classify_intent: multi-pup channel → {canonical}");
                 return canonical;
             }
         }
-        eprintln!("[alpha] classify_intent: unrecognised key {key:?} → alpha");
+        debug!("[alpha] classify_intent: unrecognised key {key:?} → alpha");
         "alpha".to_string()
     }
 
@@ -1194,7 +1196,7 @@ impl AlphaPup {
             return Ok(()); // Not enough new content to compress
         }
 
-        eprintln!(
+        debug!(
       "[{pup}] compress_context: {uncovered_rows} uncovered rows (covers_through={covers_through} max={max_row})"
     );
 
@@ -1246,7 +1248,7 @@ impl AlphaPup {
         self.memory
             .save_context_summary(pup, &new_summary, last_row_id)
             .await?;
-        eprintln!("[{pup}] compress_context: saved summary covering through row {last_row_id}");
+        debug!("[{pup}] compress_context: saved summary covering through row {last_row_id}");
         Ok(())
     }
 

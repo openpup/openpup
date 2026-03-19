@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tracing::debug;
 use serde_json::Value;
 
 use crate::memory::system::MemorySystem;
@@ -228,7 +229,7 @@ impl ToolRegistry {
     // ── Tool implementations ───────────────────────────────────────────────────
 
     async fn shell_exec(&self, command: &str) -> Result<String> {
-        eprintln!("[tool/shell_exec] $ {}", &command[..command.len().min(120)]);
+        debug!("[tool/shell_exec] $ {}", &command[..command.len().min(120)]);
         let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -261,7 +262,7 @@ impl ToolRegistry {
 
     async fn file_read(&self, path: &str) -> Result<String> {
         let resolved = self.resolve_path(path);
-        eprintln!("[tool/file_read] {}", resolved.display());
+        debug!("[tool/file_read] {}", resolved.display());
         let content = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(|e| anyhow!("file_read '{}': {e}", resolved.display()))?;
@@ -278,7 +279,7 @@ impl ToolRegistry {
 
     async fn file_write(&self, path: &str, content: &str) -> Result<String> {
         let resolved = self.resolve_path(path);
-        eprintln!(
+        debug!(
             "[tool/file_write] {} ({} bytes)",
             resolved.display(),
             content.len()
@@ -299,7 +300,7 @@ impl ToolRegistry {
     }
 
     async fn http_get(&self, url: &str) -> Result<String> {
-        eprintln!("[tool/http_get] {}", &url[..url.len().min(120)]);
+        debug!("[tool/http_get] {}", &url[..url.len().min(120)]);
         let resp = self
             .http
             .get(url)

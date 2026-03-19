@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tracing::{debug, warn};
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo},
     transport::StreamableHttpClientTransport,
@@ -101,7 +102,7 @@ impl MCPOrchestrator {
             for entry in servers.values().filter(|e| e.enabled) {
                 match self_clone.discover_server_tools(entry).await {
                     Ok(tools) => {
-                        eprintln!(
+                        debug!(
                             "[mcp] startup: discovered {} tools from '{}'",
                             tools.len(),
                             entry.name
@@ -112,7 +113,7 @@ impl MCPOrchestrator {
                             .await
                             .insert(entry.name.clone(), tools);
                     }
-                    Err(e) => eprintln!("[mcp] startup discovery for '{}' failed: {e}", entry.name),
+                    Err(e) => warn!("[mcp] startup discovery for '{}' failed: {e}", entry.name),
                 }
             }
         });
@@ -133,7 +134,7 @@ impl MCPOrchestrator {
         tokio::spawn(async move {
             match self_clone.discover_server_tools(&entry).await {
                 Ok(tools) => {
-                    eprintln!(
+                    debug!(
                         "[mcp] auto-discovered {} tools from '{}'",
                         tools.len(),
                         entry.name
@@ -144,7 +145,7 @@ impl MCPOrchestrator {
                         .await
                         .insert(entry.name.clone(), tools);
                 }
-                Err(e) => eprintln!("[mcp] auto-discovery for '{}' failed: {e}", entry.name),
+                Err(e) => warn!("[mcp] auto-discovery for '{}' failed: {e}", entry.name),
             }
         });
         Ok(())
@@ -180,7 +181,7 @@ impl MCPOrchestrator {
                             .await
                             .insert(entry.name.clone(), tools);
                     }
-                    Err(e) => eprintln!("[mcp] re-discovery for '{}' failed: {e}", entry.name),
+                    Err(e) => warn!("[mcp] re-discovery for '{}' failed: {e}", entry.name),
                 }
             });
         }
@@ -214,7 +215,7 @@ impl MCPOrchestrator {
                             .insert(server.name.clone(), tools);
                     }
                     Err(e) => {
-                        eprintln!("MCP tool discovery for '{}' failed: {e}", server.name);
+                        warn!("MCP tool discovery for '{}' failed: {e}", server.name);
                     }
                 }
             }
@@ -296,7 +297,7 @@ impl MCPOrchestrator {
             .collect();
 
         scored.sort_by(|a, b| b.0.cmp(&a.0));
-        eprintln!(
+        debug!(
             "[mcp] tools_for_task: total={} → selecting top {max} (best_score={})",
             all.len(),
             scored.first().map(|(s, _)| *s).unwrap_or(0)

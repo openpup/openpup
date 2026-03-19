@@ -30,6 +30,9 @@ rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-cli
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+tracing-appender = "0.2"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

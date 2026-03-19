@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tracing::debug;
 
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
@@ -128,7 +129,7 @@ impl SkillExecutor {
         if permissions.mcp {
             const MAX_MCP: usize = 20;
             let mcp_specs = self.mcp.tools_for_task(input, MAX_MCP).await;
-            eprintln!(
+            debug!(
                 "[skill/{skill_name}] injecting {} MCP tools (filtered)",
                 mcp_specs.len()
             );
@@ -145,7 +146,7 @@ impl SkillExecutor {
 
         for iteration in 0..MAX_ITERATIONS {
             if abort.load(Ordering::Relaxed) {
-                eprintln!("[skill/{skill_name}] aborted at iteration {iteration}");
+                debug!("[skill/{skill_name}] aborted at iteration {iteration}");
                 return Ok(String::new());
             }
 
@@ -156,7 +157,7 @@ impl SkillExecutor {
             {
                 Some(r) => r,
                 None => {
-                    eprintln!("[skill/{skill_name}] aborted during LLM call");
+                    debug!("[skill/{skill_name}] aborted during LLM call");
                     return Ok(String::new());
                 }
             };
@@ -164,7 +165,7 @@ impl SkillExecutor {
             if response.tool_calls.is_empty() {
                 // Model returned a text answer — stream it and finish
                 let text = response.content.unwrap_or_default();
-                eprintln!("[skill/{skill_name}] final answer: {} chars", text.len());
+                debug!("[skill/{skill_name}] final answer: {} chars", text.len());
                 on_token(text.clone(), false);
                 return Ok(text);
             }
@@ -174,11 +175,11 @@ impl SkillExecutor {
 
             for tc in &response.tool_calls {
                 if abort.load(Ordering::Relaxed) {
-                    eprintln!("[skill/{skill_name}] aborted before tool '{}'", tc.name);
+                    debug!("[skill/{skill_name}] aborted before tool '{}'", tc.name);
                     return Ok(String::new());
                 }
 
-                eprintln!("[skill/{skill_name}] tool_call: {}", tc.name);
+                debug!("[skill/{skill_name}] tool_call: {}", tc.name);
                 let (act_kind, act_label) =
                     crate::agents::alpha::describe_tool_call(&tc.name, &tc.arguments);
                 on_activity(act_kind, act_label);
@@ -201,7 +202,7 @@ impl SkillExecutor {
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 };
 
-                eprintln!("[skill/{skill_name}] {} -> {} chars", tc.name, result.len());
+                debug!("[skill/{skill_name}] {} -> {} chars", tc.name, result.len());
                 messages.push(serde_json::json!({
                   "role": "tool",
                   "tool_call_id": tc.id,

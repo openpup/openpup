@@ -14,6 +14,8 @@ mod workspace;
 
 use std::sync::Arc;
 
+use tracing::{info, warn};
+
 use agents::alpha::AlphaPup;
 use agents::dev_pup::DevPup;
 use agents::life_admin_pup::LifeAdminPup;
@@ -33,8 +35,43 @@ use skills::scheduler::SkillScheduler;
 use tokio::runtime::Runtime;
 use tools::primitive::ToolRegistry;
 
+fn init_logging(workspace_root: &std::path::Path) {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    let log_dir = workspace_root.to_path_buf();
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    // Non-blocking file appender — rotates daily, keeps ~7 files
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "openpup.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    // In debug builds also write to stderr; in release only to file.
+    #[cfg(debug_assertions)]
+    let writer = non_blocking.and(std::io::stderr);
+    #[cfg(not(debug_assertions))]
+    let writer = non_blocking;
+
+    let filter = std::env::var("OPENPUP_LOG")
+        .unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_writer(writer)
+        .with_ansi(false) // file logs: no ANSI escape codes
+        .with_target(true)
+        .with_thread_ids(false)
+        .init();
+
+    // Keep the guard alive for the lifetime of the process
+    std::mem::forget(guard);
+}
+
 fn main() {
     let _ = dotenvy::dotenv();
+
+    // Initialise logging before anything else so startup messages are captured.
+    let home_dir = dirs::home_dir().expect("cannot determine home directory");
+    init_logging(&home_dir.join(".openpup"));
 
     let rt = Runtime::new().expect("failed to create tokio runtime");
 
@@ -58,7 +95,7 @@ fn main() {
             .to_str()
             .unwrap_or_else(|| panic!("invalid db path: {:?}", db_path));
 
-        println!("db_path: {db_path_str}");
+        info!("db_path: {db_path_str}");
         let llm_client = Arc::new(LlmClient::new_from_env());
 
         // Load unified config.toml
@@ -149,7 +186,7 @@ fn main() {
             .register_from_dir(&skills_cache_path, "git")
             .await
         {
-            eprintln!("warn: failed to load skills from cache: {e}");
+            warn!("failed to load skills from cache: {e}");
         }
         skill_registry.add_scan_root(skills_cache_path, "git").await;
 
@@ -161,8 +198,8 @@ fn main() {
                 .register_from_dir(&expanded_path, "local")
                 .await
             {
-                eprintln!(
-                    "warn: failed to load skills from {}: {e}",
+                warn!(
+                    "failed to load skills from {}: {e}",
                     expanded_path.display()
                 );
             }

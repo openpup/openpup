@@ -4,6 +4,8 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
+use tracing::{debug, warn};
+
 use crate::agents::alpha::{AlphaPup, PupConfig};
 use crate::llm::client::Provider;
 use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry, McpToolInfo};
@@ -36,7 +38,7 @@ pub async fn send_message(
     // Guard: require API key before any LLM call
     let (_, model, mini_model, _embed_model, api_key, api_base) =
         state.alpha.llm_client.current_config();
-    eprintln!(
+    debug!(
         "[cmd] send_message: model={model:?} mini={mini_model:?} base={api_base:?} has_key={}",
         api_key.is_some()
     );
@@ -118,7 +120,7 @@ pub async fn save_onboarding_data(
             let _ = std::fs::create_dir_all(&default_skills_dir);
             cfg.skills.search_paths = vec!["~/.openpup/skills/".to_string()];
             if let Err(e) = crate::config::save(&cfg) {
-                eprintln!("warn: failed to persist default skills path: {e}");
+                warn!("failed to persist default skills path: {e}");
             }
         }
     }

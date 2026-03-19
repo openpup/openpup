@@ -7,6 +7,8 @@ use cron::Schedule;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+use tracing::warn;
+
 use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
@@ -160,7 +162,7 @@ impl SkillScheduler {
         {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[heartbeat] LLM call failed: {e}");
+                warn!("[heartbeat] LLM call failed: {e}");
                 return;
             }
         };

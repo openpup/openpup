@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tracing::{debug, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -230,7 +231,7 @@ impl SkillRegistry {
         let roots = self.scan_roots.read().await.clone();
         for (path, source) in roots {
             if let Err(e) = self.register_from_dir(&path, &source).await {
-                eprintln!("warn: skill refresh {}: {e}", path.display());
+                warn!("skill refresh {}: {e}", path.display());
             }
         }
     }
@@ -275,7 +276,7 @@ impl SkillRegistry {
                     enabled: true,
                 });
             }
-            Err(e) => eprintln!("failed to parse builtin skill: {e}"),
+            Err(e) => warn!("failed to parse builtin skill: {e}"),
         }
     }
 
@@ -328,14 +329,14 @@ impl SkillRegistry {
                 let text = match fs::read_to_string(path) {
                     Ok(t) => t,
                     Err(e) => {
-                        eprintln!("warn: read {}: {e}", path.display());
+                        warn!("read {}: {e}", path.display());
                         continue;
                     }
                 };
                 let manifest: SkillManifest = match toml::from_str(&text) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("warn: parse {}: {e}", path.display());
+                        warn!("parse {}: {e}", path.display());
                         continue;
                     }
                 };
@@ -354,7 +355,7 @@ impl SkillRegistry {
                             self.register_manifest(manifest, source, now).await;
                             any = true;
                         }
-                        Err(e) => eprintln!("warn: parse SkillHub {}: {e}", path.display()),
+                        Err(e) => warn!("parse SkillHub {}: {e}", path.display()),
                     }
                 }
             }
@@ -748,7 +749,7 @@ impl SkillRegistry {
         *guard = defaults;
         drop(guard);
         self.save_sources_snapshot();
-        eprintln!("[registry] seeded default ClaWHub registry source");
+        debug!("[registry] seeded default ClaWHub registry source");
     }
 
     /// Fetch discoverable skills from all enabled remote registries.

@@ -4,6 +4,7 @@
 //! never causes a panic.
 
 use anyhow::{Context, Result};
+use tracing::warn;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -161,7 +162,7 @@ pub fn load() -> AppConfig {
     // Transparent decrypt — in-memory value is always plaintext
     match crate::crypto::ensure_decrypted(&cfg.llm.api_key) {
         Ok(plain) => cfg.llm.api_key = plain,
-        Err(e) => eprintln!("warn: failed to decrypt api_key: {e}"),
+        Err(e) => warn!("failed to decrypt api_key: {e}"),
     }
     cfg
 }

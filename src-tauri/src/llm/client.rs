@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, Result};
+use tracing::{debug, warn};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
@@ -241,7 +242,7 @@ impl LlmClient {
         };
 
         let url = chat_url(&api_base);
-        eprintln!("[llm] chat: model={model:?} url={url}");
+        debug!("[llm] chat: model={model:?} url={url}");
 
         let body = serde_json::json!({
           "model": model,
@@ -254,14 +255,14 @@ impl LlmClient {
         }
 
         let resp = req.send().await.map_err(|e| {
-            eprintln!("[llm] chat send error: {e}");
+            debug!("[llm] chat send error: {e}");
             anyhow!("request failed: {e}")
         })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            eprintln!("[llm] chat API error {status}: {body}");
+            debug!("[llm] chat API error {status}: {body}");
             return Err(anyhow!("API error {status}: {body}"));
         }
 
@@ -271,7 +272,7 @@ impl LlmClient {
             .unwrap_or("")
             .to_string();
 
-        eprintln!("[llm] chat done: {} chars", text.len());
+        debug!("[llm] chat done: {} chars", text.len());
         self.insert_cache(cache_key, text.clone());
         Ok(text)
     }
@@ -287,7 +288,7 @@ impl LlmClient {
     ) -> Result<String> {
         let (api_key, api_base) = {
             let g = self.config.read().unwrap();
-            eprintln!(
+            debug!(
                 "[llm] stream: model={model:?} base={:?} has_key={}",
                 g.api_base,
                 g.api_key.is_some()
@@ -308,18 +309,18 @@ impl LlmClient {
         }
 
         let resp = req.send().await.map_err(|e| {
-            eprintln!("[llm] stream send error: {e}");
+            debug!("[llm] stream send error: {e}");
             anyhow!("stream request failed: {e}")
         })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            eprintln!("[llm] stream API error {status}: {body}");
+            debug!("[llm] stream API error {status}: {body}");
             return Err(anyhow!("API error {status}: {body}"));
         }
 
-        eprintln!("[llm] stream opened, reading SSE…");
+        debug!("[llm] stream opened, reading SSE…");
         let mut byte_stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
@@ -332,7 +333,7 @@ impl LlmClient {
                     .await;
 
             if abort.load(Ordering::Relaxed) {
-                eprintln!(
+                debug!(
                     "[llm] stream aborted after {chunk_count} tokens ({} chars)",
                     full.len()
                 );
@@ -342,7 +343,7 @@ impl LlmClient {
             match next {
                 Err(_timeout) => continue,
                 Ok(None) => {
-                    eprintln!(
+                    debug!(
                         "[llm] stream complete: {chunk_count} tokens, {} chars",
                         full.len()
                     );
@@ -350,7 +351,7 @@ impl LlmClient {
                 }
                 Ok(Some(bytes_result)) => {
                     let bytes = bytes_result.map_err(|e| {
-                        eprintln!("[llm] stream read error: {e}");
+                        debug!("[llm] stream read error: {e}");
                         anyhow!("stream read error: {e}")
                     })?;
                     buf.push_str(&String::from_utf8_lossy(&bytes));
@@ -370,7 +371,7 @@ impl LlmClient {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
                             // Surface API-level errors embedded in SSE (some providers send these)
                             if let Some(err) = val.get("error") {
-                                eprintln!("[llm] SSE error payload: {err}");
+                                debug!("[llm] SSE error payload: {err}");
                                 return Err(anyhow!("API error in stream: {err}"));
                             }
                             let delta = &val["choices"][0]["delta"];
@@ -398,7 +399,7 @@ impl LlmClient {
         }
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
-            eprintln!("[llm] WARNING: empty response from model={model:?}");
+            warn!("[llm] WARNING: empty response from model={model:?}");
             return Err(anyhow!(
                 "LLM returned an empty response.\n\
          • Model: {model}\n\
@@ -425,7 +426,7 @@ impl LlmClient {
         };
 
         let url = chat_url(&api_base);
-        eprintln!(
+        debug!(
             "[llm] chat_with_tools: model={model:?} tools={}",
             tools.len()
         );
@@ -449,7 +450,7 @@ impl LlmClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            eprintln!("[llm] chat_with_tools error {status}: {body}");
+            debug!("[llm] chat_with_tools error {status}: {body}");
             return Err(anyhow!("API error {status}: {body}"));
         }
 
@@ -481,7 +482,7 @@ impl LlmClient {
             })
             .unwrap_or_default();
 
-        eprintln!(
+        debug!(
             "[llm] chat_with_tools done: text={} tool_calls={}",
             content.is_some(),
             tool_calls.len()
@@ -515,7 +516,7 @@ impl LlmClient {
                     }
                 }
             } => {
-                eprintln!("[llm] chat_with_tools cancelled by abort flag");
+                debug!("[llm] chat_with_tools cancelled by abort flag");
                 Ok(None)
             }
         }
