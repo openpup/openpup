@@ -108,8 +108,8 @@ jobs:
           releaseName: 'OpenPup ${{ github.ref_name }}'
           releaseBody: |
             See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-          releaseDraft: false
-          prerelease: true
+          releaseDraft: true
+          prerelease: false
 
   # ── Create GitHub Release ────────────────────────────────────────────────────
   release:

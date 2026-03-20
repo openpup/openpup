@@ -278,14 +278,7 @@ impl AlphaPup {
             .into_iter()
             .filter(|t| t.status == "pending" || t.status == "in_progress")
             .collect();
-        // Emit routing-start immediately so the UI shows progress before classify_intent LLM call.
-        let _ = app_handle.emit(
-            "stream_activity",
-            ActivityEvent {
-                kind: "routing".into(),
-                label: "…".into(),
-            },
-        );
+
         let pup_key = if let Some(forced) = forced_pup {
             forced
         } else if let Some(mention) = Self::extract_at_mention(msg, &self.pup_configs).await {

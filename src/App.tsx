@@ -781,7 +781,7 @@ const AppInner: React.FC = () => {
                     animatedMsgIds.current.add(m.id);
                     const accentColor = pupLeftBorder(m.pup_name ?? 'Alpha');
                     return m.role === 'user' ? (
-                      <div key={m.id} className={`flex justify-end${isNew ? ' animate-msg-in' : ''}`}>
+                      <div key={m.id} className={isNew ? 'animate-msg-in' : ''} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <div style={{
                           maxWidth: '72%',
                           background: 'var(--color-background-info)',
