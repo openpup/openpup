@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use tracing::{debug, warn};
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo},
     transport::StreamableHttpClientTransport,
@@ -13,6 +12,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use tracing::{debug, warn};
 
 use crate::mcp::server::LocalMcpServer;
 

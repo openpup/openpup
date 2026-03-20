@@ -55,9 +55,9 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
   return (
     <div
       ref={ref}
-      className="my-2 overflow-x-auto rounded-lg bg-stone-900 p-4 text-center min-h-[60px] flex items-center justify-center"
+      style={{ margin: '8px 0', overflowX: 'auto', borderRadius: '8px', background: 'var(--color-background-secondary)', padding: '16px', textAlign: 'center', minHeight: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
     >
-      <span className="text-stone-500 text-xs animate-pulse">rendering diagram…</span>
+      <span style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }} className="animate-pulse">rendering diagram…</span>
     </div>
   );
 };
@@ -98,8 +98,9 @@ const PreBlock: React.FC<React.HTMLAttributes<HTMLPreElement>> = ({ children, ..
     <div className="relative group my-2 rounded-lg overflow-hidden">
       <button
         onClick={copy}
-        className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity
-                   text-[10px] px-2 py-0.5 rounded bg-stone-600 text-stone-300 hover:bg-stone-500 select-none"
+        style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10, opacity: 0, transition: 'opacity 0.15s', fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'var(--color-border-primary)', color: 'var(--color-background-primary)', border: 'none', cursor: 'pointer', userSelect: 'none' }}
+        onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+        onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
       >
         {copied ? '✓ copied' : 'copy'}
       </button>
@@ -116,49 +117,57 @@ interface Props {
   children: string;
 }
 
-export const MarkdownRenderer: React.FC<Props> = ({ children }) => (
+// Hoisted outside component — stable reference, no new object on each render
+const MD_COMPONENTS: React.ComponentPropsWithoutRef<typeof ReactMarkdown>['components'] = {
+  pre: PreBlock,
+  // Links: open in system browser instead of navigating the webview
+  a({ href, children: c }) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (href) {
+            e.preventDefault();
+            void invoke('open_url', { url: href });
+          }
+        }}
+        style={{ color: 'var(--color-text-info)', textDecoration: 'underline', textUnderlineOffset: '2px', cursor: 'pointer' }}
+      >
+        {c}
+      </a>
+    );
+  },
+  // Tables: horizontal scroll wrapper
+  table({ children: c }) {
+    return (
+      <div className="overflow-x-auto my-2">
+        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '13px' }}>{c}</table>
+      </div>
+    );
+  },
+  th({ children: c }) {
+    return (
+      <th style={{ border: '0.5px solid var(--color-border-secondary)', padding: '6px 12px', background: 'var(--color-background-secondary)', textAlign: 'left', fontWeight: 500, color: 'var(--color-text-primary)', fontSize: '12px' }}>
+        {c}
+      </th>
+    );
+  },
+  td({ children: c }) {
+    return <td style={{ border: '0.5px solid var(--color-border-tertiary)', padding: '6px 12px', color: 'var(--color-text-secondary)', fontSize: '12px' }}>{c}</td>;
+  },
+};
+
+const REMARK_PLUGINS: React.ComponentPropsWithoutRef<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm];
+const REHYPE_PLUGINS: React.ComponentPropsWithoutRef<typeof ReactMarkdown>['rehypePlugins'] = [
+  [rehypeHighlight, { ignoreMissing: true, detect: false }],
+];
+
+export const MarkdownRenderer: React.FC<Props> = React.memo(({ children }) => (
   <ReactMarkdown
-    remarkPlugins={[remarkGfm]}
-    rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
-    components={{
-      pre: PreBlock,
-      // Links: open in system browser instead of navigating the webview
-      a({ href, children: c }) {
-        return (
-          <a
-            href={href}
-            onClick={(e) => {
-              if (href) {
-                e.preventDefault();
-                void invoke('open_url', { url: href });
-              }
-            }}
-            className="text-amber-400 hover:text-amber-300 underline underline-offset-2 cursor-pointer"
-          >
-            {c}
-          </a>
-        );
-      },
-      // Tables: horizontal scroll wrapper
-      table({ children: c }) {
-        return (
-          <div className="overflow-x-auto my-2">
-            <table className="border-collapse w-full text-sm">{c}</table>
-          </div>
-        );
-      },
-      th({ children: c }) {
-        return (
-          <th className="border border-stone-600 px-3 py-1.5 bg-stone-700/60 text-left font-semibold text-stone-200 text-xs">
-            {c}
-          </th>
-        );
-      },
-      td({ children: c }) {
-        return <td className="border border-stone-700 px-3 py-1.5 text-stone-300 text-xs">{c}</td>;
-      },
-    }}
+    remarkPlugins={REMARK_PLUGINS}
+    rehypePlugins={REHYPE_PLUGINS}
+    components={MD_COMPONENTS}
   >
     {children}
   </ReactMarkdown>
-);
+), (prev, next) => prev.children === next.children);

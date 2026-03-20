@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { Onboarding } from './components/Onboarding';
-import { SkillStore } from './components/SkillStore';
+import { SkillClaw } from './components/SkillClaw';
 import { MemoryManager } from './components/MemoryManager';
 import { Timeline } from './components/Timeline';
 import { DiaryViewer } from './components/DiaryViewer';
@@ -19,6 +19,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   pup_name?: string;
+  timestamp?: number;
 }
 
 interface StreamDonePayload {
@@ -30,12 +31,6 @@ interface MemoryChip {
   content: string;
   memory_type: string;
   importance: number;
-}
-
-interface SkillSuggestion {
-  skill_name: string;
-  repo_url: string;
-  reason: string;
 }
 
 interface ActivityStep {
@@ -70,6 +65,7 @@ const ACTIVITY_COLOR: Record<string, string> = {
 };
 
 
+
 interface PupConfig {
   key: string;
   display_name: string;
@@ -90,6 +86,16 @@ interface ContextStats {
 
 type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'settings';
 
+// Pup accent colors per spec (used for dot, left-border, tag)
+const PUP_COLOR: Record<string, string> = {
+  alpha:      '#1D9E75',
+  dev:        '#378ADD',
+  writer:     '#BA7517',
+  ops:        '#888780',
+  research:   '#7F77DD',
+  life_admin: '#DB3491',
+};
+
 const PUP_DOT: Record<string, string> = {
   alpha: 'bg-emerald-500',
   dev: 'bg-sky-500',
@@ -103,10 +109,36 @@ const PUP_TAG: Record<string, string> = {
   Alpha: 'bg-emerald-900/60 text-emerald-300',
   'Dev Pup': 'bg-sky-900/60 text-sky-300',
   'Writer Pup': 'bg-amber-900/60 text-amber-300',
-  'Ops Pup': 'bg-stone-700 text-stone-300',
+  'Ops Pup': 'bg-stone-800 text-stone-300',
   'Research Pup': 'bg-purple-900/60 text-purple-300',
   'Life Admin Pup': 'bg-pink-900/60 text-pink-300',
 };
+
+// Pup key → accent color for left border
+function pupLeftBorder(pupName: string): string {
+  const map: Record<string, string> = {
+    'Alpha': PUP_COLOR.alpha,
+    'Dev Pup': PUP_COLOR.dev,
+    'Writer Pup': PUP_COLOR.writer,
+    'Ops Pup': PUP_COLOR.ops,
+    'Research Pup': PUP_COLOR.research,
+    'Life Admin Pup': PUP_COLOR.life_admin,
+  };
+  return map[pupName] ?? PUP_COLOR.alpha;
+}
+
+// Pup tag background+color per spec (accent-matched per pup)
+function pupTagStyle(pupName: string): { background: string; color: string } {
+  const map: Record<string, { background: string; color: string }> = {
+    'Alpha':          { background: 'var(--color-background-success)', color: 'var(--color-text-success)' },
+    'Dev Pup':        { background: 'var(--color-background-info)',    color: 'var(--color-text-info)' },
+    'Writer Pup':     { background: 'var(--color-background-warning)', color: 'var(--color-text-warning)' },
+    'Research Pup':   { background: 'rgba(127, 119, 221, 0.12)',       color: '#7F77DD' },
+    'Ops Pup':        { background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)' },
+    'Life Admin Pup': { background: 'rgba(219, 52, 145, 0.10)',        color: '#DB3491' },
+  };
+  return map[pupName] ?? { background: 'var(--color-background-success)', color: 'var(--color-text-success)' };
+}
 
 // ─── LLM Config Panel ────────────────────────────────────────────────────────
 
@@ -121,16 +153,18 @@ interface LlmConfigInfo {
 const PROVIDER_PRESETS: Record<string, { label: string; api_base: string; model: string; mini_model: string; embed_model: string }> = {
   openai:       { label: 'OpenAI',        api_base: '',                              model: 'gpt-4o',                   mini_model: 'gpt-4o-mini',           embed_model: 'text-embedding-3-small' },
   siliconflow:  { label: 'SiliconFlow',   api_base: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3',  mini_model: 'Qwen/Qwen2.5-7B-Instruct', embed_model: 'BAAI/bge-m3' },
-  ollama:       { label: 'Ollama (本地)', api_base: 'http://localhost:11434/v1',     model: 'llama3',                   mini_model: 'llama3',                embed_model: 'nomic-embed-text' },
+  ollama:       { label: 'Ollama (Local)', api_base: 'http://localhost:11434/v1',     model: 'llama3',                   mini_model: 'llama3',                embed_model: 'nomic-embed-text' },
   deepseek:     { label: 'DeepSeek',      api_base: 'https://api.deepseek.com/v1',   model: 'deepseek-chat',            mini_model: 'deepseek-chat',         embed_model: '' },
   openrouter:   { label: 'OpenRouter',    api_base: 'https://openrouter.ai/api/v1',  model: 'anthropic/claude-3.5-sonnet', mini_model: 'openai/gpt-4o-mini', embed_model: '' },
 };
 
 const LlmConfigPanel: React.FC = () => {
+  const { lang } = useLang();
   const [cfg, setCfg] = React.useState<LlmConfigInfo | null>(null);
   const [form, setForm] = React.useState({ provider: 'openai', model: '', miniModel: '', embedModel: '', apiKey: '', apiBase: '' });
   const [saving, setSaving] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [msgIsError, setMsgIsError] = React.useState(false);
 
   React.useEffect(() => {
     invoke<LlmConfigInfo>('get_llm_config').then((c) => {
@@ -164,21 +198,24 @@ const LlmConfigPanel: React.FC = () => {
         apiKey: form.apiKey || null,
         apiBase: form.apiBase || null,
       });
-      setMsg('已保存');
+      setMsg(t('llm_saved', lang));
+      setMsgIsError(false);
       setTimeout(() => setMsg(null), 2000);
     } catch (e) {
-      setMsg(`保存失败: ${e}`);
+      setMsg(`${t('llm_save_failed', lang)}: ${e}`);
+      setMsgIsError(true);
     } finally {
       setSaving(false);
     }
   };
 
   const field = (label: string, value: string, key: keyof typeof form, ph?: string, type = 'text') => (
-    <div className="flex items-center gap-2">
-      <label className="w-24 shrink-0 text-stone-500">{label}</label>
+    <div className="flex items-center gap-3">
+      <label className="w-28 shrink-0" style={{ fontSize: "12px", color: 'var(--color-text-tertiary)' }}>{label}</label>
       <input
         type={type}
-        className="flex-1 rounded-lg bg-stone-800 border border-stone-700 px-2.5 py-1.5 text-xs text-stone-100 placeholder:text-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+        className="flex-1 focus:outline-none transition-colors"
+        style={{ fontSize: "13px", padding: '6px 10px', borderRadius: '8px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
         value={value}
         placeholder={ph}
         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
@@ -188,42 +225,45 @@ const LlmConfigPanel: React.FC = () => {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold mb-3 text-stone-200">模型配置</h2>
+      <h2 style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: '14px' }}>{t('llm_config_title', lang)}</h2>
 
       {/* Provider presets */}
-      <div className="flex flex-wrap gap-1.5 mb-3">
-        {Object.entries(PROVIDER_PRESETS).map(([k, p]) => (
-          <button key={k} onClick={() => applyPreset(k)}
-            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
-              form.provider === (k === 'ollama' ? 'ollama' : 'openai') && (form.apiBase || '') === p.api_base
-                ? 'border-amber-500 text-amber-400 bg-amber-500/10'
-                : 'border-stone-700 text-stone-500 hover:border-stone-600 hover:text-stone-400'
-            }`}>{p.label}</button>
-        ))}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {Object.entries(PROVIDER_PRESETS).map(([k, p]) => {
+          const isSelected = form.provider === (k === 'ollama' ? 'ollama' : 'openai') && (form.apiBase || '') === p.api_base;
+          return (
+            <button key={k} onClick={() => applyPreset(k)} style={{
+              fontSize: "12px", padding: '3px 10px', borderRadius: '20px', cursor: 'pointer',
+              border: `0.5px solid ${isSelected ? '#BA7517' : 'var(--color-border-secondary)'}`,
+              color: isSelected ? '#BA7517' : 'var(--color-text-secondary)',
+              background: isSelected ? 'var(--color-background-warning)' : 'transparent',
+            }}>{p.label}</button>
+          );
+        })}
       </div>
 
-      <div className="space-y-2">
-        {field('主模型', form.model, 'model', 'gpt-4o / deepseek-chat')}
-        {field('Mini 模型', form.miniModel, 'miniModel', '用于意图分类（便宜快速）')}
-        {field('嵌入模型', form.embedModel, 'embedModel', 'text-embedding-3-small / BAAI/bge-m3')}
-        {field('API Base', form.apiBase, 'apiBase', '留空使用 OpenAI 默认')}
-        {field('API Key', form.apiKey, 'apiKey', '留空保持现有密钥', 'password')}
+      <div className="space-y-2.5">
+        {field(t('llm_main_model', lang), form.model, 'model', 'gpt-4o / deepseek-chat')}
+        {field(t('llm_mini_model', lang), form.miniModel, 'miniModel', t('llm_mini_ph', lang))}
+        {field(t('llm_embed_model', lang), form.embedModel, 'embedModel', 'text-embedding-3-small / BAAI/bge-m3')}
+        {field('API Base', form.apiBase, 'apiBase', t('llm_base_ph', lang))}
+        {field('API Key', form.apiKey, 'apiKey', t('llm_key_ph', lang), 'password')}
       </div>
 
-      <div className="mt-2.5 text-[10px] text-stone-600 space-y-0.5">
-        <div>· Mini 模型：意图分类、记忆提取——用便宜模型降低成本</div>
-        <div>· 嵌入模型：长期记忆语义检索——需支持 /embeddings 端点</div>
+      <div className="mt-3 space-y-1 leading-relaxed" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>
+        <div>{t('llm_hint_mini', lang)}</div>
+        <div>{t('llm_hint_embed', lang)}</div>
       </div>
 
-      <div className="flex items-center gap-3 mt-3">
+      <div className="flex items-center gap-3 mt-4">
         <button
           onClick={() => void save()} disabled={saving}
-          className="px-4 py-1.5 rounded-lg bg-amber-500 text-stone-950 text-xs font-medium hover:bg-amber-400 disabled:opacity-40 transition-colors"
+          style={{ padding: '6px 12px', borderRadius: '8px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.5 : 1 }}
         >
-          {saving ? '保存中…' : '保存'}
+          {saving ? t('llm_saving', lang) : t('llm_save', lang)}
         </button>
-        {msg && <span className={`text-xs ${msg.startsWith('保存失败') ? 'text-red-400' : 'text-emerald-400'}`}>{msg}</span>}
-        {cfg && <span className="text-[10px] text-stone-600 ml-auto">当前: {cfg.model}</span>}
+        {msg && <span style={{ fontSize: "13px", color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)' }}>{msg}</span>}
+        {cfg && <span className="ml-auto" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_current', lang)} {cfg.model}</span>}
       </div>
     </section>
   );
@@ -257,15 +297,20 @@ const AppInner: React.FC = () => {
   const [activeNav, setActiveNav] = useState<NavItem>('chat');
   const activeNavRef = useRef<string>('chat');
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
+  // Auto-expand sidebar section when an item inside it becomes active
+  useEffect(() => {
+    const toolsItems: NavItem[] = ['memories', 'timeline', 'tasks', 'skills'];
+    const configItems: NavItem[] = ['pups', 'mcp', 'settings'];
+    if (toolsItems.includes(activeNav)) setToolsExpanded(true);
+    if (configItems.includes(activeNav)) setConfigExpanded(true);
+  }, [activeNav]);
   const [memoryChips, setMemoryChips] = useState<MemoryChip[]>([]);
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
-  const [skillSuggestion, setSkillSuggestion] = useState<SkillSuggestion | null>(null);
   const [pups, setPups] = useState<PupConfig[]>([]);
   const [selectedPupKey, setSelectedPupKey] = useState<string>('alpha');
   const [memoriesTab, setMemoriesTab] = useState<'long_term' | 'diary'>('long_term');
-  // Context stats & message pagination
+  // Context stats
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
-  const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
   // Settings state
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -274,8 +319,16 @@ const AppInner: React.FC = () => {
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [execMode, setExecMode] = useState<'leashed' | 'free_run'>('leashed');
   const [membersExpanded, setMembersExpanded] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+  const [configExpanded, setConfigExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Debounce token-by-token scroll during streaming
+  const scrollTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Track which message IDs have already been animated so history doesn't re-animate
+  const animatedMsgIds = useRef(new Set<string>());
 
   const insertMention = (pupKey: string) => {
     const mention = `@${pupKey} `;
@@ -325,7 +378,6 @@ const AppInner: React.FC = () => {
 
     void Promise.all([
       listen<PermissionRequest>('permission_request', (e) => setPermissionRequest(e.payload)),
-      listen<SkillSuggestion>('skill_suggestion', (e) => setSkillSuggestion(e.payload)),
       listen<ActivityStep>('stream_activity', (e) => {
         setStreamingSteps((prev) => [...prev, e.payload]);
       }),
@@ -356,7 +408,6 @@ const AppInner: React.FC = () => {
           void invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey })
             .then((stats) => {
               setContextStats(stats);
-              setAllMessagesLoaded(stats.message_count <= messages.length + 1);
             })
             .catch(() => {});
         }
@@ -387,35 +438,23 @@ const AppInner: React.FC = () => {
     };
   }, []);
 
+  // New message added → smooth scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, streamingContent]);
+  }, [messages]);
+
+  // Streaming tokens → debounced instant scroll (avoids a reflow per token)
+  useEffect(() => {
+    if (!streamingContent) return;
+    clearTimeout(scrollTimer.current);
+    scrollTimer.current = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant', block: 'end' });
+    }, 80);
+    return () => clearTimeout(scrollTimer.current);
+  }, [streamingContent]);
 
   const loadMemoryChips = async () => {
     try { setMemoryChips(await invoke<MemoryChip[]>('get_top_memories', { limit: 5 })); } catch {}
-  };
-
-  const loadOlderMessages = async () => {
-    try {
-      const older = await invoke<Array<{ role: string; content: string; timestamp: number }>>('get_pup_conversation', {
-        pup_key: selectedPupKey,
-        limit: 20
-      });
-      if (older.length > 0) {
-        // Prepend older messages (reverse chronological, so newest of the old messages first)
-        const newMsgs = older.map((m) => ({
-          id: crypto.randomUUID(),
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          pup_name: selectedPupKey === 'alpha' ? 'Alpha' : pups.find((p) => p.key === selectedPupKey)?.display_name || selectedPupKey,
-        }));
-        setMessages((prev) => [...newMsgs, ...prev]);
-        // Check if we've loaded everything
-        if (older.length < 20) {
-          setAllMessagesLoaded(true);
-        }
-      }
-    } catch {}
   };
 
   const handleApprove = async (remember: boolean) => {
@@ -437,6 +476,7 @@ const AppInner: React.FC = () => {
     if (!trimmed || sending) return;
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'user', content: trimmed }]);
     setInput('');
+    if (inputRef.current) { inputRef.current.style.height = 'auto'; }
     streamingContentRef.current = '';
     setStreamingContent('');
     setStreamingReasoningContent('');
@@ -464,7 +504,7 @@ const AppInner: React.FC = () => {
   };
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
   };
 
   const exportWorkspace = async () => {
@@ -475,16 +515,21 @@ const AppInner: React.FC = () => {
   };
 
   const importWorkspace = async () => {
-    if (!importPath.trim()) { setSettingsErr('请填写备份文件路径'); return; }
+    if (!importPath.trim()) { setSettingsErr(t('settings_path_required', lang)); return; }
     setImporting(true); setSettingsErr(null); setSettingsMsg(null);
-    try { await invoke('import_workspace', { backup_path: importPath.trim() }); setSettingsMsg('导入成功，请重启应用。'); }
+    try { await invoke('import_workspace', { backup_path: importPath.trim() }); setSettingsMsg(t('settings_import_success', lang)); }
     catch (e: unknown) { setSettingsErr(String(e)); }
     finally { setImporting(false); }
   };
 
   if (onboardingDone === null) return (
-    <div className="min-h-screen bg-stone-950 flex items-center justify-center">
-      <div className="w-5 h-5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--color-background-secondary)' }}>
+      <div className="flex flex-col items-center gap-3">
+        <span className="text-[22px] font-medium select-none" style={{ color: 'var(--color-text-secondary)' }}>
+          open<span style={{ color: '#1D9E75' }}>pup</span>
+        </span>
+        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: '#1D9E75', borderTopColor: 'transparent' }} />
+      </div>
     </div>
   );
 
@@ -495,280 +540,405 @@ const AppInner: React.FC = () => {
     }} />
   );
 
-  const NavBtn: React.FC<{ label: string; navKey: NavItem; onClick?: () => void }> = ({ label, navKey, onClick }) => (
-    <button
-      onClick={() => { setActiveNav(navKey); onClick?.(); }}
-      className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-2 ${
-        activeNav === navKey
-          ? 'bg-stone-800/80 text-stone-100 border-l-2 border-amber-500/80 pl-[10px] shadow-sm'
-          : 'text-stone-400 hover:text-stone-300 hover:bg-stone-800/40 border-l-2 border-transparent pl-[10px]'
-      }`}
-    >
-      {label}
-    </button>
-  );
+  // Sidebar nav button matching spec style
+  const NavBtn: React.FC<{ label: string; navKey: NavItem; onClick?: () => void }> = ({ label, navKey, onClick }) => {
+    const isActive = activeNav === navKey;
+    return (
+      <button
+        onClick={() => { setActiveNav(navKey); onClick?.(); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '7px',
+          padding: '6px 10px',
+          margin: '1px 6px',
+          borderRadius: '6px',
+          fontSize: "13px",
+          fontWeight: isActive ? 500 : 400,
+          color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+          background: isActive ? 'var(--color-background-secondary)' : 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  const isChatActive = activeNav === 'chat';
 
   return (
-    <div className="h-screen flex flex-col bg-stone-950 text-stone-100 overflow-hidden">
-      {/* Header */}
-      <header className="bg-gradient-to-r from-stone-950 via-stone-900 to-stone-950 border-b border-stone-800/60 px-4 py-2.5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2.5">
-          <span className="text-lg leading-none">🐾</span>
-          <div className="flex flex-col leading-none">
-            <span className="font-bold tracking-tight text-sm text-stone-100">OpenPup</span>
-            <span className="text-[10px] text-stone-500 tracking-wide mt-0.5">"用 ChatGPT 三个月，它还是不知道你不喜欢被打断。OpenPup 记得。"</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* GitHub link */}
-          <button
-            onClick={() => invoke('open_url', { url: 'https://github.com/openpup/openpup' })}
-            className="text-stone-500 hover:text-stone-300 transition-colors cursor-pointer"
-            title="GitHub"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
-            </svg>
-          </button>
-          {/* Execution mode badge */}
-          <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-            execMode === 'free_run'
-              ? 'bg-emerald-900/60 text-emerald-400'
-              : 'bg-stone-800 text-stone-400'
-          }`}>
-            {execMode === 'leashed' ? t('mode_leashed', lang) : t('mode_free', lang)}
-          </span>
-          {/* Language toggle */}
-          <button
-            onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
-            className="text-xs px-2 py-1 rounded bg-stone-800 text-stone-400 hover:text-stone-300 border border-stone-700 transition-colors"
-          >
-            {lang === 'zh' ? 'EN' : '中'}
-          </button>
-        </div>
-      </header>
+    <div className="h-screen flex overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <div className="w-38 border-r border-stone-800/60 flex flex-col px-2 py-3 shrink-0 bg-gradient-to-b from-stone-900/70 via-stone-900/50 to-stone-950/50 overflow-y-auto backdrop-blur-sm" style={{ width: '152px' }}>
-          {/* Pack group — collapsible pup list */}
-          <button
-            className="flex items-center justify-between px-3 mb-1 w-full group"
-            onClick={() => setMembersExpanded((v) => !v)}
-          >
-            <span className="text-[10px] text-stone-600 uppercase tracking-widest font-semibold">
-              {t('pup_section', lang)}
+      {/* ── Left Sidebar ── */}
+      {sidebarCollapsed ? (
+        /* Collapsed strip */
+        <div className="flex flex-col items-center pt-4 pb-3 shrink-0" style={{ width: '48px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+          <div className="flex flex-col gap-3">
+            <button onClick={() => { setActiveNav('chat'); inputRef.current?.focus(); }} className="p-2 -m-2 group" title="Alpha">
+              <span className="block w-2 h-2 rounded-full" style={{ background: '#1D9E75' }} />
+            </button>
+            {pups.filter((p) => p.key !== 'alpha').map((pup) => (
+              <button key={pup.key} onClick={() => { setActiveNav('chat'); insertMention(pup.key); }} className="p-2 -m-2" title={pup.display_name}>
+                <span className="block w-2 h-2 rounded-full" style={{ background: PUP_COLOR[pup.key] ?? '#888780' }} />
+              </button>
+            ))}
+          </div>
+          <div className="flex-1" />
+          <button onClick={() => setSidebarCollapsed(false)} style={{ fontSize: "13px", color: 'var(--color-text-tertiary)', padding: '4px 8px' }}>›</button>
+        </div>
+      ) : (
+        /* Expanded 176px sidebar */
+        <div className="flex flex-col shrink-0 overflow-y-auto" style={{ width: '176px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+          {/* Logo */}
+          <div className="flex items-center justify-between px-4 py-4" style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}>
+            <span className="select-none" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>
+              open<span style={{ color: '#1D9E75' }}>pup</span>
             </span>
-            <span className="text-[10px] text-stone-700 group-hover:text-stone-500 transition-colors">
-              {membersExpanded ? '▾' : '▸'}
-            </span>
-          </button>
-          {membersExpanded && (
-            <>
-              {/* Alpha — navigate to chat, no @mention */}
+            <button onClick={() => setSidebarCollapsed(true)} style={{ fontSize: "13px", color: 'var(--color-text-tertiary)', lineHeight: 1, padding: '2px 4px' }} title={t('sidebar_collapse', lang)}>‹</button>
+          </div>
+
+          <div className="flex flex-col flex-1 px-2 pt-3 pb-3 gap-4">
+            {/* 狗群 section */}
+            <div>
+              <div className="px-2 pb-1.5" style={{ fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                {t('pup_section', lang)}
+              </div>
               <button
-                onClick={() => { setActiveNav('chat'); inputRef.current?.focus(); }}
-                className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs mb-0.5 transition-all font-medium ${
-                  activeNav === 'chat' && selectedPupKey === 'alpha'
-                    ? 'bg-stone-800 text-stone-100 shadow-sm'
-                    : 'text-stone-400 hover:text-stone-300 hover:bg-stone-800/60'
-                }`}
+                onClick={() => { setActiveNav('chat'); setSelectedPupKey('alpha'); inputRef.current?.focus(); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                  padding: '6px 10px', margin: '1px 6px', borderRadius: '6px', fontSize: "13px",
+                  fontWeight: isChatActive && selectedPupKey === 'alpha' ? 500 : 400,
+                  color: isChatActive && selectedPupKey === 'alpha' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  background: isChatActive && selectedPupKey === 'alpha' ? 'var(--color-background-secondary)' : 'transparent',
+                  border: 'none', cursor: 'pointer',
+                }}
               >
-                <span className="w-2 h-2 rounded-full shrink-0 bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0 }} />
                 Alpha
               </button>
               {pups.filter((p) => p.key !== 'alpha').map((pup) => (
                 <button
                   key={pup.key}
-                  onClick={() => { setActiveNav('chat'); insertMention(pup.key); }}
-                  className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs mb-0.5 transition-all font-medium text-stone-400 hover:text-stone-300 hover:bg-stone-800/60"
+                  onClick={() => { setActiveNav('chat'); setSelectedPupKey(pup.key); insertMention(pup.key); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                    padding: '6px 10px', margin: '1px 6px', borderRadius: '6px', fontSize: "13px", fontWeight: 400,
+                    color: isChatActive && selectedPupKey === pup.key ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                    background: isChatActive && selectedPupKey === pup.key ? 'var(--color-background-secondary)' : 'transparent',
+                    border: 'none', cursor: 'pointer',
+                  }}
                 >
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${PUP_DOT[pup.key] ?? 'bg-violet-500'}`} />
-                  <span className="truncate">{pup.display_name}</span>
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: PUP_COLOR[pup.key] ?? '#888780', flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pup.display_name}</span>
                 </button>
               ))}
-            </>
-          )}
+            </div>
 
-          <div className="border-t border-stone-800 my-2.5 mx-2" />
+            {/* 工具 section — collapsible */}
+            <div>
+              <button
+                onClick={() => setToolsExpanded(v => !v)}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                <span>{lang === 'zh' ? '工具' : 'Tools'}</span>
+                <span style={{ fontSize: "10px", opacity: 0.6 }}>{toolsExpanded ? '▾' : '▸'}</span>
+              </button>
+              {toolsExpanded && (
+                <>
+                  <NavBtn label={t('nav_pack_channel', lang)} navKey="channel" />
+                  <NavBtn label={t('nav_timeline', lang)} navKey="timeline" />
+                  <NavBtn label={t('nav_memories', lang)} navKey="memories" />
+                  <NavBtn label={t('nav_tasks', lang)} navKey="tasks" />
+                </>
+              )}
+            </div>
 
-          {/* Nav */}
-          <div className="space-y-0.5">
-            <NavBtn label={t('nav_pack_channel', lang)} navKey="channel" />
-            <NavBtn label={t('nav_memories', lang)} navKey="memories" />
-            <NavBtn label={t('nav_timeline', lang)} navKey="timeline" />
-            <NavBtn label={t('nav_tasks', lang)} navKey="tasks" />
-            <NavBtn label={t('nav_skills', lang)} navKey="skills" />
-            <NavBtn label={t('nav_pups', lang)} navKey="pups" onClick={loadPups} />
-            <NavBtn label={t('nav_mcp', lang)} navKey="mcp" />
-            <NavBtn label={t('nav_settings', lang)} navKey="settings" />
+            {/* Config section — collapsible */}
+            <div>
+              <button
+                onClick={() => setConfigExpanded(v => !v)}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                <span>{lang === 'zh' ? '配置' : 'Config'}</span>
+                <span style={{ fontSize: "10px", opacity: 0.6 }}>{configExpanded ? '▾' : '▸'}</span>
+              </button>
+              {configExpanded && (
+                <>
+                  <NavBtn label={t('nav_pups', lang)} navKey="pups" onClick={loadPups} />
+                  <NavBtn label={t('nav_skills', lang)} navKey="skills" />
+                  <NavBtn label={t('nav_mcp', lang)} navKey="mcp" />
+                  <NavBtn label={t('nav_settings', lang)} navKey="settings" />
+                </>
+              )}
+            </div>
+
+            <div className="flex-1" />
+
+            {/* Mode pill + lang toggle */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <button
+                onClick={async () => {
+                  const next = execMode === 'leashed' ? 'free_run' : 'leashed';
+                  await invoke('set_execution_mode', { mode: next }).catch(() => {});
+                  setExecMode(next);
+                }}
+                title={execMode === 'leashed'
+                  ? (lang === 'zh' ? '牵绳模式：危险操作需每次确认。点击切换放养模式' : 'Leashed: risky actions require approval. Click to switch')
+                  : (lang === 'zh' ? '放养模式：受信任技能可自动执行。点击切换牵绳模式' : 'Free run: trusted skills run automatically. Click to switch')
+                }
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                  padding: '5px 10px', borderRadius: '6px', fontSize: "12px",
+                  color: 'var(--color-text-secondary)', background: 'var(--color-background-secondary)',
+                  border: 'none', cursor: 'pointer',
+                }}
+              >
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: execMode === 'free_run' ? '#BA7517' : '#1D9E75', flexShrink: 0 }} />
+                {execMode === 'leashed' ? t('mode_leashed', lang) : t('mode_free', lang)}
+              </button>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+                <button
+                  onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+                  style={{ fontSize: "11px", color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px' }}
+                >
+                  {lang === 'zh' ? 'EN' : '中文'}
+                </button>
+                {/* Theme toggle: sun/moon icon */}
+                <button
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  title={theme === 'dark' ? (lang === 'zh' ? '切换浅色' : 'Light mode') : (lang === 'zh' ? '切换深色' : 'Dark mode')}
+                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px', lineHeight: 1 }}
+                >
+                  {theme === 'dark' ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                    </svg>
+                  )}
+                </button>
+                <button
+                  onClick={() => invoke('open_url', { url: 'https://github.com/openpup/openpup' })}
+                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px' }}
+                  title="GitHub"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Main content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* ── Main content ── */}
+        <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--color-background-primary)' }}>
 
           {/* ── Chat ── */}
           {activeNav === 'chat' && (
             <>
               {/* Memory chips + Context Status */}
               {(memoryChips.length > 0 || contextStats) && (
-                <div className="border-b border-stone-800/60 px-4 py-2 flex items-center justify-between gap-3 bg-stone-900/30">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className="text-[10px] text-stone-600 shrink-0 font-medium">记忆</span>
-                    <div className="flex gap-1.5 flex-wrap flex-1 min-w-0">
-                      {memoryChips.slice(0, 4).map((chip, i) => (
-                        <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-stone-800/80 text-stone-300 border border-stone-700/50 hover:border-stone-600 transition-colors">
-                          <span className="shrink-0">{memoryTypeIcon(chip.memory_type)}</span>
-                          <span className="truncate max-w-[140px]">{chip.content}</span>
-                        </span>
-                      ))}
-                    </div>
+                <div style={{ borderBottom: '0.5px solid var(--color-border-tertiary)', padding: '8px 14px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                    {memoryChips.slice(0, 5).map((chip, i) => (
+                      <span key={i} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0, maxWidth: '180px',
+                        fontSize: "11px", padding: '3px 9px', borderRadius: '20px',
+                        background: 'var(--color-background-secondary)',
+                        border: '0.5px solid var(--color-border-tertiary)',
+                        color: 'var(--color-text-secondary)',
+                        overflow: 'hidden',
+                      }}>
+                        <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0 }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.content}</span>
+                      </span>
+                    ))}
                   </div>
                   {contextStats && (
-                    <div className="text-[10px] text-stone-600 shrink-0 whitespace-nowrap">
-                      📊 {contextStats.message_count} msgs | ~{Math.round(contextStats.estimated_tokens / 1000)}k tokens
+                    <div style={{ flexShrink: 0, fontFamily: 'var(--font-mono)', fontSize: "11px", color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+                      ~{Math.round(contextStats.estimated_tokens / 1000)}k
                       {contextStats.compression_status.is_compressed && (
-                        <span className="ml-1.5 text-stone-500">[compressed]</span>
+                        <span style={{ marginLeft: '4px' }} title="context compressed">{t('ctx_compressed', lang)}</span>
                       )}
                     </div>
                   )}
-                </div>
-              )}
-
-              {/* Skill suggestion */}
-              {skillSuggestion && (
-                <div className="border-b border-amber-900/40 bg-amber-950/30 px-4 py-2.5 flex items-start gap-3">
-                  <span className="text-lg shrink-0">⚡</span>
-                  <div className="flex-1 min-w-0 text-xs">
-                    <span className="font-semibold text-amber-300">{skillSuggestion.skill_name}</span>
-                    <span className="text-stone-400 ml-1.5">— {skillSuggestion.reason}</span>
-                  </div>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button className="px-2.5 py-1 rounded-lg bg-amber-500 text-stone-950 text-xs font-medium"
-                      onClick={async () => { try { await invoke('install_skill_from_git', { repoUrl: skillSuggestion.repo_url, subdir: null }); setSkillSuggestion(null); } catch {} }}>
-                      {t('skill_install_suggestion', lang)}
-                    </button>
-                    <button className="px-2.5 py-1 rounded-lg bg-stone-800 text-stone-400 text-xs"
-                      onClick={() => setSkillSuggestion(null)}>
-                      {t('skill_dismiss_suggestion', lang)}
-                    </button>
-                  </div>
                 </div>
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-auto px-5 py-4 flex flex-col">
-                {/* Load More button */}
-                {!allMessagesLoaded && messages.length > 1 && (
-                  <div className="flex justify-center py-2">
-                    <button
-                      className="px-3 py-1.5 text-xs bg-stone-800 text-stone-400 rounded-lg hover:bg-stone-700 hover:text-stone-300 transition-colors"
-                      onClick={() => void loadOlderMessages()}
-                    >
-                      ↑ 加载更多历史消息
-                    </button>
-                  </div>
-                )}
-                {/* Messages container - space-y-4 for gaps between messages */}
-                <div className="space-y-4">
-                  {messages.map((m) =>
-                    m.role === 'user' ? (
-                      <div key={m.id} className="flex justify-end">
-                        <div className="max-w-sm bg-gradient-to-br from-amber-600/90 to-amber-700/80 backdrop-blur-sm border border-amber-500/30 text-white text-sm px-5 py-3 rounded-3xl rounded-tr-sm shadow-lg">
+              <div
+                ref={chatContainerRef}
+                style={{ flex: 1, overflowY: 'auto', padding: '14px' }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
+                  {messages.map((m) => {
+                    const isNew = !animatedMsgIds.current.has(m.id);
+                    animatedMsgIds.current.add(m.id);
+                    const accentColor = pupLeftBorder(m.pup_name ?? 'Alpha');
+                    return m.role === 'user' ? (
+                      <div key={m.id} className={`flex justify-end${isNew ? ' animate-msg-in' : ''}`}>
+                        <div style={{
+                          maxWidth: '72%',
+                          background: 'var(--color-background-info)',
+                          color: 'var(--color-text-info)',
+                          borderRadius: '10px 10px 4px 10px',
+                          padding: '9px 11px',
+                          fontSize: "13px",
+                          lineHeight: 1.6,
+                        }}>
                           {m.content}
                         </div>
                       </div>
                     ) : (
-                      <div key={m.id} className="flex items-start gap-2.5 max-w-[32rem]">
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-xs shrink-0 mt-0.5 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-500/20">
-                          🐾
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          {m.pup_name && (
-                            <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[m.pup_name] ?? 'bg-stone-700 text-stone-300'}`}>
-                              {m.pup_name}
-                            </span>
-                          )}
-                          <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 text-stone-100 text-sm px-4 py-3 rounded-3xl rounded-tl-sm shadow-md prose prose-invert prose-sm max-w-none">
+                      <div key={m.id} className={isNew ? 'animate-msg-in' : ''} style={{ maxWidth: '80%' }}>
+                        {m.pup_name && (
+                          <span style={{
+                            display: 'inline-block', marginBottom: '4px',
+                            fontSize: "10px", padding: '1px 7px', borderRadius: '10px',
+                            ...pupTagStyle(m.pup_name),
+                          }}>
+                            {m.pup_name}
+                          </span>
+                        )}
+                        <div style={{
+                          background: 'var(--color-background-primary)',
+                          border: '0.5px solid var(--color-border-tertiary)',
+                          borderRadius: '10px 10px 10px 4px',
+                          borderLeft: `2px solid ${accentColor}`,
+                          padding: '9px 11px',
+                          fontSize: "13px",
+                          lineHeight: 1.6,
+                          color: 'var(--color-text-primary)',
+                        }}>
+                          <div className="prose prose-sm max-w-none" style={{ color: 'var(--color-text-primary)' }}>
                             <MarkdownRenderer>{m.content}</MarkdownRenderer>
                           </div>
                         </div>
                       </div>
-                    )
-                  )}
-                {sending && (
-                  <div className="flex items-start gap-2.5 max-w-[32rem]">
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-xs shrink-0 mt-0.5 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-500/20 animate-pulse">
-                      🐾
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className={`self-start text-[11px] px-2.5 py-0.5 rounded-full font-medium ${PUP_TAG[streamingPupName] ?? 'bg-emerald-900/60 text-emerald-300'}`}>
+                    );
+                  })}
+                  {sending && (
+                    <div className="animate-msg-in" style={{ maxWidth: '80%' }}>
+                      <span style={{
+                        display: 'inline-block', marginBottom: '4px',
+                        fontSize: "10px", padding: '1px 7px', borderRadius: '10px',
+                        ...pupTagStyle(streamingPupName || 'Alpha'),
+                      }}>
                         {streamingPupName || 'Alpha'}
                       </span>
-                      {streamingSteps.length > 0 && (
-                        <div className="flex flex-col gap-0.5 pl-1">
-                          {streamingSteps.map((step, i) => {
-                            const isLast = i === streamingSteps.length - 1;
-                            const icon = ACTIVITY_ICON[step.kind] ?? '⚙';
-                            const color = ACTIVITY_COLOR[step.kind] ?? 'text-stone-400';
-                            return (
-                              <div key={i} className={`flex items-center gap-1.5 text-[11px] transition-opacity ${isLast ? 'opacity-100' : 'opacity-40'}`}>
-                                <span className={`shrink-0 ${color}`}>{icon}</span>
-                                <span className={`truncate max-w-[260px] ${color}`}>{step.label}</span>
-                              </div>
-                            );
-                          })}
+                      <div style={{
+                        background: 'var(--color-background-primary)',
+                        border: '0.5px solid var(--color-border-tertiary)',
+                        borderRadius: '10px 10px 10px 4px',
+                        borderLeft: `2px solid ${pupLeftBorder(streamingPupName || 'Alpha')}`,
+                        padding: '9px 11px',
+                        fontSize: "13px",
+                        lineHeight: 1.6,
+                        color: 'var(--color-text-primary)',
+                      }}>
+                        <div className="flex flex-col gap-1.5">
+                          {streamingSteps.length > 0 && (
+                            <div className="flex flex-col gap-0.5">
+                              {streamingSteps.map((step, i) => {
+                                const isLast = i === streamingSteps.length - 1;
+                                const icon = ACTIVITY_ICON[step.kind] ?? '⚙';
+                                return (
+                                  <div key={i} className={`flex items-center gap-1.5 transition-opacity ${isLast ? 'opacity-100' : 'opacity-30'}`} style={{ fontSize: "11px", color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                                    <span className="shrink-0">{icon}</span>
+                                    <span className="truncate" style={{ maxWidth: '320px' }}>{step.label}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {streamingReasoningContent && (
+                            <div className="italic max-h-20 overflow-y-auto" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>
+                              {streamingReasoningContent}
+                            </div>
+                          )}
+                          <div className="prose prose-sm max-w-none" style={{ color: 'var(--color-text-primary)' }}>
+                            {streamingContent
+                              ? <MarkdownRenderer>{streamingContent}</MarkdownRenderer>
+                              : <span className="animate-pulse" style={{ color: 'var(--color-text-tertiary)' }}>{t('chat_thinking', lang)}</span>
+                            }
+                          </div>
                         </div>
-                      )}
-                      {streamingReasoningContent && (
-                        <div className="bg-stone-900/60 border border-stone-700/50 text-stone-400 text-xs px-3 py-2 rounded-xl italic leading-relaxed max-h-24 overflow-y-auto">
-                          <span className="text-stone-500 not-italic mr-1">thinking…</span>
-                          {streamingReasoningContent}
-                        </div>
-                      )}
-                      <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 text-stone-100 text-sm px-4 py-3 rounded-3xl rounded-tl-sm shadow-md prose prose-invert prose-sm max-w-none">
-                        {streamingContent
-                          ? <MarkdownRenderer>{streamingContent}</MarkdownRenderer>
-                          : <span className="text-stone-500 animate-pulse">{t('chat_thinking', lang)}</span>
-                        }
                       </div>
                     </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
               </div>
 
               {/* Input */}
-              <div className="border-t border-stone-800/50 px-4 py-3 flex gap-2.5 shrink-0 bg-gradient-to-t from-stone-950 via-stone-950/80 to-stone-950/50">
+              <div style={{ flexShrink: 0, padding: '10px 14px', borderTop: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+              <div style={{ display: 'flex', gap: '8px', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
                 <textarea
                   ref={inputRef}
-                  className="flex-1 resize-none rounded-2xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 shadow-sm transition-all duration-200"
-                  rows={2}
+                  rows={1}
                   placeholder={t('chat_placeholder_alpha', lang)}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    const el = e.target;
+                    el.style.height = 'auto';
+                    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                  }}
                   onKeyDown={onKeyDown}
+                  style={{
+                    flex: 1, resize: 'none', outline: 'none',
+                    fontSize: "13px", padding: '8px 10px', borderRadius: '8px',
+                    border: '0.5px solid var(--color-border-secondary)',
+                    background: 'var(--color-background-primary)',
+                    color: 'var(--color-text-primary)',
+                    fontFamily: 'inherit',
+                    lineHeight: '1.5',
+                    overflowY: 'auto',
+                  }}
                 />
                 {sending ? (
-                  <button className="self-end px-4 py-3 rounded-xl bg-red-900/60 text-red-400 text-sm font-medium hover:bg-red-900/80 transition-colors border border-red-800/50"
-                    onClick={() => void abort()}>■</button>
+                  <button
+                    onClick={() => void abort()}
+                    style={{
+                      alignSelf: 'flex-end', padding: '8px 14px', borderRadius: '8px', border: 'none',
+                      background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)',
+                      cursor: 'pointer', fontSize: "13px",
+                    }}
+                  >■</button>
                 ) : (
-                  <button className="self-end px-5 py-3 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
-                    onClick={() => void send()} disabled={!input.trim()}>↑</button>
+                  <button
+                    onClick={() => void send()}
+                    disabled={!input.trim()}
+                    style={{
+                      alignSelf: 'flex-end', padding: '8px 14px', borderRadius: '8px', border: 'none',
+                      background: 'var(--color-text-primary)', color: 'var(--color-background-primary)',
+                      cursor: input.trim() ? 'pointer' : 'not-allowed', fontSize: "13px",
+                      opacity: input.trim() ? 1 : 0.25,
+                    }}
+                  >↑</button>
                 )}
+              </div>
               </div>
             </>
           )}
 
           {/* ── Memories ── */}
           {activeNav === 'memories' && (
-            <div className="flex-1 overflow-hidden flex flex-col px-5 py-4">
+            <div className="flex-1 overflow-hidden flex flex-col px-4 py-4">
               <div className="flex items-center gap-1 mb-4 shrink-0">
                 {(['long_term', 'diary'] as const).map((tab) => (
                   <button key={tab} onClick={() => setMemoriesTab(tab)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${memoriesTab === tab ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-300'}`}>
+                    style={{
+                      padding: '3px 10px', borderRadius: '20px', fontSize: "12px", border: 'none', cursor: 'pointer',
+                      fontWeight: memoriesTab === tab ? 500 : 400,
+                      background: memoriesTab === tab ? 'var(--color-background-secondary)' : 'transparent',
+                      color: memoriesTab === tab ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                    }}>
                     {t(tab === 'long_term' ? 'tab_long_term' : 'tab_diary', lang)}
                   </button>
                 ))}
@@ -798,7 +968,7 @@ const AppInner: React.FC = () => {
 
           {/* ── Skills ── */}
           {activeNav === 'skills' && (
-            <div className="flex-1 overflow-auto px-5 py-4"><SkillStore /></div>
+            <div className="flex-1 overflow-hidden flex flex-col px-5 py-4"><SkillClaw /></div>
           )}
 
           {/* ── Pups ── */}
@@ -813,103 +983,39 @@ const AppInner: React.FC = () => {
 
           {/* ── Settings ── */}
           {activeNav === 'settings' && (
-            <div className="flex-1 overflow-auto px-5 py-4 space-y-6 text-xs">
+            <div className="flex-1 overflow-auto px-4 py-4 space-y-8" style={{ fontSize: "13px" }}>
 
-              {/* LLM Config */}
               <LlmConfigPanel />
 
-              <div className="border-t border-stone-800" />
+              <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 
               <section>
-                <h2 className="text-sm font-semibold mb-3 text-stone-200">{t('settings_exec', lang)}</h2>
-                <p className="text-stone-500 mb-3 leading-relaxed">
-                  <span className="text-stone-300 font-medium">{t('settings_leashed', lang)}</span>：{t('settings_leashed_note', lang)} &nbsp;·&nbsp;
-                  <span className="text-stone-300 font-medium">{t('settings_free', lang)}</span>：{t('settings_free_note', lang)}
-                </p>
-                <div className="flex items-center gap-3">
-                  <span className={execMode === 'leashed' ? 'text-amber-400 font-medium' : 'text-stone-500'}>
-                    {t('settings_leashed', lang)}
-                  </span>
-                  <button className={`relative w-11 h-5.5 rounded-full transition-colors ${execMode === 'free_run' ? 'bg-emerald-500' : 'bg-stone-600'}`}
-                    style={{ height: '22px', width: '44px' }}
-                    onClick={async () => {
-                      const next = execMode === 'leashed' ? 'free_run' : 'leashed';
-                      await invoke('set_execution_mode', { mode: next }).catch(() => {});
-                      setExecMode(next);
-                    }}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${execMode === 'free_run' ? 'translate-x-6' : 'translate-x-0.5'}`} />
-                  </button>
-                  <span className={execMode === 'free_run' ? 'text-emerald-400 font-medium' : 'text-stone-500'}>
-                    {t('settings_free', lang)}
-                  </span>
-                </div>
-              </section>
-
-              <div className="border-t border-stone-800" />
-
-              <section>
-                <h2 className="text-sm font-semibold mb-3 text-stone-200">{t('settings_theme', lang)}</h2>
-                <div className="flex gap-3">
-                  {/* Dark – GitHub style */}
-                  <button
-                    onClick={() => setTheme('dark')}
-                    className={`flex flex-col items-center gap-2 px-4 py-3 rounded-xl border text-xs font-medium transition-all ${
-                      theme === 'dark'
-                        ? 'border-amber-500 text-amber-400 bg-amber-500/10'
-                        : 'border-stone-700 text-stone-400 hover:border-stone-600'
-                    }`}
-                  >
-                    <span className="w-10 h-6 rounded-md overflow-hidden border border-stone-600 flex">
-                      <span className="w-3 h-full bg-[#161b22]" />
-                      <span className="flex-1 h-full bg-[#0d1117]" />
-                    </span>
-                    {lang === 'zh' ? '深色' : 'Dark'}
-                  </button>
-
-                  {/* Light – warm */}
-                  <button
-                    onClick={() => setTheme('light')}
-                    className={`flex flex-col items-center gap-2 px-4 py-3 rounded-xl border text-xs font-medium transition-all ${
-                      theme === 'light'
-                        ? 'border-amber-500 text-amber-400 bg-amber-500/10'
-                        : 'border-stone-700 text-stone-400 hover:border-stone-600'
-                    }`}
-                  >
-                    <span className="w-10 h-6 rounded-md overflow-hidden border border-stone-600 flex">
-                      <span className="w-3 h-full bg-[#f6f8fa]" />
-                      <span className="flex-1 h-full bg-[#ffffff]" />
-                    </span>
-                    {lang === 'zh' ? '浅色' : 'Light'}
-                  </button>
-                </div>
-              </section>
-
-              <div className="border-t border-stone-800" />
-
-              <section>
-                <h2 className="text-sm font-semibold mb-3 text-stone-200">{t('settings_backup', lang)}</h2>
-                <button className="px-4 py-2 rounded-lg bg-stone-800 border border-stone-700 text-stone-300 text-xs font-medium hover:bg-stone-700 disabled:opacity-40 transition-colors"
+                <h2 className="mb-3" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>{t('settings_backup', lang)}</h2>
+                <button
+                  style={{ padding: '6px 12px', borderRadius: '8px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', fontSize: "13px", cursor: exporting ? 'not-allowed' : 'pointer', opacity: exporting ? 0.4 : 1 }}
                   onClick={() => void exportWorkspace()} disabled={exporting}>
                   {exporting ? t('settings_exporting', lang) : t('settings_export', lang)}
                 </button>
               </section>
 
               <section>
-                <h2 className="text-sm font-semibold mb-3 text-stone-200">{t('settings_restore', lang)}</h2>
-                <input className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 mb-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                <h2 className="mb-3" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>{t('settings_restore', lang)}</h2>
+                <input
+                  className="w-full focus:outline-none mb-3"
+                  style={{ fontSize: "13px", padding: '7px 10px', borderRadius: '8px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-primary)', color: 'var(--color-text-primary)' }}
                   placeholder={t('settings_restore_ph', lang)} value={importPath} onChange={(e) => setImportPath(e.target.value)} />
-                <button className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-medium disabled:opacity-40 hover:bg-emerald-500 transition-colors"
+                <button
+                  style={{ padding: '6px 12px', borderRadius: '8px', border: 'none', background: '#1D9E75', color: '#fff', fontSize: "13px", cursor: importing ? 'not-allowed' : 'pointer', opacity: importing ? 0.4 : 1 }}
                   onClick={() => void importWorkspace()} disabled={importing}>
                   {importing ? t('settings_importing', lang) : t('settings_import', lang)}
                 </button>
               </section>
 
-              {settingsErr && <p className="text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{settingsErr}</p>}
-              {settingsMsg && <p className="text-emerald-400 bg-emerald-900/20 px-3 py-2 rounded-lg">{settingsMsg}</p>}
+              {settingsErr && <p style={{ color: 'var(--color-text-danger)', background: 'var(--color-background-danger)', padding: '8px 10px', borderRadius: '8px', fontSize: "13px" }}>{settingsErr}</p>}
+              {settingsMsg && <p style={{ color: 'var(--color-text-success)', background: 'var(--color-background-success)', padding: '8px 10px', borderRadius: '8px', fontSize: "13px" }}>{settingsMsg}</p>}
             </div>
           )}
         </div>
-      </div>
 
       {permissionRequest && (
         <PermissionDialog request={permissionRequest}

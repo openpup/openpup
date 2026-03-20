@@ -15,6 +15,17 @@ interface McpToolInfo {
   description: string;
 }
 
+const inputStyle: React.CSSProperties = {
+  borderRadius: 8,
+  background: 'var(--color-background-primary)',
+  border: '1px solid var(--color-border-secondary)',
+  padding: '6px 12px',
+  fontSize: 12,
+  color: 'var(--color-text-primary)',
+  outline: 'none',
+  width: '100%',
+};
+
 export const McpSettings: React.FC = () => {
   const { lang } = useLang();
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -27,8 +38,7 @@ export const McpSettings: React.FC = () => {
   const [token, setToken] = useState('');
   const [description, setDescription] = useState('');
   const [adding, setAdding] = useState(false);
-
-  const INPUT = 'rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50';
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = () =>
     invoke<McpServer[]>('list_mcp_servers').then(setServers).catch((e) => setError(String(e)));
@@ -66,8 +76,8 @@ export const McpSettings: React.FC = () => {
   };
 
   const remove = async (n: string) => {
-    if (!window.confirm(`删除 MCP 服务器 "${n}"？`)) return;
     await invoke('remove_mcp_server', { name: n }).catch((e) => setError(String(e)));
+    setConfirmDelete(null);
     await load();
   };
 
@@ -77,68 +87,183 @@ export const McpSettings: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4 text-xs">
-      <h3 className="text-sm font-semibold text-stone-100">{t('mcp_title', lang)}</h3>
-      {error && <p className="text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontSize: 12 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
+        {t('mcp_title', lang)}
+      </h3>
+      {error && (
+        <p style={{
+          color: 'var(--color-text-danger)',
+          background: 'var(--color-background-danger)',
+          padding: '6px 12px',
+          borderRadius: 8,
+          margin: 0,
+        }}>
+          {error}
+        </p>
+      )}
 
       {/* Built-in local server */}
-      <div className="flex items-center justify-between rounded-xl border border-stone-800 bg-stone-900/40 px-4 py-3">
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderRadius: 12,
+        border: '1px solid var(--color-border-tertiary)',
+        background: 'var(--color-background-secondary)',
+        padding: '12px 16px',
+      }}>
         <div>
-          <span className="font-medium text-stone-200">local</span>
-          <span className="ml-2 text-stone-500">{t('mcp_builtin', lang)} (ping / read_file / write_file / open_browser)</span>
+          <span style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>local</span>
+          <span style={{
+            marginLeft: 8,
+            fontSize: 10,
+            padding: '1px 6px',
+            borderRadius: 999,
+            background: 'var(--color-background-secondary)',
+            color: 'var(--color-text-tertiary)',
+            border: '1px solid var(--color-border-tertiary)',
+          }}>
+            {t('mcp_builtin', lang)}
+          </span>
+          <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 6 }}>
+            (ping / read_file / write_file / open_browser)
+          </span>
         </div>
-        <span className="text-emerald-400 text-[11px] font-medium">{t('mcp_always_on', lang)}</span>
+        <span style={{
+          fontSize: 11,
+          fontWeight: 500,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: 'var(--color-background-success)',
+          color: 'var(--color-text-success)',
+        }}>
+          {t('mcp_always_on', lang)}
+        </span>
       </div>
 
       {/* Dynamic servers */}
       {servers.map((s) => (
-        <div key={s.name} className="flex items-center justify-between rounded-xl border border-stone-800 bg-stone-900/40 px-4 py-3 gap-2 hover:border-stone-700 transition-colors">
-          <div className="min-w-0 flex-1">
-            <div className="font-medium text-stone-200">{s.name}</div>
-            <div className="text-stone-500 truncate">{s.base_url}{s.description ? ` — ${s.description}` : ''}</div>
+        <div
+          key={s.name}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderRadius: 12,
+            border: '1px solid var(--color-border-tertiary)',
+            background: 'var(--color-background-secondary)',
+            padding: '12px 16px',
+            gap: 8,
+          }}
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{s.name}</div>
+            <div style={{ color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {s.base_url}{s.description ? ` — ${s.description}` : ''}
+            </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <button
               onClick={() => void toggle(s.name, !s.enabled)}
-              className={`px-2 py-1 rounded-lg text-[11px] transition-colors ${s.enabled ? 'bg-emerald-900/60 text-emerald-300 hover:bg-emerald-900/80' : 'bg-stone-700 text-stone-300 hover:bg-stone-600'}`}
+              style={s.enabled ? {
+                padding: '4px 8px',
+                borderRadius: 8,
+                background: 'var(--color-background-success)',
+                color: 'var(--color-text-success)',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 11,
+              } : {
+                padding: '4px 8px',
+                borderRadius: 8,
+                background: 'var(--color-background-secondary)',
+                color: 'var(--color-text-tertiary)',
+                border: '1px solid var(--color-border-secondary)',
+                cursor: 'pointer',
+                fontSize: 11,
+              }}
             >
               {s.enabled ? t('mcp_enabled', lang) : t('mcp_disabled', lang)}
             </button>
-            <button onClick={() => void remove(s.name)} className="px-2 py-1 rounded-lg bg-red-900/40 text-red-400 text-[11px] hover:bg-red-900/60 transition-colors">
-              {t('mcp_delete', lang)}
-            </button>
+            {confirmDelete === s.name ? (
+              <>
+                <button
+                  onClick={() => void remove(s.name)}
+                  style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 11 }}
+                >
+                  {lang === 'zh' ? '确认删除' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(null)}
+                  style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none', cursor: 'pointer', fontSize: 11 }}
+                >
+                  {lang === 'zh' ? '取消' : 'Cancel'}
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(s.name)}
+                style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 11 }}
+              >
+                {t('mcp_delete', lang)}
+              </button>
+            )}
           </div>
         </div>
       ))}
 
       {/* Add form */}
-      <div className="rounded-xl border border-stone-700 bg-stone-900/40 px-4 py-3 space-y-2.5">
-        <div className="font-medium text-stone-300 mb-1">{t('mcp_add_title', lang)}</div>
-        <div className="grid grid-cols-2 gap-2">
+      <div style={{
+        borderRadius: 12,
+        border: '1px solid var(--color-border-tertiary)',
+        background: 'var(--color-background-secondary)',
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}>
+        <div style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>{t('mcp_add_title', lang)}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('mcp_name_ph', lang)}
-            value={name} onChange={(e) => setName(e.target.value)}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('mcp_url_ph', lang)}
-            value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
           />
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('mcp_token_ph', lang)}
             type="password"
-            value={token} onChange={(e) => setToken(e.target.value)}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
           />
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('mcp_desc_ph', lang)}
-            value={description} onChange={(e) => setDescription(e.target.value)}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
           />
         </div>
         <button
-          className="px-3 py-2 rounded-lg bg-amber-500 text-stone-950 text-xs font-medium disabled:opacity-50 hover:bg-amber-400 transition-colors mt-1"
+          style={{
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: 'var(--color-text-primary)',
+            color: 'var(--color-background-primary)',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 500,
+            marginTop: 4,
+            opacity: (adding || !name.trim() || !baseUrl.trim()) ? 0.5 : 1,
+          }}
           disabled={adding || !name.trim() || !baseUrl.trim()}
           onClick={() => void add()}
         >
@@ -147,31 +272,50 @@ export const McpSettings: React.FC = () => {
       </div>
 
       {/* Discovered tools */}
-      <div className="border-t border-stone-800 pt-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-semibold text-stone-200">{t('mcp_tools_title', lang)} ({tools.length})</span>
+      <div style={{ borderTop: '1px solid var(--color-border-primary)', paddingTop: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>
+            {t('mcp_tools_title', lang)} ({tools.length})
+          </span>
           <button
             onClick={() => void refreshTools()}
             disabled={refreshing}
-            className="px-3 py-1.5 rounded-lg bg-stone-800 border border-stone-700 text-stone-300 text-xs hover:bg-stone-700 disabled:opacity-50 transition-colors"
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              color: 'var(--color-text-secondary)',
+              fontSize: 12,
+              cursor: 'pointer',
+              opacity: refreshing ? 0.5 : 1,
+            }}
           >
             {refreshing ? t('mcp_refreshing', lang) : t('mcp_refresh', lang)}
           </button>
         </div>
         {tools.length === 0 ? (
-          <p className="text-stone-600">{t('mcp_tools_empty', lang)}</p>
+          <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>{t('mcp_tools_empty', lang)}</p>
         ) : (
-          <div className="space-y-1 max-h-60 overflow-auto">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 240, overflowY: 'auto' }}>
             {tools.map((tool) => (
               <div
                 key={`${tool.server}:${tool.name}`}
-                className="flex items-start gap-2 rounded-lg px-3 py-2 bg-stone-800/50"
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  background: 'var(--color-background-primary)',
+                  border: '1px solid var(--color-border-tertiary)',
+                }}
               >
-                <span className="text-stone-500 shrink-0 mt-0.5">[{tool.server}]</span>
-                <div className="min-w-0">
-                  <span className="font-medium text-stone-200">{tool.name}</span>
+                <span style={{ color: 'var(--color-text-tertiary)', flexShrink: 0, marginTop: 2 }}>[{tool.server}]</span>
+                <div style={{ minWidth: 0 }}>
+                  <span style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{tool.name}</span>
                   {tool.description && (
-                    <span className="text-stone-500 ml-1.5">{tool.description}</span>
+                    <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 6 }}>{tool.description}</span>
                   )}
                 </div>
               </div>

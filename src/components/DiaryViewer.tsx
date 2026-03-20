@@ -20,23 +20,46 @@ export const DiaryViewer: React.FC = () => {
   };
 
   return (
-    <div className="flex gap-3 h-full min-h-0">
-      <div className="w-32 shrink-0 space-y-0.5">
-        {dates.length === 0 && <p className="text-xs text-stone-500 px-2">{t('diary_empty', lang)}</p>}
+    <div style={{ display: 'flex', gap: '12px', height: '100%', minHeight: 0 }}>
+      <div style={{ width: '128px', flexShrink: 0 }}>
+        {dates.length === 0 && (
+          <p style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', padding: '0 8px' }}>
+            {t('diary_empty', lang)}
+          </p>
+        )}
         {dates.map((d) => (
-          <button key={d} onClick={() => void openDate(d)}
-            className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-colors font-mono ${
-              selected === d ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-stone-400 hover:bg-stone-800 hover:text-stone-200'
-            }`}>
+          <button
+            key={d}
+            onClick={() => void openDate(d)}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              border: selected === d ? '1px solid var(--color-border-secondary)' : '1px solid transparent',
+              background: selected === d ? 'var(--color-background-secondary)' : 'transparent',
+              color: selected === d ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+              marginBottom: '2px',
+              transition: 'background 0.15s, color 0.15s',
+            }}
+          >
             {d}
           </button>
         ))}
       </div>
-      <div className="flex-1 overflow-auto text-xs text-stone-200 min-w-0">
-        {!selected && <p className="text-stone-500">{t('diary_select', lang)}</p>}
-        {loading && <p className="text-stone-500">{t('diary_loading', lang)}</p>}
+      <div style={{ flex: 1, overflow: 'auto', fontSize: '13px', color: 'var(--color-text-primary)', minWidth: 0 }}>
+        {!selected && (
+          <p style={{ color: 'var(--color-text-tertiary)' }}>{t('diary_select', lang)}</p>
+        )}
+        {loading && (
+          <p style={{ color: 'var(--color-text-tertiary)' }}>{t('diary_loading', lang)}</p>
+        )}
         {selected && !loading && (
-          <div className="prose prose-invert prose-sm max-w-none prose-p:text-stone-300 prose-headings:text-stone-100">
+          <div className="prose prose-sm max-w-none">
             <ReactMarkdown>{content}</ReactMarkdown>
           </div>
         )}

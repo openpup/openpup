@@ -20,11 +20,11 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  pending: 'bg-stone-700 text-stone-300',
-  in_progress: 'bg-amber-900/60 text-amber-300',
-  done: 'bg-emerald-900/60 text-emerald-300',
-  failed: 'bg-red-900/60 text-red-300',
+const STATUS_COLOR: Record<string, React.CSSProperties> = {
+  pending:     { background: 'var(--color-background-secondary)', color: 'var(--color-text-tertiary)' },
+  in_progress: { background: 'var(--color-background-info)',      color: 'var(--color-text-info)' },
+  done:        { background: 'var(--color-background-success)',   color: 'var(--color-text-success)' },
+  failed:      { background: 'var(--color-background-danger)',    color: 'var(--color-text-danger)' },
 };
 
 export const TaskManager: React.FC = () => {
@@ -103,29 +103,78 @@ export const TaskManager: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col gap-4 text-xs">
-      <h3 className="text-sm font-semibold text-stone-100">{t('task_title', lang)}</h3>
-      {error && <p className="text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '13px' }}>
+      <h3 style={{ fontSize: '15px', fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
+        {t('task_title', lang)}
+      </h3>
+      {error && (
+        <p style={{
+          color: 'var(--color-text-danger)',
+          background: 'var(--color-background-danger)',
+          padding: '8px 12px',
+          borderRadius: '8px',
+          margin: 0,
+        }}>
+          {error}
+        </p>
+      )}
 
       {/* Add task */}
-      <div className="rounded-xl border border-stone-800 bg-stone-900/60 px-4 py-3 space-y-2.5">
-        <div className="font-medium text-stone-300">{t('task_new', lang)}</div>
+      <div style={{
+        borderRadius: '12px',
+        border: '1px solid var(--color-border-tertiary)',
+        background: 'var(--color-background-secondary)',
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+      }}>
+        <div style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>{t('task_new', lang)}</div>
         <input
-          className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+          style={{
+            width: '100%',
+            borderRadius: '8px',
+            background: 'var(--color-background-primary)',
+            border: '1px solid var(--color-border-secondary)',
+            padding: '8px 12px',
+            fontSize: '13px',
+            color: 'var(--color-text-primary)',
+            outline: 'none',
+            boxSizing: 'border-box',
+          }}
           placeholder={t('task_desc_placeholder', lang)}
           value={newDesc}
           onChange={(e) => setNewDesc(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void addTask(); }}
         />
-        <div className="flex gap-2">
+        <div style={{ display: 'flex', gap: '8px' }}>
           <input
-            className="flex-1 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+            style={{
+              flex: 1,
+              borderRadius: '8px',
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              padding: '8px 12px',
+              fontSize: '13px',
+              color: 'var(--color-text-primary)',
+              outline: 'none',
+            }}
             placeholder={t('task_pup_placeholder', lang)}
             value={newPup}
             onChange={(e) => setNewPup(e.target.value)}
           />
           <button
-            className="px-3 py-2 rounded-lg bg-amber-500 text-stone-950 font-medium disabled:opacity-50 hover:bg-amber-400 transition-colors"
+            style={{
+              padding: '8px 12px',
+              borderRadius: '8px',
+              background: '#1D9E75',
+              color: '#ffffff',
+              fontWeight: 500,
+              fontSize: '13px',
+              border: 'none',
+              cursor: 'pointer',
+              opacity: adding || !newDesc.trim() ? 0.5 : 1,
+            }}
             disabled={adding || !newDesc.trim()}
             onClick={() => void addTask()}
           >
@@ -135,14 +184,16 @@ export const TaskManager: React.FC = () => {
       </div>
 
       {loading ? (
-        <p className="text-stone-500">加载中…</p>
+        <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>加载中…</p>
       ) : tasks.length === 0 ? (
-        <p className="text-stone-500">{t('task_empty', lang)}</p>
+        <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>{t('task_empty', lang)}</p>
       ) : (
         <>
           {pending.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-stone-500 font-medium">{t('task_active', lang)} ({pending.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
+                {t('task_active', lang)} ({pending.length})
+              </div>
               {pending.map((task) => (
                 <TaskCard
                   key={task.id}
@@ -159,8 +210,10 @@ export const TaskManager: React.FC = () => {
           )}
 
           {done.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-stone-500 font-medium">{t('task_done_section', lang)} ({done.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
+                {t('task_done_section', lang)} ({done.length})
+              </div>
               {done.map((task) => (
                 <TaskCard
                   key={task.id}
@@ -193,31 +246,73 @@ const TaskCard: React.FC<{
   const isDone = task.status === 'done' || task.status === 'failed';
 
   return (
-    <div className={`rounded-xl border px-4 py-3 space-y-1.5 transition-colors ${isDone ? 'border-stone-800 opacity-60' : 'border-stone-700 bg-stone-900/40'}`}>
-      <div className="flex items-start gap-2">
-        <button onClick={onToggle} className="flex-1 min-w-0 text-left">
-          <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] mr-2 font-medium ${STATUS_COLOR[task.status] ?? 'bg-stone-700 text-stone-300'}`}>
+    <div style={{
+      borderRadius: '12px',
+      border: '1px solid var(--color-border-tertiary)',
+      padding: '12px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px',
+      background: 'var(--color-background-secondary)',
+      opacity: isDone ? 0.6 : 1,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+        <button
+          onClick={onToggle}
+          style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+        >
+          <span style={{
+            display: 'inline-flex',
+            padding: '2px 8px',
+            borderRadius: '9999px',
+            fontSize: '11px',
+            marginRight: '8px',
+            fontWeight: 500,
+            ...(STATUS_COLOR[task.status] ?? STATUS_COLOR.pending),
+          }}>
             {statusLabel(task.status)}
           </span>
-          <span className={isDone ? 'line-through text-stone-500' : 'text-stone-200'}>
+          <span style={{
+            color: isDone ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
+            textDecoration: isDone ? 'line-through' : 'none',
+            fontSize: '13px',
+          }}>
             {task.description}
           </span>
           {task.assigned_pup && (
-            <span className="ml-2 text-stone-600">→ {task.assigned_pup}</span>
+            <span style={{ marginLeft: '8px', color: 'var(--color-text-tertiary)', fontSize: '13px' }}>
+              → {task.assigned_pup}
+            </span>
           )}
         </button>
-        <div className="flex items-center gap-1 shrink-0">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
           {!isDone && (
             <>
               <button
                 onClick={() => onSetStatus(task.id, 'in_progress')}
-                className="px-2 py-0.5 rounded-lg bg-amber-900/40 text-amber-300 text-[10px] hover:bg-amber-900/60 transition-colors"
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: '8px',
+                  background: 'var(--color-background-secondary)',
+                  color: 'var(--color-text-primary)',
+                  fontSize: '11px',
+                  border: '1px solid var(--color-border-secondary)',
+                  cursor: 'pointer',
+                }}
               >
                 {t('task_start', _lang as Parameters<typeof t>[1])}
               </button>
               <button
                 onClick={() => onSetStatus(task.id, 'done')}
-                className="px-2 py-0.5 rounded-lg bg-emerald-900/40 text-emerald-300 text-[10px] hover:bg-emerald-900/60 transition-colors"
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: '8px',
+                  background: 'var(--color-background-secondary)',
+                  color: 'var(--color-text-primary)',
+                  fontSize: '11px',
+                  border: '1px solid var(--color-border-secondary)',
+                  cursor: 'pointer',
+                }}
               >
                 {t('task_complete', _lang as Parameters<typeof t>[1])}
               </button>
@@ -226,24 +321,40 @@ const TaskCard: React.FC<{
           {isDone && (
             <button
               onClick={() => onSetStatus(task.id, 'pending')}
-              className="px-2 py-0.5 rounded-lg bg-stone-700 text-stone-400 text-[10px] hover:bg-stone-600 transition-colors"
+              style={{
+                padding: '2px 8px',
+                borderRadius: '8px',
+                background: 'var(--color-background-secondary)',
+                color: 'var(--color-text-primary)',
+                fontSize: '11px',
+                border: '1px solid var(--color-border-secondary)',
+                cursor: 'pointer',
+              }}
             >
               {t('task_reopen', _lang as Parameters<typeof t>[1])}
             </button>
           )}
           <button
             onClick={() => onDelete(task.id)}
-            className="px-2 py-0.5 rounded-lg bg-red-900/40 text-red-400 text-[10px] hover:bg-red-900/60 transition-colors"
+            style={{
+              padding: '2px 8px',
+              borderRadius: '8px',
+              background: 'var(--color-background-secondary)',
+              color: 'var(--color-text-danger)',
+              fontSize: '11px',
+              border: '1px solid var(--color-border-secondary)',
+              cursor: 'pointer',
+            }}
           >
             {t('task_delete', _lang as Parameters<typeof t>[1])}
           </button>
         </div>
       </div>
       {expanded && (
-        <div className="pl-1 space-y-1 text-[11px] text-stone-500">
+        <div style={{ paddingLeft: '4px', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
           <div>{t('task_created_at', _lang as Parameters<typeof t>[1])}：{relativeTime(task.created_at)}</div>
           {task.completed_at && <div>{t('task_completed_at', _lang as Parameters<typeof t>[1])}：{relativeTime(task.completed_at)}</div>}
-          {task.result && <div className="text-stone-400">{task.result}</div>}
+          {task.result && <div style={{ color: 'var(--color-text-secondary)' }}>{task.result}</div>}
         </div>
       )}
     </div>

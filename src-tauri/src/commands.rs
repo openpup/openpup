@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use reqwest;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
@@ -315,44 +314,6 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<InstalledSkil
 }
 
 #[tauri::command]
-pub async fn install_skill_from_git(
-    state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
-    repo_url: String,
-    subdir: Option<String>,
-) -> Result<Vec<String>, String> {
-    let names = registry(&state)
-        .install_from_git(&repo_url, subdir.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
-    // Notify all views so SkillStore can hot-reload
-    let _ = app_handle.emit("skill_installed", &names);
-    Ok(names)
-}
-
-#[tauri::command]
-pub async fn write_skill_toml(
-    state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
-    toml_content: String,
-) -> Result<String, String> {
-    let name = registry(&state)
-        .install_skill_toml(&toml_content)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = app_handle.emit("skill_installed", vec![name.clone()]);
-    Ok(name)
-}
-
-#[tauri::command]
-pub async fn uninstall_skill(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    registry(&state)
-        .uninstall(&name)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn set_skill_enabled(
     state: State<'_, AppState>,
     name: String,
@@ -622,8 +583,6 @@ pub async fn get_llm_config(state: State<'_, AppState>) -> Result<LlmConfigInfo,
 /// `api_key` is intentionally absent — the LLM must never see it.
 #[derive(Serialize)]
 pub struct SafeConfig {
-    /// Where `install_from_git` puts downloaded skills (always this path).
-    pub skills_cache_path: String,
     /// User-configured extra skill directories (from config.toml [skills]).
     pub skills_search_paths: Vec<String>,
     /// Primary LLM model name.
@@ -638,14 +597,8 @@ pub struct SafeConfig {
 
 #[tauri::command]
 pub async fn get_safe_config() -> Result<SafeConfig, String> {
-    let cfg = crate::config::load(); // api_key decrypted in memory but not returned
-    let skills_cache_path = dirs::home_dir()
-        .map(|h| h.join(".openpup").join("skills_cache"))
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.openpup/skills_cache"))
-        .to_string_lossy()
-        .to_string();
+    let cfg = crate::config::load();
     Ok(SafeConfig {
-        skills_cache_path,
         skills_search_paths: cfg.skills.search_paths,
         llm_model: cfg.llm.model,
         llm_provider: cfg.llm.provider,
@@ -827,49 +780,6 @@ pub async fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), S
     memory.delete_task(&id).await.map_err(|e| e.to_string())
 }
 
-// ─── Skill manifest fetch (for vetting before install) ────────────────────────
-
-/// Fetch the raw TOML content of a skill manifest from a GitHub repo URL.
-#[tauri::command]
-pub async fn fetch_skill_manifest(
-    repo_url: String,
-    subdir: Option<String>,
-) -> Result<String, String> {
-    let raw_url = github_to_raw_url(&repo_url, subdir.as_deref())?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(&raw_url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "HTTP {} fetching manifest: {}",
-            resp.status(),
-            raw_url
-        ));
-    }
-    resp.text().await.map_err(|e| e.to_string())
-}
-
-fn github_to_raw_url(repo_url: &str, subdir: Option<&str>) -> Result<String, String> {
-    let base = repo_url.trim_end_matches('/').trim_end_matches(".git");
-    if !base.contains("github.com") {
-        return Err(format!(
-            "fetch_skill_manifest only supports GitHub URLs, got: {repo_url}"
-        ));
-    }
-    let raw_base = base.replace("https://github.com/", "https://raw.githubusercontent.com/");
-    let path = match subdir.filter(|s| !s.is_empty()) {
-        Some(sub) => format!("{raw_base}/main/{sub}/skill.toml"),
-        None => format!("{raw_base}/main/skill.toml"),
-    };
-    Ok(path)
-}
-
 // ─── Permissions ──────────────────────────────────────────────────────────────
 
 /// Called by the frontend when the user clicks "Allow" in the PermissionDialog.
@@ -963,18 +873,19 @@ pub struct ConvMessage {
     pub timestamp: i64,
 }
 
-/// Load conversation history for a specific pup (for Pack direct thread view).
+/// Load conversation history for a specific pup.
 #[tauri::command]
 pub async fn get_pup_conversation(
     state: State<'_, AppState>,
     pup_key: String,
     limit: Option<i64>,
+    before_timestamp: Option<i64>,
 ) -> Result<Vec<ConvMessage>, String> {
     let limit = limit.unwrap_or(100);
     let rows = state
         .alpha
         .memory
-        .get_pup_conversation_display(&pup_key, limit)
+        .get_pup_conversation_display(&pup_key, limit, before_timestamp)
         .await
         .map_err(|e| e.to_string())?;
     Ok(rows

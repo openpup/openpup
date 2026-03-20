@@ -278,6 +278,14 @@ impl AlphaPup {
             .into_iter()
             .filter(|t| t.status == "pending" || t.status == "in_progress")
             .collect();
+        // Emit routing-start immediately so the UI shows progress before classify_intent LLM call.
+        let _ = app_handle.emit(
+            "stream_activity",
+            ActivityEvent {
+                kind: "routing".into(),
+                label: "…".into(),
+            },
+        );
         let pup_key = if let Some(forced) = forced_pup {
             forced
         } else if let Some(mention) = Self::extract_at_mention(msg, &self.pup_configs).await {
@@ -288,7 +296,7 @@ impl AlphaPup {
         };
         debug!("[alpha] do_stream: pup_key={pup_key:?}");
 
-        // Notify the UI which pup/skill is handling this request
+        // Notify the UI which pup is handling this request (now that we know).
         let _ = app_handle.emit(
             "stream_activity",
             ActivityEvent {
@@ -553,10 +561,6 @@ impl AlphaPup {
             &self.abort_flag,
         )
         .await
-        .map_err(|e| {
-            let _ = handle2.emit("stream_error", e.to_string());
-            e
-        })
     }
 
     // ── Unified agent tool-call loop ──────────────────────────────────────────

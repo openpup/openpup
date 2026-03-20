@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use tracing::debug;
 use serde_json::Value;
+use tracing::debug;
 
 use crate::memory::system::MemorySystem;
 

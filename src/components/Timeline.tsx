@@ -30,15 +30,15 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  completed: 'text-emerald-400',
-  failed: 'text-red-400',
-  running: 'text-yellow-400',
+const STATUS_COLOR: Record<string, React.CSSProperties> = {
+  completed: { color: 'var(--color-text-success)' },
+  failed:    { color: 'var(--color-text-danger)' },
+  running:   { color: 'var(--color-text-info)' },
 };
 
 const PUP_COLORS: Record<string, string> = {
-  Alpha: 'bg-emerald-500',
-  You: 'bg-amber-500',
+  Alpha: '#1D9E75',
+  You:   '#BA7517',
 };
 
 export const Timeline: React.FC = () => {
@@ -121,11 +121,20 @@ export const Timeline: React.FC = () => {
   ];
 
   return (
-    <div className="h-full flex flex-col">
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Search bar */}
-      <div className="flex gap-2 mb-3">
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
         <input
-          className="flex-1 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+          style={{
+            flex: 1,
+            borderRadius: '8px',
+            background: 'var(--color-background-secondary)',
+            border: '1px solid var(--color-border-secondary)',
+            padding: '6px 12px',
+            fontSize: '13px',
+            color: 'var(--color-text-primary)',
+            outline: 'none',
+          }}
           placeholder={t('timeline_search', lang)}
           value={searchQuery}
           onChange={(e) => {
@@ -135,7 +144,16 @@ export const Timeline: React.FC = () => {
           onKeyDown={(e) => { if (e.key === 'Enter') void doSearch(searchQuery); }}
         />
         <button
-          className="px-3 py-2 rounded-lg bg-stone-800 border border-stone-700 text-stone-300 text-xs hover:bg-stone-700 disabled:opacity-50 transition-colors"
+          style={{
+            padding: '6px 12px',
+            borderRadius: '8px',
+            background: 'var(--color-background-secondary)',
+            border: '1px solid var(--color-border-secondary)',
+            color: 'var(--color-text-primary)',
+            fontSize: '13px',
+            cursor: 'pointer',
+            opacity: searching ? 0.5 : 1,
+          }}
           disabled={searching}
           onClick={() => void doSearch(searchQuery)}
         >
@@ -143,7 +161,15 @@ export const Timeline: React.FC = () => {
         </button>
         {searchResults !== null && (
           <button
-            className="px-2 py-1 rounded-lg text-stone-500 text-xs hover:text-stone-300 transition-colors"
+            style={{
+              padding: '4px 8px',
+              borderRadius: '8px',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--color-text-tertiary)',
+              fontSize: '13px',
+              cursor: 'pointer',
+            }}
             onClick={() => { setSearchResults(null); setSearchQuery(''); }}
           >
             {t('timeline_clear', lang)}
@@ -153,22 +179,38 @@ export const Timeline: React.FC = () => {
 
       {/* Filter tabs — hidden while search is active */}
       {searchResults === null && (
-        <div className="flex gap-1.5 mb-4">
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
           {tabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setFilter(tab.key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                filter === tab.key
-                  ? 'bg-stone-800 text-stone-100'
-                  : 'text-stone-400 hover:text-stone-300'
-              }`}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '13px',
+                fontWeight: 500,
+                cursor: 'pointer',
+                background: 'transparent',
+                border: filter === tab.key
+                  ? '0.5px solid var(--color-border-secondary)'
+                  : '0.5px solid transparent',
+                color: filter === tab.key
+                  ? 'var(--color-text-primary)'
+                  : 'var(--color-text-tertiary)',
+              }}
             >
               {tab.label}
             </button>
           ))}
           <button
-            className="ml-auto text-xs text-stone-500 hover:text-stone-400 transition-colors"
+            style={{
+              marginLeft: 'auto',
+              fontSize: '13px',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--color-text-tertiary)',
+              cursor: 'pointer',
+            }}
             onClick={() => void load()}
           >
             {t('timeline_refresh', lang)}
@@ -179,47 +221,87 @@ export const Timeline: React.FC = () => {
       {/* Search results */}
       {searchResults !== null ? (
         searchResults.length === 0 ? (
-          <div className="text-xs text-stone-500">{t('timeline_no_results', lang)}</div>
+          <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)' }}>{t('timeline_no_results', lang)}</div>
         ) : (
-          <div className="flex-1 overflow-auto space-y-0 divide-y divide-stone-800">
+          <div style={{ flex: 1, overflowY: 'auto' }}>
             {searchResults.map((evt, i) => (
-              <div key={i} className="flex items-start gap-3 py-3">
-                <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${PUP_COLORS[evt.pup_name] ?? 'bg-stone-500'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-stone-500 mb-0.5">{evt.pup_name} · {relativeTime(evt.timestamp)}</div>
-                  <div className="text-sm text-stone-200 truncate">{evt.content}</div>
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  padding: '12px 0',
+                  borderBottom: '1px solid var(--color-border-tertiary)',
+                }}
+              >
+                <div style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  marginTop: '6px',
+                  flexShrink: 0,
+                  background: PUP_COLORS[evt.pup_name] ?? 'var(--color-text-tertiary)',
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
+                    {evt.pup_name} · {relativeTime(evt.timestamp)}
+                  </div>
+                  <div style={{ fontSize: '12.5px', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {evt.content}
+                  </div>
                 </div>
-                <div className="text-[10px] text-stone-600 shrink-0 self-center">~{Math.ceil(evt.content.length / 4)} tokens</div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', flexShrink: 0, alignSelf: 'center' }}>
+                  ~{Math.ceil(evt.content.length / 4)} tokens
+                </div>
               </div>
             ))}
           </div>
         )
       ) : loading ? (
-        <div className="text-xs text-stone-500">加载中…</div>
+        <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)' }}>加载中…</div>
       ) : filter === 'skills' ? (
         /* ── Skill runs ── */
         skillRuns.length === 0 ? (
-          <div className="text-xs text-stone-500">{t('timeline_empty', lang)}</div>
+          <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)' }}>{t('timeline_empty', lang)}</div>
         ) : (
-          <div className="flex-1 overflow-auto space-y-0 divide-y divide-stone-800">
+          <div style={{ flex: 1, overflowY: 'auto' }}>
             {skillRuns.map((run) => (
-              <div key={run.id} className="flex items-start gap-3 py-3">
-                <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-amber-500" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-stone-500 mb-0.5 flex items-center gap-2">
+              <div
+                key={run.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  padding: '12px 0',
+                  borderBottom: '1px solid var(--color-border-tertiary)',
+                }}
+              >
+                <div style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  marginTop: '6px',
+                  flexShrink: 0,
+                  background: '#BA7517',
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>⚡ {run.skill_name}</span>
-                    <span className="text-stone-600">·</span>
-                    <span className={STATUS_COLOR[run.status] ?? 'text-stone-400'}>{run.status}</span>
-                    <span className="text-stone-600">·</span>
+                    <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
+                    <span style={STATUS_COLOR[run.status] ?? { color: 'var(--color-text-secondary)' }}>{run.status}</span>
+                    <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
                     <span>{run.triggered_by}</span>
-                    <span className="text-stone-600">·</span>
+                    <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
                     <span>{relativeTime(run.started_at)}</span>
                   </div>
                   {run.output && (
-                    <div className="text-xs text-stone-400 truncate">{run.output.slice(0, 120)}</div>
+                    <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {run.output.slice(0, 120)}
+                    </div>
                   )}
                 </div>
-                <div className="text-[10px] text-stone-600 shrink-0 self-center">⚡ 技能</div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', flexShrink: 0, alignSelf: 'center' }}>⚡ 技能</div>
               </div>
             ))}
           </div>
@@ -227,17 +309,39 @@ export const Timeline: React.FC = () => {
       ) : (
         /* ── Conversation events ── */
         filteredEvents.length === 0 ? (
-          <div className="text-xs text-stone-500">{t('timeline_empty', lang)}</div>
+          <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)' }}>{t('timeline_empty', lang)}</div>
         ) : (
-          <div className="flex-1 overflow-auto space-y-0 divide-y divide-stone-800">
+          <div style={{ flex: 1, overflowY: 'auto' }}>
             {filteredEvents.map((evt, i) => (
-              <div key={i} className="flex items-start gap-3 py-3">
-                <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${PUP_COLORS[evt.pup_name] ?? 'bg-stone-500'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-stone-500 mb-0.5">{evt.pup_name} · {relativeTime(evt.timestamp)}</div>
-                  <div className="text-sm text-stone-200 truncate">{evt.content}</div>
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  padding: '12px 0',
+                  borderBottom: '1px solid var(--color-border-tertiary)',
+                }}
+              >
+                <div style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  marginTop: '6px',
+                  flexShrink: 0,
+                  background: PUP_COLORS[evt.pup_name] ?? 'var(--color-text-tertiary)',
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
+                    {evt.pup_name} · {relativeTime(evt.timestamp)}
+                  </div>
+                  <div style={{ fontSize: '12.5px', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {evt.content}
+                  </div>
                 </div>
-                <div className="text-[10px] text-stone-600 shrink-0 self-center">~{Math.ceil(evt.content.length / 4)} tokens</div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', flexShrink: 0, alignSelf: 'center' }}>
+                  ~{Math.ceil(evt.content.length / 4)} tokens
+                </div>
               </div>
             ))}
           </div>

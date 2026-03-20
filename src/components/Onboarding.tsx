@@ -21,6 +21,7 @@ const QUESTIONS: {
   pup_text: string;
   placeholder: string;
   section: string;
+  skippable?: boolean;
 }[] = [
   {
     key: 'name',
@@ -39,24 +40,28 @@ const QUESTIONS: {
     pup_text: '你每周最浪费时间的重复性工作是什么？',
     placeholder: '例如：整理 GitHub issues，写周报，回复重复邮件',
     section: '## Pain Points',
+    skippable: true,
   },
   {
     key: 'language',
     pup_text: '你偏好用哪种语言和我交流？代码和注释呢？',
     placeholder: '例如：对话：中文，代码：English',
     section: '## Language',
+    skippable: true,
   },
   {
     key: 'work_schedule',
     pup_text: '你通常几点开始工作，几点结束？有不想被打扰的时段吗？',
     placeholder: '例如：9:00–18:00 PST，晚上 22:00 后请勿打扰',
     section: '## Work Schedule',
+    skippable: true,
   },
   {
     key: 'tools',
     pup_text: '你最常用什么工具？（GitHub / Notion / Calendar / 邮件 等）',
     placeholder: '例如：GitHub、Notion、Google Calendar、Gmail',
     section: '## Tools',
+    skippable: true,
   },
 ];
 
@@ -113,10 +118,9 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
   // ── Profile questions navigation ──────────────────────────────────────────
 
-  const handleNext = () => {
-    if (!currentInput.trim()) return;
+  const advance = (value: string) => {
     const key = QUESTIONS[step].key;
-    const newAnswers = { ...answers, [key]: currentInput.trim() };
+    const newAnswers = { ...answers, [key]: value };
     setAnswers(newAnswers);
     setCurrentInput('');
     if (step < TOTAL_PROFILE - 1) {
@@ -124,6 +128,15 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
     } else {
       setStep(STEP_LLM);
     }
+  };
+
+  const handleNext = () => {
+    if (!currentInput.trim()) return;
+    advance(currentInput.trim());
+  };
+
+  const handleSkip = () => {
+    advance('');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -196,216 +209,294 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
     ? `${step + 1} / ${TOTAL_PROFILE}`
     : step === STEP_LLM ? 'AI 配置' : '确认';
 
+  const currentQuestion = step < TOTAL_PROFILE ? QUESTIONS[step] : null;
+
+  // Shared input style
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    borderRadius: '8px',
+    background: 'var(--color-background-primary)',
+    border: '1px solid var(--color-border-secondary)',
+    padding: '10px 12px',
+    fontSize: '15px',
+    color: 'var(--color-text-primary)',
+    outline: 'none',
+    transition: 'border-color 0.15s',
+    boxSizing: 'border-box',
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block',
+    fontSize: '12px',
+    color: 'var(--color-text-tertiary)',
+    marginBottom: '6px',
+  };
+
   return (
-    <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
+    <div style={{ minHeight: '100vh', background: 'var(--color-background-primary)', color: 'var(--color-text-primary)', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div className="border-b border-stone-800/50 px-6 py-4 flex items-center justify-between shrink-0 bg-gradient-to-r from-stone-950 via-stone-950 to-stone-900/50">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">🐾</span>
-          <div>
-            <div className="font-bold text-sm tracking-tight">openpup</div>
-            <div className="text-stone-500 text-xs mt-0.5">初次见面</div>
-          </div>
+      <div style={{ borderBottom: '1px solid var(--color-border-primary)', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: 'var(--color-background-secondary)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0, display: 'inline-block' }} />
+          <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--color-text-secondary)', userSelect: 'none' }}>
+            open<span style={{ color: '#1D9E75' }}>pup</span>
+            <span style={{ marginLeft: '10px', color: 'var(--color-text-tertiary)' }}>“用 ChatGPT 三个月，它还是不知道你喜欢下雨天。OpenPup 记得。”</span>
+          </span>
         </div>
-        <div className="text-xs text-stone-400 font-medium">{stepLabel}</div>
+        <div style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>{stepLabel}</div>
       </div>
 
-      {/* Progress */}
-      <div className="h-1 bg-stone-900 shrink-0 relative overflow-hidden">
-        <div className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 transition-all duration-700 ease-out shadow-lg shadow-amber-500/20" style={{ width: `${progressPct}%` }} />
+      {/* Progress bar */}
+      <div style={{ height: '1px', background: 'var(--color-border-primary)', flexShrink: 0, position: 'relative' }}>
+        <div
+          style={{ height: '100%', background: '#1D9E75', transition: 'width 0.7s ease-out', width: `${progressPct}%` }}
+        />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Left: Conversation / LLM config */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Scrollable messages area */}
-          <div className="flex-1 overflow-auto p-8 bg-gradient-to-b from-stone-950 via-stone-950 to-stone-900/30">
+          <div style={{ flex: 1, overflow: 'auto', padding: '32px', background: 'var(--color-background-primary)' }}>
 
-          {/* Answered profile questions */}
-          {QUESTIONS.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q, idx) => (
-            <div key={q.key} className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationDelay: `${idx * 50}ms` }}>
-              <div className="flex items-start gap-3 mb-3">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
-                  🐾
-                </div>
-                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 whitespace-pre-line max-w-2xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-                  {q.pup_text}
-                </div>
-              </div>
-              {answers[q.key] && (
-                <div className="flex justify-end animate-in fade-in slide-in-from-right-2 duration-300">
-                  <div className="bg-gradient-to-br from-amber-600/90 to-amber-700/80 backdrop-blur-sm border border-amber-500/30 rounded-3xl px-5 py-3.5 text-sm text-white max-w-2xl shadow-lg">
-                    {answers[q.key]}
+            {/* Answered profile questions */}
+            {QUESTIONS.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q, idx) => (
+              <div key={q.key} className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ marginBottom: '32px', animationDelay: `${idx * 50}ms` }}>
+                {/* Pup bubble */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
+                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#1D9E75', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', flexShrink: 0 }}>
+                    🐾
+                  </div>
+                  <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', whiteSpace: 'pre-line', maxWidth: '672px' }}>
+                    {q.pup_text}
                   </div>
                 </div>
-              )}
-            </div>
-          ))}
+                {/* User reply */}
+                {answers[q.key] ? (
+                  <div className="animate-in fade-in slide-in-from-right-2 duration-300" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <div style={{ background: 'var(--color-background-info)', color: 'var(--color-text-info)', fontSize: '15px', padding: '12px 16px', borderRadius: '12px', fontWeight: 400, maxWidth: '672px', lineHeight: 1.6 }}>
+                      {answers[q.key]}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontStyle: 'italic', paddingRight: '4px' }}>（跳过）</span>
+                  </div>
+                )}
+              </div>
+            ))}
 
-          {/* Current profile question */}
-          {step < TOTAL_PROFILE && (
-            <div className="mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
-                  🐾
-                </div>
-                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 whitespace-pre-line max-w-2xl shadow-lg">
-                  {QUESTIONS[step].pup_text}
+            {/* Current profile question */}
+            {step < TOTAL_PROFILE && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#1D9E75', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', flexShrink: 0 }}>
+                    🐾
+                  </div>
+                  <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', whiteSpace: 'pre-line', maxWidth: '672px' }}>
+                    {QUESTIONS[step].pup_text}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* LLM config step */}
-          {step === STEP_LLM && (
-            <div className="max-w-2xl space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-              <div className="flex items-start gap-3 mb-6">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
-                  🐾
+            {/* LLM config step */}
+            {step === STEP_LLM && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ maxWidth: '672px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
+                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#1D9E75', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', flexShrink: 0 }}>
+                    🐾
+                  </div>
+                  <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', maxWidth: '448px' }}>
+                    最后一步——我需要 AI 接口才能工作。<br /><br />
+                    请选择你的模型供应商并填入 API Key。
+                  </div>
                 </div>
-                <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 max-w-md shadow-lg">
-                  最后一步——我需要 AI 接口才能工作。<br /><br />
-                  请选择你的模型供应商并填入 API Key。
-                </div>
-              </div>
 
-              <div className="space-y-4 pl-8">
-                {/* Preset picker */}
-                <div>
-                  <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">选择模型</label>
-                  <select
-                    className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
-                    value={llmPreset}
-                    onChange={(e) => handlePresetChange(e.target.value)}
+                <div style={{ paddingLeft: '40px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {/* Preset picker */}
+                  <div>
+                    <label style={labelStyle}>选择模型</label>
+                    <select
+                      style={{ ...inputStyle, cursor: 'pointer' }}
+                      value={llmPreset}
+                      onChange={(e) => handlePresetChange(e.target.value)}
+                    >
+                      {PRESET_MODELS.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Custom model name */}
+                  {isCustomPreset && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                      <label style={labelStyle}>模型名称</label>
+                      <input
+                        style={inputStyle}
+                        placeholder="例如：gpt-4o、claude-3-5-sonnet-20241022"
+                        value={llmConfig.model}
+                        onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
+                      />
+                    </div>
+                  )}
+
+                  {/* API Key */}
+                  <div>
+                    <label style={labelStyle}>API Key</label>
+                    <input
+                      style={inputStyle}
+                      type="password"
+                      placeholder="sk-..."
+                      value={llmConfig.api_key}
+                      onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_key: e.target.value }))}
+                    />
+                    <p style={{ marginTop: '6px', fontSize: '11px', color: 'var(--color-text-tertiary)' }}>API Key 仅存储在本地，不会上传至任何服务器。</p>
+                  </div>
+
+                  {/* Base URL */}
+                  {(isCustomPreset || llmConfig.api_base) && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                      <label style={labelStyle}>
+                        Base URL <span style={{ color: 'var(--color-text-tertiary)' }}>（可选）</span>
+                      </label>
+                      <input
+                        style={inputStyle}
+                        placeholder="https://api.openai.com/v1"
+                        value={llmConfig.api_base}
+                        onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_base: e.target.value }))}
+                      />
+                    </div>
+                  )}
+
+                  {llmError && (
+                    <div className="animate-in fade-in duration-300" style={{ fontSize: '13px', color: 'var(--color-text-danger)', background: 'var(--color-background-danger)', border: '1px solid var(--color-border-tertiary)', padding: '10px 12px', borderRadius: '8px' }}>
+                      {llmError}
+                    </div>
+                  )}
+
+                  <button
+                    style={{ width: '100%', marginTop: '4px', padding: '10px 16px', borderRadius: '8px', background: '#1D9E75', color: '#fff', fontSize: '15px', fontWeight: 500, border: 'none', cursor: 'pointer', transition: 'opacity 0.15s' }}
+                    onClick={handleLlmNext}
                   >
-                    {PRESET_MODELS.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
+                    下一步 →
+                  </button>
                 </div>
+              </div>
+            )}
 
-                {/* Custom model name */}
-                {isCustomPreset && (
-                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                    <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">模型名称</label>
-                    <input
-                      className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
-                      placeholder="例如：gpt-4o、claude-3-5-sonnet-20241022"
-                      value={llmConfig.model}
-                      onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
-                    />
-                  </div>
-                )}
-
-                {/* API Key */}
-                <div>
-                  <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">API Key</label>
-                  <input
-                    className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
-                    type="password"
-                    placeholder="sk-..."
-                    value={llmConfig.api_key}
-                    onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_key: e.target.value }))}
-                  />
+            {/* Confirm step */}
+            {step === STEP_CONFIRM && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '24px' }}>
+                <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#1D9E75', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', flexShrink: 0 }}>
+                  🐾
                 </div>
-
-                {/* Base URL */}
-                {(isCustomPreset || llmConfig.api_base) && (
-                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                    <label className="block text-xs font-semibold text-stone-300 mb-2.5 uppercase tracking-wide">
-                      Base URL <span className="text-stone-500 normal-case">（可选）</span>
-                    </label>
-                    <input
-                      className="w-full rounded-xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all duration-300"
-                      placeholder="https://api.openai.com/v1"
-                      value={llmConfig.api_base}
-                      onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_base: e.target.value }))}
-                    />
-                  </div>
-                )}
-
-                {llmError && (
-                  <div className="text-xs text-red-300 bg-red-900/30 border border-red-800/50 px-4 py-3 rounded-xl backdrop-blur-sm animate-in fade-in duration-300">
-                    ⚠️ {llmError}
-                  </div>
-                )}
-
-                <button
-                  className="w-full mt-3 px-4 py-3.5 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 transition-all duration-300 shadow-md"
-                  onClick={handleLlmNext}
-                >
-                  下一步 →
-                </button>
+                <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', maxWidth: '672px' }}>
+                  好了，{answers.name ? `${answers.name}！` : ''}我对你有了初步了解 🐾
+                  <br /><br />
+                  这些都会写在{' '}
+                  <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', fontSize: '13px', background: 'var(--color-background-secondary)', padding: '1px 6px', borderRadius: '4px' }}>~/.openpup/OWNER.md</code>{' '}
+                  里，你随时可以打开直接修改。
+                  <br /><br />
+                  右侧是预览，确认无误后点击「确认并开始」。
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Confirm step */}
-          {step === STEP_CONFIRM && (
-            <div className="flex items-start gap-3 mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-sm font-bold shrink-0 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-500/20">
-                🐾
-              </div>
-              <div className="bg-gradient-to-br from-stone-800/80 to-stone-800/40 backdrop-blur-sm border border-stone-700/50 rounded-3xl px-5 py-3.5 text-sm text-stone-200 max-w-2xl shadow-lg">
-                好了，{answers.name ? `${answers.name}！` : ''}我对你有了初步了解 🐾
-                <br /><br />
-                这些都会写在{' '}
-                <span className="font-mono text-amber-300 text-xs bg-stone-900/50 px-2 py-1 rounded">~/.openpup/OWNER.md</span>{' '}
-                里，你随时可以打开直接修改。
-                <br /><br />
-                右侧是预览，确认无误后点击「确认并开始」。
-              </div>
-            </div>
-          )}
-          <div ref={scrollEndRef} />
+            )}
+            <div ref={scrollEndRef} />
           </div>
 
           {/* Fixed input area at bottom */}
           {step < TOTAL_PROFILE && (
-            <div className="flex-shrink-0 border-t border-stone-800/50 px-8 py-4 bg-gradient-to-t from-stone-950 via-stone-950/80 to-stone-950/50 flex gap-3">
+            <div style={{ flexShrink: 0, borderTop: '1px solid var(--color-border-primary)', padding: '16px 32px', background: 'var(--color-background-primary)', display: 'flex', gap: '12px' }}>
               <textarea
                 ref={inputRef}
-                className="flex-1 resize-none rounded-2xl bg-stone-900/50 backdrop-blur-sm border border-stone-700/50 px-4 py-3 text-sm text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 shadow-sm"
+                style={{ flex: 1, resize: 'none', borderRadius: '8px', background: 'var(--color-background-primary)', border: '1px solid var(--color-border-secondary)', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', outline: 'none', transition: 'border-color 0.15s', fontFamily: 'inherit' }}
                 rows={3}
                 placeholder={QUESTIONS[step].placeholder}
                 value={currentInput}
                 onChange={(e) => setCurrentInput(e.target.value)}
                 onKeyDown={handleKeyDown}
               />
-              <button
-                className="self-end px-5 py-3 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
-                onClick={handleNext}
-                disabled={!currentInput.trim()}
-              >
-                {step < TOTAL_PROFILE - 1 ? '下一步 →' : '下一步 →'}
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', justifyContent: 'flex-end' }}>
+                <button
+                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#1D9E75', color: '#fff', fontSize: '15px', fontWeight: 500, border: 'none', cursor: currentInput.trim() ? 'pointer' : 'not-allowed', opacity: currentInput.trim() ? 1 : 0.4, transition: 'opacity 0.15s' }}
+                  onClick={handleNext}
+                  disabled={!currentInput.trim()}
+                >
+                  {step < TOTAL_PROFILE - 1 ? '下一步 →' : '下一步 →'}
+                </button>
+                {currentQuestion?.skippable && (
+                  <button
+                    style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'center', transition: 'color 0.15s' }}
+                    onClick={handleSkip}
+                  >
+                    跳过
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Right: OWNER.md live preview */}
-        <div className="w-96 border-l border-stone-800/50 p-6 flex flex-col bg-gradient-to-b from-stone-900/50 via-stone-900/30 to-stone-900/10 shrink-0 backdrop-blur-sm">
-          <div className="text-xs font-semibold text-stone-400 mb-3 uppercase tracking-wider">预览 OWNER.md</div>
-          {step < STEP_CONFIRM ? (
-            <pre className="flex-1 bg-stone-900/60 backdrop-blur border border-stone-700/50 rounded-2xl p-4 text-xs text-stone-300 font-mono leading-relaxed overflow-auto whitespace-pre-wrap shadow-inner">
-              {ownerMdPreview}
-            </pre>
+        {/* Right: OWNER.md live preview — hidden below ~800px window width */}
+        <div className="hidden lg:flex" style={{ width: '320px', borderLeft: '1px solid var(--color-border-primary)', padding: '20px', flexDirection: 'column', background: 'var(--color-background-secondary)', flexShrink: 0 }}>
+          <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--color-text-tertiary)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+            OWNER.md 预览
+          </div>
+
+          {step === 0 ? (
+            /* Step 0: Explain what OWNER.md is before any answers exist */
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ borderRadius: '12px', border: '1px solid var(--color-border-primary)', background: 'var(--color-background-primary)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <p style={{ fontSize: '13px', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                  你的回答会保存到
+                  <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', fontSize: '12px', margin: '0 4px', background: 'var(--color-background-secondary)', padding: '1px 4px', borderRadius: '4px' }}>~/.openpup/OWNER.md</code>
+                  文件中。
+                </p>
+                <p style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                  每次对话前，你的 pup 都会先读这份档案——这样它们就能记住你的名字、工作习惯和边界。
+                </p>
+                <p style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                  随时可以直接编辑这个文件来更新你的偏好。
+                </p>
+              </div>
+              <div style={{ borderRadius: '12px', border: '1px solid var(--color-border-primary)', background: 'var(--color-background-primary)', padding: '12px 16px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>之后会长这样</p>
+                <pre style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{`# Owner Profile
+
+## Name
+Alex
+
+## Boundaries
+不自动发消息，不删文件
+
+## Pain Points
+整理 issues，写周报…`}</pre>
+              </div>
+            </div>
           ) : (
-            <>
-              <textarea
-                className="flex-1 bg-stone-900/60 backdrop-blur border border-stone-700/50 rounded-2xl p-4 text-xs text-stone-300 font-mono leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/50 overflow-auto shadow-inner transition-all duration-300"
-                value={editableOwnerMd}
-                onChange={(e) => setEditableOwnerMd(e.target.value)}
-                spellCheck={false}
-              />
-              <button
-                className="mt-4 w-full py-3.5 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-stone-950 text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-amber-500/30 hover:scale-105 disabled:hover:scale-100 transition-all duration-300 shadow-md"
-                onClick={() => void handleSave()}
-                disabled={saving}
-              >
-                {saving ? '保存中…' : '确认并开始 →'}
-              </button>
-            </>
+            /* Steps 1+: Show growing preview */
+            step < STEP_CONFIRM ? (
+              <pre style={{ flex: 1, background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderRadius: '12px', padding: '16px', fontSize: '12px', color: 'var(--color-text-secondary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                {ownerMdPreview}
+              </pre>
+            ) : (
+              <>
+                <textarea
+                  style={{ flex: 1, background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderRadius: '12px', padding: '16px', fontSize: '12px', color: 'var(--color-text-secondary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, resize: 'none', outline: 'none', overflow: 'auto', transition: 'border-color 0.15s' }}
+                  value={editableOwnerMd}
+                  onChange={(e) => setEditableOwnerMd(e.target.value)}
+                  spellCheck={false}
+                />
+                <button
+                  style={{ marginTop: '12px', width: '100%', padding: '12px', borderRadius: '12px', background: '#1D9E75', color: '#fff', fontSize: '15px', fontWeight: 500, border: 'none', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.4 : 1, transition: 'opacity 0.15s' }}
+                  onClick={() => void handleSave()}
+                  disabled={saving}
+                >
+                  {saving ? '保存中…' : '确认并开始 →'}
+                </button>
+              </>
+            )
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 [metadata]
 name = "daily_summary"
-version = "2.0.0"
+version = "1.0.0"
 author = "owner"
 description = "Generate a daily recap from today's conversations and memories."
 category = "productivity"

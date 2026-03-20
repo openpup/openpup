@@ -1,155 +1,210 @@
 @import "tailwindcss";
 
+/* ── Semantic color tokens ─────────────────────────────────────────────────── */
+
+:root {
+  /* Light theme (default) */
+  color-scheme: light;
+
+  --color-background-primary:   #FFFFFF;
+  --color-background-secondary: #F4F4F7;
+  --color-background-info:      rgba(55, 138, 221, 0.10);
+  --color-background-success:   rgba(29, 158, 117, 0.10);
+  --color-background-warning:   rgba(186, 117, 23, 0.10);
+  --color-background-danger:    rgba(226, 75, 74, 0.10);
+
+  --color-text-primary:    #0F0F14;
+  --color-text-secondary:  #5A5A70;
+  --color-text-tertiary:   #9898B4;
+  --color-text-info:       #1A5EA0;
+  --color-text-success:    #0A6B45;
+  --color-text-warning:    #7A4C08;
+  --color-text-danger:     #B81C1C;
+
+  --color-border-primary:   rgba(0, 0, 0, 0.18);
+  --color-border-secondary: rgba(0, 0, 0, 0.10);
+  --color-border-tertiary:  rgba(0, 0, 0, 0.07);
+
+  --font-mono: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-background-primary:   #111118;
+  --color-background-secondary: #18181F;
+  --color-background-info:      rgba(55, 138, 221, 0.14);
+  --color-background-success:   rgba(29, 158, 117, 0.14);
+  --color-background-warning:   rgba(186, 117, 23, 0.14);
+  --color-background-danger:    rgba(226, 75, 74, 0.14);
+
+  --color-text-primary:   #EEEEF8;
+  --color-text-secondary: #8888A8;
+  --color-text-tertiary:  #52526A;
+  --color-text-info:      #5BA3E8;
+  --color-text-success:   #2EC090;
+  --color-text-warning:   #D4901A;
+  --color-text-danger:    #E24B4A;
+
+  --color-border-primary:   rgba(255, 255, 255, 0.18);
+  --color-border-secondary: rgba(255, 255, 255, 0.10);
+  --color-border-tertiary:  rgba(255, 255, 255, 0.07);
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+
 @layer base {
+  html {
+    font-size: 100%;
+  }
+
   html, body {
-    @apply bg-stone-950 text-stone-100;
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    background-color: var(--color-background-secondary);
+    color: var(--color-text-primary);
+  }
+
+  code, pre, kbd, .font-mono {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border-secondary); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-border-primary); }
+}
+
+/* ── Motion sensitivity ──────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   GitHub Dark theme  (data-theme="dark")
-   Selector specificity: (0,2,1) — always beats a plain utility class (0,1,0)
-───────────────────────────────────────────────────────────────────────────── */
-html[data-theme="dark"] { color-scheme: dark; }
-
-html[data-theme="dark"] .bg-stone-950  { background-color: #010409; }
-html[data-theme="dark"] .bg-stone-900  { background-color: #0d1117; }
-html[data-theme="dark"] .bg-stone-800  { background-color: #161b22; }
-html[data-theme="dark"] .bg-stone-700  { background-color: #21262d; }
-
-html[data-theme="dark"] .bg-stone-900\/30 { background-color: rgba(13,17,23,.30); }
-html[data-theme="dark"] .bg-stone-900\/40 { background-color: rgba(13,17,23,.40); }
-html[data-theme="dark"] .bg-stone-900\/50 { background-color: rgba(13,17,23,.50); }
-html[data-theme="dark"] .bg-stone-900\/60 { background-color: rgba(13,17,23,.60); }
-html[data-theme="dark"] .bg-stone-800\/60 { background-color: rgba(22,27,34,.60); }
-html[data-theme="dark"] .bg-stone-800\/80 { background-color: rgba(22,27,34,.80); }
-
-html[data-theme="dark"] .border-stone-800    { border-color: #30363d; }
-html[data-theme="dark"] .border-stone-800\/60 { border-color: rgba(48,54,61,.60); }
-html[data-theme="dark"] .border-stone-700    { border-color: #3d4450; }
-html[data-theme="dark"] .border-stone-700\/60 { border-color: rgba(61,68,80,.60); }
-html[data-theme="dark"] .border-stone-700\/50 { border-color: rgba(61,68,80,.50); }
-html[data-theme="dark"] .border-stone-600    { border-color: #484f58; }
-
-html[data-theme="dark"] .text-stone-100 { color: #e6edf3; }
-html[data-theme="dark"] .text-stone-200 { color: #cdd9e5; }
-html[data-theme="dark"] .text-stone-300 { color: #b1bac4; }
-html[data-theme="dark"] .text-stone-400 { color: #8b949e; }
-html[data-theme="dark"] .text-stone-500 { color: #6e7681; }
-html[data-theme="dark"] .text-stone-600 { color: #484f58; }
-html[data-theme="dark"] .text-stone-950 { color: #010409; }
-
-html[data-theme="dark"] .placeholder\:text-stone-500::placeholder { color: #6e7681; }
-html[data-theme="dark"] .divide-stone-800 > * + * { border-color: #30363d; }
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   Light theme  (data-theme="light")
-   GitHub light palette — override Tailwind v4 CSS custom properties
-   AND add !important to direct class selectors for opacity variants
-───────────────────────────────────────────────────────────────────────────── */
-html[data-theme="light"] {
-  color-scheme: light;
-  /* Override Tailwind v4 stone CSS custom properties (oklch values from v4 defaults → warm white/gray) */
-  --color-stone-950: oklch(99% 0.002 247);    /* #f6f8fa — main bg */
-  --color-stone-900: oklch(100% 0 0);         /* #ffffff — card bg */
-  --color-stone-800: oklch(97.6% 0.002 247);  /* #f6f8fa — subtle bg */
-  --color-stone-700: oklch(94.2% 0.004 264);  /* #eaeef2 — border bg */
-  --color-stone-600: oklch(85% 0.005 264);    /* border */
-  --color-stone-500: oklch(52% 0.01 264);     /* muted text */
-  --color-stone-400: oklch(44% 0.01 264);     /* secondary text */
-  --color-stone-300: oklch(36% 0.012 264);    /* body text */
-  --color-stone-200: oklch(15% 0.006 264);    /* #1f2328 */
-  --color-stone-100: oklch(14% 0.006 255);    /* #1f2328 dark text */
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-html[data-theme="light"] .bg-stone-950  { background-color: #f6f8fa !important; }
-html[data-theme="light"] .bg-stone-900  { background-color: #ffffff !important; }
-html[data-theme="light"] .bg-stone-800  { background-color: #f6f8fa !important; }
-html[data-theme="light"] .bg-stone-700  { background-color: #eaeef2 !important; }
+.animate-msg-in {
+  animation: msg-in 0.20s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 
-/* subtle tinted backgrounds instead of pure transparent white */
-html[data-theme="light"] .bg-stone-900\/30 { background-color: rgba(140,149,159,.08) !important; }
-html[data-theme="light"] .bg-stone-900\/40 { background-color: rgba(140,149,159,.12) !important; }
-html[data-theme="light"] .bg-stone-900\/50 { background-color: rgba(140,149,159,.06) !important; }
-html[data-theme="light"] .bg-stone-900\/60 { background-color: rgba(140,149,159,.14) !important; }
-html[data-theme="light"] .bg-stone-800\/60 { background-color: rgba(246,248,250,.80) !important; }
-html[data-theme="light"] .bg-stone-800\/80 { background-color: rgba(246,248,250,.92) !important; }
+/* ── Utility: 0.5px borders ──────────────────────────────────────────────── */
 
-html[data-theme="light"] .border-stone-800    { border-color: #d0d7de !important; }
-html[data-theme="light"] .border-stone-800\/60 { border-color: rgba(208,215,222,.70) !important; }
-html[data-theme="light"] .border-stone-700    { border-color: #c8d1d9 !important; }
-html[data-theme="light"] .border-stone-700\/60 { border-color: rgba(200,209,217,.70) !important; }
-html[data-theme="light"] .border-stone-700\/50 { border-color: rgba(200,209,217,.60) !important; }
-html[data-theme="light"] .border-stone-600    { border-color: #d0d7de !important; }
+.border-thin   { border-width: 0.5px; }
+.border-t-thin { border-top-width: 0.5px; }
+.border-b-thin { border-bottom-width: 0.5px; }
+.border-l-thin { border-left-width: 0.5px; }
+.border-r-thin { border-right-width: 0.5px; }
 
-html[data-theme="light"] .text-stone-100 { color: #1f2328 !important; }
-html[data-theme="light"] .text-stone-200 { color: #1f2328 !important; }
-html[data-theme="light"] .text-stone-300 { color: #24292f !important; }
-html[data-theme="light"] .text-stone-400 { color: #57606a !important; }
-html[data-theme="light"] .text-stone-500 { color: #6e7781 !important; }
-html[data-theme="light"] .text-stone-600 { color: #8c959f !important; }
-html[data-theme="light"] .text-stone-950 { color: #1c1917 !important; }
+/* ── Tailwind stone → semantic token map ────────────────────────────────── */
+/* Allows existing Tailwind utility classes to use the semantic system */
 
-html[data-theme="light"] .placeholder\:text-stone-500::placeholder { color: #8c959f !important; }
-html[data-theme="light"] .divide-stone-800 > * + * { border-color: #d0d7de !important; }
+/* Backgrounds */
+.bg-stone-950 { background-color: var(--color-background-secondary) !important; }
+.bg-stone-900 { background-color: var(--color-background-primary) !important; }
+.bg-stone-800 { background-color: var(--color-background-secondary) !important; }
 
-/* ── Light: invert dark badge backgrounds to light equivalents ─────────────
-   Pup tags, status badges, and permission dialog badges use colored-900/60
-   dark backgrounds which look wrong on a light theme.
-─────────────────────────────────────────────────────────────────────────── */
+.bg-stone-900\/50 { background-color: var(--color-background-primary) !important; }
+.bg-stone-800\/40 { background-color: var(--color-background-secondary) !important; }
+.bg-stone-800\/60 { background-color: var(--color-background-secondary) !important; }
+.bg-stone-800\/80 { background-color: var(--color-background-secondary) !important; }
+.bg-stone-700\/60 { background-color: var(--color-background-secondary) !important; }
 
-/* Emerald (Alpha pup online dot shadow stays, only bg/text badges change) */
-html[data-theme="light"] .bg-emerald-900\/60  { background-color: #d1fae5 !important; }
-html[data-theme="light"] .text-emerald-300    { color: #065f46 !important; }
-html[data-theme="light"] .text-emerald-400    { color: #059669 !important; }
+/* Text */
+.text-stone-100 { color: var(--color-text-primary) !important; }
+.text-stone-200 { color: var(--color-text-primary) !important; }
+.text-stone-300 { color: var(--color-text-secondary) !important; }
+.text-stone-400 { color: var(--color-text-tertiary) !important; }
+.text-stone-500 { color: var(--color-text-tertiary) !important; }
+.text-stone-600 { color: var(--color-border-primary) !important; }
+.text-stone-950 { color: var(--color-background-primary) !important; }
 
-/* Sky/Blue (Dev Pup) */
-html[data-theme="light"] .bg-sky-900\/60      { background-color: #e0f2fe !important; }
-html[data-theme="light"] .text-sky-300        { color: #0369a1 !important; }
+/* Borders */
+.border-stone-800    { border-color: var(--color-border-tertiary) !important; }
+.border-stone-800\/40 { border-color: var(--color-border-tertiary) !important; }
+.border-stone-700    { border-color: var(--color-border-secondary) !important; }
+.border-stone-700\/50 { border-color: var(--color-border-secondary) !important; }
+.border-stone-700\/60 { border-color: var(--color-border-secondary) !important; }
+.border-stone-600    { border-color: var(--color-border-primary) !important; }
 
-/* Amber (Writer Pup, pending badge, skill suggestion) */
-html[data-theme="light"] .bg-amber-900\/60    { background-color: #fef3c7 !important; }
-html[data-theme="light"] .text-amber-300      { color: #92400e !important; }
-html[data-theme="light"] .bg-amber-950\/30    { background-color: rgba(254,243,199,.50) !important; }
+/* Dividers */
+.divide-stone-800 > * + * { border-color: var(--color-border-tertiary) !important; }
 
-/* Red (failed status, high-risk permission) */
-html[data-theme="light"] .bg-red-900\/60      { background-color: #fee2e2 !important; }
-html[data-theme="light"] .text-red-400        { color: #b91c1c !important; }
-html[data-theme="light"] .bg-red-900\/20      { background-color: #fef2f2 !important; }
-html[data-theme="light"] .text-red-300        { color: #b91c1c !important; }
+/* Placeholders */
+.placeholder\:text-stone-500::placeholder { color: var(--color-text-tertiary) !important; }
+.placeholder\:text-stone-600::placeholder { color: var(--color-border-primary) !important; }
 
-/* Purple (Research Pup) */
-html[data-theme="light"] .bg-purple-900\/60   { background-color: #ede9fe !important; }
-html[data-theme="light"] .text-purple-300     { color: #6d28d9 !important; }
+/* Focus rings */
+.focus\:ring-amber-500\/50:focus { --tw-ring-color: rgba(245, 158, 11, 0.40) !important; }
+.focus\:border-stone-600:focus   { border-color: var(--color-border-primary) !important; }
 
-/* Pink (Life Admin Pup) */
-html[data-theme="light"] .bg-pink-900\/60     { background-color: #fce7f3 !important; }
-html[data-theme="light"] .text-pink-300       { color: #9d174d !important; }
+/* ── Pup accent colors ────────────────────────────────────────────────────── */
 
-/* Violet (custom pup badge) */
-html[data-theme="light"] .bg-violet-900\/40   { background-color: #ede9fe !important; }
-html[data-theme="light"] .text-violet-300     { color: #5b21b6 !important; }
+/* Alpha — green */
+.bg-emerald-900\/60   { background-color: var(--color-background-success) !important; }
+.text-emerald-300     { color: var(--color-text-success) !important; }
+.text-emerald-400     { color: var(--color-text-success) !important; }
+.bg-emerald-900\/40   { background-color: var(--color-background-success) !important; }
+.bg-emerald-500\/20   { background-color: var(--color-background-success) !important; }
+.border-emerald-500\/40 { border-color: rgba(29, 158, 117, 0.35) !important; }
 
-/* Stone (Ops Pup, generic badges) */
-html[data-theme="light"] .bg-stone-700.text-stone-300 { background-color: #eaeef2 !important; color: #24292f !important; }
+/* Dev — blue */
+.bg-sky-900\/60   { background-color: var(--color-background-info) !important; }
+.bg-sky-900\/40   { background-color: var(--color-background-info) !important; }
+.text-sky-300     { color: var(--color-text-info) !important; }
+.border-sky-800\/40 { border-color: rgba(55, 138, 221, 0.30) !important; }
 
-/* Emerald action button (bg used in emerald-900/40 contexts) */
-html[data-theme="light"] .bg-emerald-900\/40  { background-color: #d1fae5 !important; }
+/* Writer — amber */
+.bg-amber-900\/60  { background-color: var(--color-background-warning) !important; }
+.bg-amber-900\/40  { background-color: var(--color-background-warning) !important; }
+.bg-amber-950\/30  { background-color: var(--color-background-warning) !important; }
+.text-amber-300    { color: var(--color-text-warning) !important; }
+.border-amber-900\/40 { border-color: rgba(186, 117, 23, 0.30) !important; }
+.border-amber-500\/40 { border-color: rgba(186, 117, 23, 0.40) !important; }
 
-/* Amber action button context (amber-900/40 used in task start button) */
-html[data-theme="light"] .bg-amber-900\/40    { background-color: #fef3c7 !important; }
+/* Research — purple */
+.bg-purple-900\/60  { background-color: rgba(127, 119, 221, 0.12) !important; }
+.text-purple-300    { color: #7F77DD !important; }
 
-/* Permission dialog risk badge backgrounds */
-html[data-theme="light"] .bg-red-500\/20      { background-color: #fee2e2 !important; }
-html[data-theme="light"] .bg-emerald-500\/20  { background-color: #d1fae5 !important; }
-html[data-theme="light"] .bg-amber-500\/20    { background-color: #fef3c7 !important; }
-html[data-theme="light"] .border-red-500\/40  { border-color: rgba(239,68,68,.40) !important; }
-html[data-theme="light"] .border-emerald-500\/40 { border-color: rgba(16,185,129,.40) !important; }
-html[data-theme="light"] .border-amber-500\/40   { border-color: rgba(245,158,11,.40) !important; }
+/* Life Admin — pink */
+.bg-pink-900\/60  { background-color: rgba(236, 72, 153, 0.10) !important; }
+.text-pink-300    { color: #DB3491 !important; }
 
-/* Skill suggestion banner */
-html[data-theme="light"] .border-amber-900\/40 { border-color: rgba(245,158,11,.30) !important; }
+/* Violet (custom pup) */
+.bg-violet-900\/40  { background-color: rgba(127, 119, 221, 0.10) !important; }
+.text-violet-300    { color: #7F77DD !important; }
 
-/* ── Light: streaming/abort button tweaks ───────────────────────────────── */
-html[data-theme="light"] .bg-red-900\/60.text-red-400 { background-color: #fee2e2 !important; color: #b91c1c !important; }
-html[data-theme="light"] .border-red-800\/50 { border-color: rgba(220,38,38,.30) !important; }
+/* ── Prose (markdown) theming ────────────────────────────────────────────── */
+/* Ensure prose content uses semantic token colors in both themes */
+
+.prose { color: var(--color-text-primary); }
+.prose p, .prose li { color: var(--color-text-primary); }
+.prose strong { color: var(--color-text-primary); font-weight: 500; }
+.prose h1, .prose h2, .prose h3, .prose h4 { color: var(--color-text-primary); font-weight: 500; }
+.prose code { color: var(--color-text-secondary); background: var(--color-background-secondary); padding: 1px 5px; border-radius: 4px; font-size: 0.875em; }
+.prose pre { background: var(--color-background-secondary) !important; border: 0.5px solid var(--color-border-tertiary); border-radius: 8px; }
+.prose pre code { background: none; color: var(--color-text-primary); padding: 0; }
+.prose blockquote { border-left-color: var(--color-border-secondary); color: var(--color-text-secondary); }
+.prose a { color: var(--color-text-info); }
+.prose hr { border-color: var(--color-border-tertiary); }
+.prose thead { color: var(--color-text-primary); }
+.prose tbody tr { border-color: var(--color-border-tertiary); }
+
+/* Danger/red */
+.bg-red-900\/20    { background-color: var(--color-background-danger) !important; }
+.bg-red-900\/60    { background-color: var(--color-background-danger) !important; }
+.bg-red-500\/20    { background-color: var(--color-background-danger) !important; }
+.text-red-400      { color: var(--color-text-danger) !important; }
+.text-red-300      { color: var(--color-text-danger) !important; }
+.border-red-500\/40  { border-color: rgba(226, 75, 74, 0.35) !important; }
+.border-red-800\/50  { border-color: rgba(226, 75, 74, 0.25) !important; }

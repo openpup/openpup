@@ -1,6 +1,6 @@
 {
   "productName": "openpup",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.openpup.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -17,7 +17,9 @@
       {
         "title": "OpenPup",
         "width": 1100,
-        "height": 720,
+        "height": 750,
+        "minWidth": 860,
+        "minHeight": 620,
         "resizable": true
       }
     ]

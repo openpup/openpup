@@ -7,7 +7,17 @@ interface LongTermMemoryItem {
 }
 
 const PAGE_SIZE = 20;
-const INPUT = 'w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50';
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  borderRadius: 8,
+  background: 'var(--color-background-primary)',
+  border: '1px solid var(--color-border-secondary)',
+  padding: '6px 12px',
+  fontSize: 12,
+  color: 'var(--color-text-primary)',
+  outline: 'none',
+};
 
 export const MemoryManager: React.FC = () => {
   const { lang } = useLang();
@@ -48,53 +58,154 @@ export const MemoryManager: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col gap-3 text-xs">
-      <div className="flex gap-2">
-        <input className={INPUT + ' flex-1'} placeholder={t('mem_search', lang)}
-          value={query} onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { setPage(0); void load(); } }} />
-        <button className="px-3 py-2 rounded-lg bg-stone-800 border border-stone-700 text-stone-300 hover:bg-stone-700 transition-colors disabled:opacity-50"
-          onClick={() => { setPage(0); void load(); }} disabled={loading}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          style={{ ...inputStyle, flex: 1 }}
+          placeholder={t('mem_search', lang)}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { setPage(0); void load(); } }}
+        />
+        <button
+          style={{
+            padding: '6px 12px',
+            borderRadius: 8,
+            background: 'var(--color-background-primary)',
+            border: '1px solid var(--color-border-secondary)',
+            color: 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            fontSize: 12,
+            opacity: loading ? 0.5 : 1,
+          }}
+          onClick={() => { setPage(0); void load(); }}
+          disabled={loading}
+        >
           {t('mem_search_btn', lang)}
         </button>
       </div>
 
-      {error && <div className="text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{error}</div>}
+      {error && (
+        <div style={{
+          color: 'var(--color-text-danger)',
+          background: 'var(--color-background-danger)',
+          padding: '6px 12px',
+          borderRadius: 8,
+        }}>
+          {error}
+        </div>
+      )}
 
-      <div className="flex items-center justify-between text-stone-500">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--color-text-tertiary)' }}>
         <span>Page {page + 1} · {PAGE_SIZE}/page</span>
-        <div className="flex gap-2">
-          <button className="px-2.5 py-1 rounded-lg bg-stone-800 border border-stone-700 text-stone-400 hover:text-stone-300 disabled:opacity-40"
-            disabled={page === 0 || loading} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            style={{
+              padding: '4px 10px',
+              borderRadius: 8,
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              color: 'var(--color-text-secondary)',
+              cursor: 'pointer',
+              fontSize: 12,
+              opacity: (page === 0 || loading) ? 0.4 : 1,
+            }}
+            disabled={page === 0 || loading}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
             {t('mem_prev', lang)}
           </button>
-          <button className="px-2.5 py-1 rounded-lg bg-stone-800 border border-stone-700 text-stone-400 hover:text-stone-300 disabled:opacity-40"
-            disabled={items.length < PAGE_SIZE || loading} onClick={() => setPage((p) => p + 1)}>
+          <button
+            style={{
+              padding: '4px 10px',
+              borderRadius: 8,
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              color: 'var(--color-text-secondary)',
+              cursor: 'pointer',
+              fontSize: 12,
+              opacity: (items.length < PAGE_SIZE || loading) ? 0.4 : 1,
+            }}
+            disabled={items.length < PAGE_SIZE || loading}
+            onClick={() => setPage((p) => p + 1)}
+          >
             {t('mem_next', lang)}
           </button>
         </div>
       </div>
 
-      <div className="space-y-2">
-        {items.length === 0 && !loading && <div className="text-stone-500 text-center py-6">{t('mem_empty', lang)}</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.length === 0 && !loading && (
+          <div style={{ color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
+            {t('mem_empty', lang)}
+          </div>
+        )}
         {items.map((item) => (
-          <div key={item.id} className="rounded-xl border border-stone-800 bg-stone-900/60 px-4 py-3 flex flex-col gap-1.5 hover:border-stone-700 transition-colors">
-            <div className="flex justify-between items-center">
-              <span className="font-medium text-stone-300 text-[11px] px-2 py-0.5 rounded-full bg-stone-800">
+          <div
+            key={item.id}
+            style={{
+              borderRadius: 12,
+              border: '1px solid var(--color-border-primary)',
+              background: 'var(--color-background-secondary)',
+              padding: '12px 16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{
+                fontWeight: 500,
+                color: 'var(--color-text-tertiary)',
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 999,
+                background: 'var(--color-background-secondary)',
+                border: '1px solid var(--color-border-tertiary)',
+              }}>
                 {item.memory_type || 'general'}
               </span>
-              <span className="text-stone-600">{t('mem_importance', lang)}: {item.importance.toFixed(2)}</span>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>
+                {t('mem_importance', lang)}: {item.importance.toFixed(2)}
+              </span>
             </div>
-            <div className="text-stone-200 whitespace-pre-wrap break-words leading-relaxed">{item.content}</div>
-            <div className="flex justify-between items-center mt-0.5">
-              <span className="text-stone-600">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
-              <div className="flex gap-1.5">
-                <button className="px-2.5 py-1 rounded-lg bg-stone-800 text-stone-400 hover:text-stone-200 transition-colors border border-stone-700"
-                  onClick={() => { setEditing(item); setEditContent(item.content); setEditType(item.memory_type || ''); setEditImportance(item.importance ?? 0.5); }}>
+            <div style={{ marginTop: 2, marginBottom: 2, height: 4, borderRadius: 2, background: 'var(--color-background-secondary)', border: '1px solid var(--color-border-tertiary)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${item.importance * 100}%`, background: '#1D9E75', borderRadius: 2 }} />
+            </div>
+            <div style={{ color: 'var(--color-text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
+              {item.content}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>
+                {new Date(item.created_at * 1000).toLocaleDateString()}
+              </span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 8,
+                    background: 'var(--color-background-primary)',
+                    border: '1px solid var(--color-border-secondary)',
+                    color: 'var(--color-text-tertiary)',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                  }}
+                  onClick={() => { setEditing(item); setEditContent(item.content); setEditType(item.memory_type || ''); setEditImportance(item.importance ?? 0.5); }}
+                >
                   {t('mem_edit', lang)}
                 </button>
-                <button className="px-2.5 py-1 rounded-lg bg-red-900/40 text-red-400 hover:bg-red-900/60 transition-colors"
-                  onClick={() => void deleteItem(item)}>
+                <button
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 8,
+                    background: 'var(--color-background-danger)',
+                    color: 'var(--color-text-danger)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                  }}
+                  onClick={() => void deleteItem(item)}
+                >
                   {t('mem_delete', lang)}
                 </button>
               </div>
@@ -104,23 +215,86 @@ export const MemoryManager: React.FC = () => {
       </div>
 
       {editing && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="w-full max-w-lg rounded-2xl bg-stone-900 border border-stone-700 p-5 space-y-3 shadow-2xl">
-            <h2 className="text-sm font-semibold text-stone-100">{t('mem_edit_title', lang)}</h2>
-            <textarea className="w-full h-32 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 focus:outline-none focus:ring-1 focus:ring-amber-500/50 resize-y"
-              value={editContent} onChange={(e) => setEditContent(e.target.value)} />
-            <div className="flex gap-2">
-              <input className="flex-1 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
-                placeholder={t('mem_type_placeholder', lang)} value={editType} onChange={(e) => setEditType(e.target.value)} />
-              <input className="w-28 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
-                type="number" min={0} max={1} step={0.05} value={editImportance}
-                onChange={(e) => setEditImportance(Number(e.target.value))} />
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 50,
+        }}>
+          <div style={{
+            width: '100%',
+            maxWidth: 512,
+            borderRadius: 16,
+            background: 'var(--color-background-primary)',
+            border: '1px solid var(--color-border-secondary)',
+            padding: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <h2 style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
+              {t('mem_edit_title', lang)}
+            </h2>
+            <textarea
+              style={{
+                ...inputStyle,
+                height: 128,
+                resize: 'vertical',
+                fontFamily: 'inherit',
+              }}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder={t('mem_type_placeholder', lang)}
+                value={editType}
+                onChange={(e) => setEditType(e.target.value)}
+              />
+              <input
+                style={{ ...inputStyle, width: 112 }}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={editImportance}
+                onChange={(e) => setEditImportance(Number(e.target.value))}
+              />
             </div>
-            <div className="flex justify-end gap-2">
-              <button className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 hover:text-stone-300 border border-stone-700 transition-colors"
-                onClick={() => setEditing(null)}>{t('mem_cancel', lang)}</button>
-              <button className="px-3 py-1.5 rounded-lg bg-amber-500 text-stone-950 font-semibold hover:bg-amber-400 transition-colors"
-                onClick={() => void saveEdit()}>{t('mem_save', lang)}</button>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  background: 'var(--color-background-primary)',
+                  border: '1px solid var(--color-border-secondary)',
+                  color: 'var(--color-text-tertiary)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
+                onClick={() => setEditing(null)}
+              >
+                {t('mem_cancel', lang)}
+              </button>
+              <button
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  background: 'var(--color-text-primary)',
+                  color: 'var(--color-background-primary)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+                onClick={() => void saveEdit()}
+              >
+                {t('mem_save', lang)}
+              </button>
             </div>
           </div>
         </div>

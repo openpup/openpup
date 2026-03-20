@@ -4,9 +4,9 @@
 //! never causes a panic.
 
 use anyhow::{Context, Result};
-use tracing::warn;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tracing::warn;
 
 /// Top-level config file structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -11,6 +11,17 @@ interface PupConfig {
   is_custom: boolean;
 }
 
+const inputStyle: React.CSSProperties = {
+  borderRadius: 8,
+  background: 'var(--color-background-primary)',
+  border: '1px solid var(--color-border-secondary)',
+  padding: '6px 12px',
+  fontSize: 12,
+  color: 'var(--color-text-primary)',
+  outline: 'none',
+  width: '100%',
+};
+
 export const PupManager: React.FC = () => {
   const { lang } = useLang();
   const [pups, setPups] = useState<PupConfig[]>([]);
@@ -24,8 +35,7 @@ export const PupManager: React.FC = () => {
   const [addDesc, setAddDesc] = useState('');
   const [addPrompt, setAddPrompt] = useState('');
   const [adding, setAdding] = useState(false);
-
-  const INPUT = 'rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50';
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = () =>
     invoke<PupConfig[]>('list_pups').then(setPups).catch((e) => setError(String(e)));
@@ -57,9 +67,9 @@ export const PupManager: React.FC = () => {
   };
 
   const removePup = async (key: string) => {
-    if (!window.confirm(`删除自定义 Pup "${key}"？`)) return;
     try {
       await invoke('remove_custom_pup', { key });
+      setConfirmDelete(null);
       await load();
       flash(lang === 'zh' ? '已删除' : 'Removed');
     } catch (e) { setError(String(e)); }
@@ -84,79 +94,174 @@ export const PupManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-3 text-xs">
-      <h3 className="text-sm font-semibold text-stone-100">{t('pup_mgr_title', lang)}</h3>
-      {error && <p className="text-red-400 bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
-      {msg && <p className="text-emerald-400 bg-emerald-900/20 px-3 py-2 rounded-lg">{msg}</p>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
+        {t('pup_mgr_title', lang)}
+      </h3>
+      {error && (
+        <p style={{
+          color: 'var(--color-text-danger)',
+          background: 'var(--color-background-danger)',
+          padding: '6px 12px',
+          borderRadius: 8,
+          margin: 0,
+        }}>
+          {error}
+        </p>
+      )}
+      {msg && (
+        <p style={{
+          color: 'var(--color-text-success)',
+          background: 'var(--color-background-success)',
+          padding: '6px 12px',
+          borderRadius: 8,
+          margin: 0,
+        }}>
+          {msg}
+        </p>
+      )}
 
       {/* Pup list */}
       {pups.map((pup) => (
         <div
           key={pup.key}
-          className={`rounded-xl border px-4 py-3 space-y-2 transition-colors ${
-            pup.enabled ? 'border-stone-700 bg-stone-900/40' : 'border-stone-800 opacity-60'
-          }`}
+          style={{
+            borderRadius: 12,
+            border: '1px solid var(--color-border-tertiary)',
+            background: 'var(--color-background-secondary)',
+            padding: '12px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            opacity: pup.enabled ? 1 : 0.6,
+          }}
         >
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <span className="font-medium text-stone-100">{pup.display_name}</span>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{pup.display_name}</span>
               {pup.is_custom && (
-                <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/60 text-violet-300">
+                <span style={{
+                  marginLeft: 6,
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 999,
+                  background: 'var(--color-background-info)',
+                  color: 'var(--color-text-info)',
+                }}>
                   {t('pup_custom', lang)}
                 </span>
               )}
-              <div className="text-stone-500 mt-0.5">{pup.description}</div>
+              <div style={{ color: 'var(--color-text-tertiary)', marginTop: 2 }}>{pup.description}</div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
               <button
                 onClick={() => {
                   setEditing(editing === pup.key ? null : pup.key);
                   setDraftPrompt(pup.system_prompt_override);
                 }}
-                className="px-2 py-1 rounded-lg bg-stone-700 text-stone-300 hover:bg-stone-600 transition-colors"
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 8,
+                  background: 'var(--color-background-primary)',
+                  border: '1px solid var(--color-border-secondary)',
+                  color: 'var(--color-text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
               >
                 {editing === pup.key ? t('pup_collapse', lang) : t('pup_edit', lang)}
               </button>
               <button
                 onClick={() => void toggle(pup)}
-                className={`px-2 py-1 rounded-lg transition-colors ${
-                  pup.enabled
-                    ? 'bg-emerald-900/60 text-emerald-300 hover:bg-emerald-900/80'
-                    : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
-                }`}
+                style={pup.enabled ? {
+                  padding: '4px 8px',
+                  borderRadius: 8,
+                  background: 'var(--color-background-success)',
+                  color: 'var(--color-text-success)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                } : {
+                  padding: '4px 8px',
+                  borderRadius: 8,
+                  background: 'var(--color-background-secondary)',
+                  color: 'var(--color-text-tertiary)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
               >
                 {pup.enabled ? t('pup_enabled', lang) : t('pup_disabled', lang)}
               </button>
               {pup.is_custom && (
-                <button
-                  onClick={() => void removePup(pup.key)}
-                  className="px-2 py-1 rounded-lg bg-red-900/40 text-red-300 hover:bg-red-900/60 transition-colors"
-                >
-                  {t('pup_remove', lang)}
-                </button>
+                confirmDelete === pup.key ? (
+                  <>
+                    <button
+                      onClick={() => void removePup(pup.key)}
+                      style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 12 }}
+                    >
+                      {lang === 'zh' ? '确认删除' : 'Confirm'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete(null)}
+                      style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none', cursor: 'pointer', fontSize: 12 }}
+                    >
+                      {lang === 'zh' ? '取消' : 'Cancel'}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDelete(pup.key)}
+                    style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    {t('pup_remove', lang)}
+                  </button>
+                )
               )}
             </div>
           </div>
 
           {editing === pup.key && (
-            <div className="space-y-2 pt-1">
-              <p className="text-stone-500">{t('pup_prompt_label', lang)}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}>
+              <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>{t('pup_prompt_label', lang)}</p>
               <textarea
-                className="w-full h-28 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 resize-y"
+                style={{
+                  ...inputStyle,
+                  height: 112,
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                }}
                 placeholder={pup.is_custom ? t('pup_prompt_custom', lang) : t('pup_prompt_builtin', lang)}
                 value={draftPrompt}
                 onChange={(e) => setDraftPrompt(e.target.value)}
               />
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={() => void save(pup.key, pup.enabled)}
-                  className="px-3 py-1.5 rounded-lg bg-amber-500 text-stone-950 font-medium hover:bg-amber-400 transition-colors"
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    background: 'var(--color-text-primary)',
+                    color: 'var(--color-background-primary)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 500,
+                  }}
                 >
                   {t('pup_save', lang)}
                 </button>
                 <button
                   onClick={() => setEditing(null)}
-                  className="px-3 py-1.5 rounded-lg bg-stone-700 text-stone-300 hover:bg-stone-600 transition-colors"
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    background: 'var(--color-background-primary)',
+                    border: '1px solid var(--color-border-secondary)',
+                    color: 'var(--color-text-secondary)',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                  }}
                 >
                   {t('pup_cancel', lang)}
                 </button>
@@ -167,36 +272,59 @@ export const PupManager: React.FC = () => {
       ))}
 
       {/* Add custom pup */}
-      <div className="rounded-xl border border-stone-700 bg-stone-900/40 px-4 py-3 space-y-2.5">
-        <div className="font-medium text-stone-300 mb-1">{t('pup_add_title', lang)}</div>
-        <div className="grid grid-cols-2 gap-2">
+      <div style={{
+        borderRadius: 12,
+        border: '1px solid var(--color-border-tertiary)',
+        background: 'var(--color-background-secondary)',
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}>
+        <div style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>{t('pup_add_title', lang)}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('pup_key_ph', lang)}
             value={addKey}
             onChange={(e) => setAddKey(e.target.value)}
           />
           <input
-            className={INPUT}
+            style={inputStyle}
             placeholder={t('pup_name_ph', lang)}
             value={addName}
             onChange={(e) => setAddName(e.target.value)}
           />
           <input
-            className={INPUT + ' col-span-2'}
+            style={{ ...inputStyle, gridColumn: '1 / -1' }}
             placeholder={t('pup_desc_ph', lang)}
             value={addDesc}
             onChange={(e) => setAddDesc(e.target.value)}
           />
         </div>
         <textarea
-          className="w-full h-24 rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 resize-y"
+          style={{
+            ...inputStyle,
+            height: 96,
+            resize: 'vertical',
+            fontFamily: 'inherit',
+          }}
           placeholder={t('pup_prompt_ph', lang)}
           value={addPrompt}
           onChange={(e) => setAddPrompt(e.target.value)}
         />
         <button
-          className="px-3 py-2 rounded-lg bg-violet-600 text-white text-xs font-medium disabled:opacity-50 hover:bg-violet-500 transition-colors"
+          style={{
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: 'var(--color-text-primary)',
+            color: 'var(--color-background-primary)',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 500,
+            opacity: (adding || !addKey.trim() || !addName.trim() || !addPrompt.trim()) ? 0.5 : 1,
+          }}
           disabled={adding || !addKey.trim() || !addName.trim() || !addPrompt.trim()}
           onClick={() => void addPup()}
         >

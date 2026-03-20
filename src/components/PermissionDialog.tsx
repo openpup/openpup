@@ -1,5 +1,4 @@
 import React from 'react';
-import { useLang, t } from '../i18n';
 
 export interface PermissionRequest {
   request_id: string;
@@ -19,91 +18,119 @@ interface Props {
   onDeny: () => void;
 }
 
-const RISK_CONFIG = {
-  high: {
-    border: 'border-t-2 border-red-500',
-    badge: 'bg-red-500/20 text-red-400 border border-red-500/40',
-    label: '高风险',
-    approveLabel: '允许发布',
-    approveClass: 'bg-red-600 hover:bg-red-500 text-white',
-  },
-  medium: {
-    border: 'border-t-2 border-amber-500',
-    badge: 'bg-amber-500/20 text-amber-400 border border-amber-500/40',
-    label: '中风险',
-    approveLabel: '允许',
-    approveClass: 'bg-amber-500 hover:bg-amber-400 text-stone-950',
-  },
-  low: {
-    border: 'border-t-2 border-emerald-500',
-    badge: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
-    label: '低风险',
-    approveLabel: '允许',
-    approveClass: 'bg-emerald-600 hover:bg-emerald-500 text-white',
-  },
+const RISK: Record<string, { bar: string; badge: string; badgeText: string; approveLabel: string; approveBg: string; approveColor: string }> = {
+  high:   { bar: '#E24B4A', badge: 'rgba(226,75,74,0.12)', badgeText: '#E24B4A', approveLabel: '允许', approveBg: 'var(--color-text-primary)', approveColor: 'var(--color-background-primary)' },
+  medium: { bar: '#BA7517', badge: 'rgba(186,117,23,0.12)', badgeText: '#BA7517', approveLabel: '允许', approveBg: '#BA7517', approveColor: '#fff' },
+  low:    { bar: '#1D9E75', badge: 'rgba(29,158,117,0.12)', badgeText: '#1D9E75', approveLabel: '允许', approveBg: '#1D9E75', approveColor: '#fff' },
 };
 
+const RISK_LABEL: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' };
+
 export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }) => {
-  const { lang } = useLang();
   const [remember, setRemember] = React.useState(false);
-  const cfg = RISK_CONFIG[request.risk_level] ?? RISK_CONFIG.medium;
+  const cfg = RISK[request.risk_level] ?? RISK.medium;
   const isHigh = request.risk_level === 'high';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className={`w-full max-w-sm rounded-2xl bg-stone-900 border border-stone-700 shadow-2xl overflow-hidden ${cfg.border}`}>
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 50,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.3)',
+      }}
+    >
+      <div style={{
+        width: '320px',
+        background: 'var(--color-background-primary)',
+        border: '0.5px solid var(--color-border-secondary)',
+        borderRadius: '16px',
+        overflow: 'hidden',
+      }}>
+        {/* 3px color bar */}
+        <div style={{ height: '3px', background: cfg.bar }} />
+
         {/* Header */}
-        <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-sm font-semibold text-stone-100">🐕 {request.skill_name} 需要你的许可</span>
+        <div style={{ padding: '16px 18px 12px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: '4px' }}>
+              {request.skill_name} 需要你的许可
             </div>
-            <p className="text-xs text-stone-400 leading-relaxed">{request.action_description}</p>
+            <div style={{ fontSize: '11.5px', color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
+              {request.action_description}
+            </div>
           </div>
-          <span className={`shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full ${cfg.badge}`}>
-            {cfg.label}
+          <span style={{
+            flexShrink: 0,
+            fontSize: '11px', fontWeight: 500,
+            padding: '2px 8px', borderRadius: '10px',
+            background: cfg.badge, color: cfg.badgeText,
+            border: `0.5px solid ${cfg.bar}`,
+          }}>
+            {RISK_LABEL[request.risk_level] ?? '中风险'}
           </span>
         </div>
 
         {/* Details */}
         {(request.details.affected_files?.length || request.details.network_destinations?.length || typeof request.details.estimated_cost === 'number') && (
-          <div className="mx-5 mb-3 rounded-xl bg-stone-800/60 border border-stone-700/60 px-3 py-2.5 text-[11px] text-stone-500 space-y-1">
+          <div style={{
+            margin: '0 18px 12px',
+            background: 'var(--color-background-secondary)',
+            border: '0.5px solid var(--color-border-tertiary)',
+            borderRadius: '8px',
+            padding: '8px 10px',
+            fontSize: '12px',
+            color: 'var(--color-text-secondary)',
+            lineHeight: 1.6,
+          }}>
             {request.details.affected_files?.length ? (
-              <div><span className="text-stone-400">文件：</span>{request.details.affected_files.join(', ')}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>目标文件 · </span>{request.details.affected_files.join(', ')}</div>
             ) : null}
             {request.details.network_destinations?.length ? (
-              <div><span className="text-stone-400">网络：</span>{request.details.network_destinations.join(', ')}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>目标平台 · </span>{request.details.network_destinations.join(', ')}</div>
             ) : null}
             {typeof request.details.estimated_cost === 'number' ? (
-              <div><span className="text-stone-400">预计费用：</span>${request.details.estimated_cost}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>预计费用 · </span>${request.details.estimated_cost}</div>
             ) : null}
           </div>
         )}
 
-        {/* Remember checkbox — only for low risk */}
+        {/* Remember — only for non-high risk */}
         {!isHigh && (
-          <label className="mx-5 mb-3 flex items-center gap-2.5 text-xs text-stone-400 cursor-pointer select-none">
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            margin: '0 18px 12px',
+            fontSize: '13px', color: 'var(--color-text-secondary)',
+            cursor: 'pointer', userSelect: 'none',
+          }}>
             <input
               type="checkbox"
-              className="w-3.5 h-3.5 rounded border-stone-600 bg-stone-800 accent-emerald-500"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
+              style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#1D9E75' }}
             />
-            记住，下次不再询问
+            记住选择，下次不再询问
           </label>
         )}
 
         {/* Actions */}
-        <div className="px-5 pb-5 flex gap-2.5 justify-end">
+        <div style={{ padding: '0 18px 18px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button
-            className="px-4 py-2 rounded-xl bg-stone-800 text-stone-300 text-xs font-medium hover:bg-stone-700 transition-colors"
             onClick={onDeny}
+            style={{
+              padding: '7px 16px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer',
+              background: 'transparent', color: 'var(--color-text-secondary)',
+              border: '0.5px solid var(--color-border-secondary)',
+            }}
           >
             拒绝
           </button>
           <button
-            className={`px-4 py-2 rounded-xl text-xs font-medium transition-colors ${cfg.approveClass}`}
             onClick={() => onApprove(isHigh ? false : remember)}
+            style={{
+              padding: '7px 16px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer',
+              background: cfg.approveBg, color: cfg.approveColor,
+              border: 'none',
+            }}
           >
             {cfg.approveLabel}
           </button>

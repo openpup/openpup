@@ -51,8 +51,8 @@ fn init_logging(workspace_root: &std::path::Path) {
     #[cfg(not(debug_assertions))]
     let writer = non_blocking;
 
-    let filter = std::env::var("OPENPUP_LOG")
-        .unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
+    let filter =
+        std::env::var("OPENPUP_LOG").unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
@@ -159,36 +159,13 @@ fn main() {
         let skills_state_path = skills_state_dir.join("installed_skills.json");
         let skill_registry = SkillRegistry::new(skills_state_path);
 
-        // Seed default registry sources (ClaWHub) on first run
-        skill_registry.seed_default_sources_if_empty().await;
-
-        // Register built-in skills at compile time
+        // Register built-in skills (always available, user can disable but not uninstall)
         skill_registry
-            .register_builtin(include_str!("../../skills/core/browser_control.toml"))
+            .register_builtin(include_str!("../../skills/daily_summary.toml"))
             .await;
         skill_registry
-            .register_builtin(include_str!("../../skills/core/skill_vetting.toml"))
+            .register_builtin(include_str!("../../skills/weekly_summary.toml"))
             .await;
-        skill_registry
-            .register_builtin(include_str!("../../skills/personal/weekly_summary.toml"))
-            .await;
-        skill_registry
-            .register_builtin(include_str!("../../skills/personal/daily_summary.toml"))
-            .await;
-
-        // Ensure skills_cache/ exists so LLM-generated skills can be written there
-        // even before any git-install has run.
-        let skills_cache_path = workspace_root.join("skills_cache");
-        let _ = std::fs::create_dir_all(&skills_cache_path);
-        // register_from_dir updates both `skills` and `installed` maps so
-        // these skills are immediately visible to routing after restart.
-        if let Err(e) = skill_registry
-            .register_from_dir(&skills_cache_path, "git")
-            .await
-        {
-            warn!("failed to load skills from cache: {e}");
-        }
-        skill_registry.add_scan_root(skills_cache_path, "git").await;
 
         // Load user-configured skill search paths from config.toml
         let cfg = crate::config::load_with_env();
@@ -223,7 +200,6 @@ fn main() {
             permissions: permission_checker.clone(),
             mcp: mcp_orchestrator.clone(),
             llm: llm_client.clone(),
-            memory: memory.clone(),
             tools: tool_registry,
         });
 
@@ -279,9 +255,6 @@ fn main() {
             commands::get_owner_profile,
             // Skills
             commands::list_skills,
-            commands::install_skill_from_git,
-            commands::write_skill_toml,
-            commands::uninstall_skill,
             commands::set_skill_enabled,
             commands::run_skill,
             // MCP servers
@@ -329,8 +302,6 @@ fn main() {
             commands::list_tasks,
             commands::update_task_status,
             commands::delete_task,
-            // Skill manifest fetch (vetting)
-            commands::fetch_skill_manifest,
             // System
             commands::open_url,
             // Pack Channel

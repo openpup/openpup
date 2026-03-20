@@ -570,24 +570,43 @@ impl MemorySystem {
     }
 
     /// Fetch conversation for display: returns (role, content, timestamp) ordered oldest-first.
+    /// If `before_timestamp` is set, only fetches messages older than that timestamp.
     pub async fn get_pup_conversation_display(
         &self,
         pup: &str,
         limit: i64,
+        before_timestamp: Option<i64>,
     ) -> Result<Vec<(String, String, i64)>> {
-        let rows = sqlx::query(
-            r#"
-      SELECT role, content, timestamp
-      FROM conversations
-      WHERE pup = ?1
-      ORDER BY id DESC
-      LIMIT ?2;
-      "#,
-        )
-        .bind(pup)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = if let Some(ts) = before_timestamp {
+            sqlx::query(
+                r#"
+          SELECT role, content, timestamp
+          FROM conversations
+          WHERE pup = ?1 AND timestamp < ?2
+          ORDER BY id DESC
+          LIMIT ?3;
+          "#,
+            )
+            .bind(pup)
+            .bind(ts)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+          SELECT role, content, timestamp
+          FROM conversations
+          WHERE pup = ?1
+          ORDER BY id DESC
+          LIMIT ?2;
+          "#,
+            )
+            .bind(pup)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         let mut result: Vec<(String, String, i64)> = rows
             .into_iter()

@@ -19,6 +19,8 @@
 
 **[English →](README.en.md)** · **[中文 →](README.zh.md)** · **[Architecture →](docs/architecture.md)**
 
+<img src="openpup.png" width="860" alt="OpenPup interface">
+
 </div>
 
 ---
