@@ -1,6 +1,8 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures_util::future::join_all;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -10,6 +12,7 @@ use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
 use crate::skills::executor::SkillExecutor;
+use crate::skills::job_registry::{is_due, JobMode, JobRegistry, ScheduledJob};
 use crate::skills::permissions::PermissionChecker;
 
 pub struct SkillScheduler {
@@ -17,99 +20,228 @@ pub struct SkillScheduler {
     pub memory: Arc<MemorySystem>,
     pub permissions: PermissionChecker,
     pub file_layer: Arc<FileLayer>,
+    /// Path to ~/.openpup/scheduled_jobs.json
+    pub jobs_path: PathBuf,
 }
 
 impl SkillScheduler {
-    /// Spawn a background task that runs the Alpha heartbeat once every 24 hours.
+    /// Spawn a background task that ticks every minute.
+    ///
+    /// Each due job is spawned as an independent Tokio task so a slow LLM call
+    /// never blocks the scheduler loop or delays other jobs.
     pub fn start(self, app_handle: AppHandle) {
+        let executor = self.executor;
+        let memory = self.memory;
+        let file_layer = self.file_layer;
+        let jobs_path = self.jobs_path;
+
         tauri::async_runtime::spawn(async move {
             let mut last_heartbeat: Option<chrono::DateTime<Utc>> = None;
+            let job_registry = JobRegistry::new(jobs_path);
+
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
                 let now = Utc::now();
+
+                // ── Alpha heartbeat (once per 24 hours) ─────────────────────
                 let elapsed_hours = last_heartbeat
                     .map(|last| (now - last).num_hours())
                     .unwrap_or(i64::MAX);
-
                 if elapsed_hours >= 24 {
                     last_heartbeat = Some(now);
-                    self.tick_alpha_heartbeat(&app_handle).await;
+                    let executor = executor.clone();
+                    let memory = memory.clone();
+                    let file_layer = file_layer.clone();
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tick_alpha_heartbeat(&executor, &memory, &file_layer, &handle).await;
+                    });
+                }
+
+                // ── Dynamic scheduled jobs ───────────────────────────────────
+                // Each due job is spawned independently — the loop never awaits
+                // job execution, so a slow job cannot block the minute tick.
+                for job in job_registry.load().into_iter().filter(|j| j.enabled) {
+                    if is_due(&job.schedule, &now) {
+                        let executor = executor.clone();
+                        let memory = memory.clone();
+                        let handle = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_job(job, &executor, &memory, &handle).await;
+                        });
+                    }
                 }
             }
         });
     }
+}
 
-    async fn tick_alpha_heartbeat(&self, app_handle: &AppHandle) {
-        let owner_profile = self.file_layer.read_owner_profile().unwrap_or_default();
-        let recent_convs = self
-            .memory
-            .recent_conversations_global(40)
-            .await
-            .unwrap_or_default();
+// ── Job execution (free functions — owned by spawned tasks) ──────────────────
 
-        let conv_summary = recent_convs
-            .iter()
-            .take(20)
-            .map(|(role, content)| {
-                let snippet: String = content.chars().take(200).collect();
-                format!("{role}: {snippet}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let profile_snippet: String = owner_profile.chars().take(600).collect();
-
-        let prompt = format!(
-            "Owner profile:\n{profile_snippet}\n\n\
-             Recent interactions (last 40 messages):\n{conv_summary}\n\n\
-             Task — extract 1-3 new behavioral preferences or rules observed in the interactions. \
-             Output as: RULES:\n- <rule>\n- <rule>\n\n\
-             Be concise. Only output the RULES section.",
-        );
-
-        let response = match self
-            .executor
-            .llm
-            .chat(vec![
-                LlmMessage {
-                    role: "system".to_string(),
-                    content: "You are Alpha, a loyal personal AI assistant. Analyze interaction patterns \
-                              and extract behavioral rules for your owner."
-                        .to_string(),
-                },
-                LlmMessage { role: "user".to_string(), content: prompt },
-            ])
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("[heartbeat] LLM call failed: {e}");
-                return;
-            }
-        };
-
-        if let Some(rules_start) = response.find("RULES:") {
-            let rules_text = response[rules_start + "RULES:".len()..].trim();
-            if !rules_text.is_empty() {
-                let entry = format!(
-                    "\n## Heartbeat {}\n{}\n",
-                    chrono::Local::now().format("%Y-%m-%d"),
-                    rules_text
-                );
-                let _ = self.file_layer.append_rules(&entry);
-            }
-        }
-
-        let run_id = Uuid::new_v4().to_string();
-        let _ = self
-            .memory
-            .record_skill_run(&run_id, "alpha_heartbeat", "heartbeat")
-            .await;
-        let _ = self
-            .memory
-            .complete_skill_run(&run_id, "completed", &response[..response.len().min(1000)])
-            .await;
-        let _ = app_handle.emit("heartbeat_completed", serde_json::json!({}));
+async fn run_job(
+    job: ScheduledJob,
+    executor: &Arc<SkillExecutor>,
+    memory: &Arc<MemorySystem>,
+    app_handle: &AppHandle,
+) {
+    if job.steps.is_empty() {
+        return;
     }
+
+    let _ = app_handle.emit(
+        "scheduled_job_started",
+        serde_json::json!({ "id": job.id, "name": job.name }),
+    );
+
+    let run_id = Uuid::new_v4().to_string();
+    let _ = memory.record_skill_run(&run_id, &job.name, "scheduled").await;
+
+    let result = match job.mode {
+        JobMode::Single | JobMode::Sequential => run_sequential(&job, executor).await,
+        JobMode::Parallel => run_parallel(&job, executor).await,
+    };
+
+    let (status, output) = match result {
+        Ok(o) => ("completed".to_string(), o),
+        Err(e) => ("failed".to_string(), format!("Error: {e}")),
+    };
+
+    let _ = memory
+        .complete_skill_run(&run_id, &status, &output[..output.len().min(1000)])
+        .await;
+
+    let _ = app_handle.emit(
+        "scheduled_job_completed",
+        serde_json::json!({
+            "id": job.id,
+            "name": job.name,
+            "status": status,
+            "output": output,
+        }),
+    );
+}
+
+/// Run steps serially; a step with an empty `input` inherits the previous
+/// step's output (pipeline behaviour).
+async fn run_sequential(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyhow::Result<String> {
+    let mut prev_output = String::new();
+    for step in &job.steps {
+        if executor.registry.get(&step.skill).await.is_none() {
+            warn!(
+                "[scheduler] skill '{}' not found, skipping step in job '{}'",
+                step.skill, job.name
+            );
+            continue;
+        }
+        let input = if step.input.is_empty() {
+            prev_output.clone()
+        } else {
+            step.input.clone()
+        };
+        prev_output = executor
+            .execute_skill(&step.skill, &input)
+            .await
+            .unwrap_or_else(|e| format!("[{}] error: {e}", step.skill));
+    }
+    Ok(prev_output)
+}
+
+/// Run all steps concurrently and join their outputs.
+async fn run_parallel(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyhow::Result<String> {
+    let futures: Vec<_> = job
+        .steps
+        .iter()
+        .map(|step| {
+            let executor = executor.clone();
+            let skill = step.skill.clone();
+            let input = step.input.clone();
+            let job_name = job.name.clone();
+            async move {
+                if executor.registry.get(&skill).await.is_none() {
+                    warn!("[scheduler] skill '{skill}' not found, skipping step in job '{job_name}'");
+                    return format!("[{skill}] skipped: skill not found");
+                }
+                executor
+                    .execute_skill(&skill, &input)
+                    .await
+                    .unwrap_or_else(|e| format!("[{skill}] error: {e}"))
+            }
+        })
+        .collect();
+
+    Ok(join_all(futures).await.join("\n\n---\n\n"))
+}
+
+// ── Alpha heartbeat ───────────────────────────────────────────────────────────
+
+async fn tick_alpha_heartbeat(
+    executor: &Arc<SkillExecutor>,
+    memory: &Arc<MemorySystem>,
+    file_layer: &Arc<FileLayer>,
+    app_handle: &AppHandle,
+) {
+    let owner_profile = file_layer.read_owner_profile().unwrap_or_default();
+    let recent_convs = memory
+        .recent_conversations_global(40)
+        .await
+        .unwrap_or_default();
+
+    let conv_summary = recent_convs
+        .iter()
+        .take(20)
+        .map(|(role, content)| {
+            let snippet: String = content.chars().take(200).collect();
+            format!("{role}: {snippet}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let profile_snippet: String = owner_profile.chars().take(600).collect();
+    let prompt = format!(
+        "Owner profile:\n{profile_snippet}\n\n\
+         Recent interactions (last 40 messages):\n{conv_summary}\n\n\
+         Task — extract 1-3 new behavioral preferences or rules observed in the interactions. \
+         Output as: RULES:\n- <rule>\n- <rule>\n\n\
+         Be concise. Only output the RULES section.",
+    );
+
+    let response = match executor
+        .llm
+        .chat(vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: "You are Alpha, a loyal personal AI assistant. Analyze interaction \
+                          patterns and extract behavioral rules for your owner."
+                    .to_string(),
+            },
+            LlmMessage { role: "user".to_string(), content: prompt },
+        ])
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("[heartbeat] LLM call failed: {e}");
+            return;
+        }
+    };
+
+    if let Some(rules_start) = response.find("RULES:") {
+        let rules_text = response[rules_start + "RULES:".len()..].trim();
+        if !rules_text.is_empty() {
+            let entry = format!(
+                "\n## Heartbeat {}\n{}\n",
+                chrono::Local::now().format("%Y-%m-%d"),
+                rules_text
+            );
+            let _ = file_layer.append_rules(&entry);
+        }
+    }
+
+    let run_id = Uuid::new_v4().to_string();
+    let _ = memory.record_skill_run(&run_id, "alpha_heartbeat", "heartbeat").await;
+    let _ = memory
+        .complete_skill_run(&run_id, "completed", &response[..response.len().min(1000)])
+        .await;
+    let _ = app_handle.emit("heartbeat_completed", serde_json::json!({}));
 }

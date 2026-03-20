@@ -985,3 +985,28 @@ pub async fn get_context_stats(
         },
     })
 }
+
+// ─── Scheduled jobs ───────────────────────────────────────────────────────────
+
+/// Return all scheduled jobs from ~/.openpup/scheduled_jobs.json.
+#[tauri::command]
+pub async fn list_scheduled_jobs(
+    _state: State<'_, AppState>,
+) -> Result<Vec<crate::skills::job_registry::ScheduledJob>, String> {
+    let home_dir = dirs::home_dir().ok_or("cannot determine home directory")?;
+    let jobs_path = home_dir.join(".openpup").join("scheduled_jobs.json");
+    let registry = crate::skills::job_registry::JobRegistry::new(jobs_path);
+    Ok(registry.load())
+}
+
+/// Delete a scheduled job by id.
+#[tauri::command]
+pub async fn delete_scheduled_job(
+    _state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("cannot determine home directory")?;
+    let jobs_path = home_dir.join(".openpup").join("scheduled_jobs.json");
+    let registry = crate::skills::job_registry::JobRegistry::new(jobs_path);
+    registry.delete(&id).map_err(|e| e.to_string())
+}

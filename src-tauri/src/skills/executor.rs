@@ -172,6 +172,12 @@ impl SkillExecutor {
                     "tool_call_id": tc.id,
                     "content": result,
                 }));
+
+                // After a file write, re-scan skill directories so any newly
+                // written skill TOML is live for the scheduler and future calls.
+                if tc.name == "file_write" || tc.name == "shell_exec" {
+                    self.registry.refresh().await;
+                }
             }
         }
 

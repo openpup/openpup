@@ -166,6 +166,9 @@ fn main() {
         skill_registry
             .register_builtin(include_str!("../../skills/weekly_summary.toml"))
             .await;
+        skill_registry
+            .register_builtin(include_str!("../../skills/task_manager.toml"))
+            .await;
 
         // Load user-configured skill search paths from config.toml
         let cfg = crate::config::load_with_env();
@@ -229,11 +232,13 @@ fn main() {
         alpha.init_msg_count().await;
 
         // Scheduler — owns clones of executor/memory/permissions/file_layer
+        let jobs_path = workspace_root.join("scheduled_jobs.json");
         let scheduler = SkillScheduler {
             executor: skill_executor,
             memory: memory.clone(),
             permissions: permission_checker.clone(),
             file_layer: file_layer.clone(),
+            jobs_path,
         };
 
         let app_state = AppState { alpha, file_layer };
@@ -302,6 +307,9 @@ fn main() {
             commands::list_tasks,
             commands::update_task_status,
             commands::delete_task,
+            // Scheduled jobs
+            commands::list_scheduled_jobs,
+            commands::delete_scheduled_job,
             // System
             commands::open_url,
             // Pack Channel
