@@ -543,7 +543,7 @@ impl AlphaPup {
         };
 
         let handle = app_handle.clone();
-        let handle2 = app_handle.clone();
+        let _handle2 = app_handle.clone();
         let handle3 = app_handle.clone();
         self.run_agent_with_tools(
             "alpha",
@@ -1211,6 +1211,7 @@ impl AlphaPup {
     /// Entry point for external bridge messages (Telegram, Discord, Slack).
     /// Uses the same routing as process_user_message_stream but returns a Result
     /// instead of emitting Tauri events.
+    #[allow(dead_code)]
     pub async fn process_bridge_message(&self, msg: String) -> anyhow::Result<String> {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.get_owner_summary(&owner_md).await;
@@ -1431,8 +1432,8 @@ impl AlphaPup {
             .enabled_skill_names_and_triggers()
             .await;
 
-        let pup_options: String = enabled_pups.iter().map(|k| format!(" | {k}")).collect();
-        let skill_options: String = skill_entries
+        let _pup_options: String = enabled_pups.iter().map(|k| format!(" | {k}")).collect();
+        let _skill_options: String = skill_entries
             .iter()
             .map(|(n, _)| format!(" | skill:{n}"))
             .collect();
