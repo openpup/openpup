@@ -259,6 +259,23 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS custom_pups (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE,
+        description   TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        capabilities  TEXT NOT NULL DEFAULT '[]',
+        color         TEXT NOT NULL DEFAULT '#888780',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_at    INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -324,6 +341,14 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn active_channel_count(&self) -> Result<i64> {
+        let row =
+            sqlx::query("SELECT COUNT(*) as cnt FROM pack_channels WHERE status='active'")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.get::<i64, _>("cnt"))
     }
 
     pub async fn complete_channel(&self, channel_id: &str) -> Result<()> {

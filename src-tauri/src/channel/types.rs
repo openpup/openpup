@@ -58,3 +58,22 @@ pub struct ChannelMessagePayload {
 pub struct ChannelCompletedPayload {
     pub channel_id: String,
 }
+
+// ─── DAG / Delegation plan types ──────────────────────────────────────────────
+
+/// A single unit of work assigned to one pup, with optional dependencies on
+/// other pups in the same plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subtask {
+    pub pup: String,
+    pub description: String,
+    pub depends_on: Vec<String>,
+}
+
+/// The full delegation plan emitted by Alpha before channel execution begins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationPlan {
+    pub channel_id: String,
+    pub channel_title: String,
+    pub subtasks: Vec<Subtask>,
+}

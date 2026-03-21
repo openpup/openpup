@@ -32,6 +32,7 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 tracing-appender = "0.2"
+petgraph = "0.6"
 cron = "0.12"
 
 [build-dependencies]

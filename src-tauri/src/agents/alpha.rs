@@ -14,6 +14,9 @@ use tracing::debug;
 
 use crate::agents::custom_pup::CustomPup;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
+use crate::channel::dag::build_execution_layers;
+use crate::channel::manager::ChannelManager;
+use crate::channel::types::{DelegationPlan, Subtask};
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::memory::file_layer::FileLayer;
@@ -102,6 +105,7 @@ pub struct AlphaPup {
     /// Cached summarised OWNER.md with TTL.
     owner_summary_cache: Arc<RwLock<Option<(String, std::time::Instant)>>>,
     msg_count: Arc<std::sync::atomic::AtomicU32>,
+    pub channel_manager: Arc<ChannelManager>,
 }
 
 impl AlphaPup {
@@ -112,6 +116,7 @@ impl AlphaPup {
         file_layer: Arc<FileLayer>,
         skill_executor: Arc<SkillExecutor>,
         pup_config_path: Option<PathBuf>,
+        channel_manager: Arc<ChannelManager>,
     ) -> Self {
         // Load persisted pup configs, merging with defaults
         let mut configs = default_pup_configs();
@@ -138,6 +143,7 @@ impl AlphaPup {
             pup_config_path,
             owner_summary_cache: Arc::new(RwLock::new(None)),
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            channel_manager,
         }
     }
 
@@ -313,7 +319,7 @@ impl AlphaPup {
                 .collect();
             if required_pups.len() >= 2 {
                 let output = self
-                    .run_parallel_pack(msg, required_pups, app_handle)
+                    .run_dag(msg, required_pups, app_handle)
                     .await?;
                 return Ok((output, pup_key));
             }
@@ -863,6 +869,454 @@ impl AlphaPup {
         );
 
         self.aggregate_channel_results(msg, &pup_outputs).await
+    }
+
+    // ── DAG-based pack dispatch ───────────────────────────────────────────────
+
+    /// Ask the LLM (mini model) to decompose the user message into per-pup subtasks
+    /// with dependency information. Falls back to a flat parallel plan on any error.
+    async fn decompose(&self, msg: &str, pup_keys: &[String]) -> DelegationPlan {
+        let pup_list = pup_keys
+            .iter()
+            .map(|k| format!("  - {}: {}", k, pup_display_name(k)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let system_prompt = format!(
+            "You are a task planner. Given a user request and a list of specialist pups, \
+             create a delegation plan. Each pup should have a clear description of what it needs to do.\n\
+             You MUST output valid JSON only, no markdown, no commentary.\n\
+             Format:\n\
+             {{\"channel_title\": \"short-title\", \"subtasks\": [\
+             {{\"pup\": \"pup_key\", \"description\": \"what this pup should do\", \"depends_on\": []}}\
+             ]}}\n\
+             depends_on lists pup keys that must complete before this pup starts.\n\
+             Available pups:\n{pup_list}"
+        );
+
+        let user_prompt = format!("User request: {msg}");
+
+        let fallback = || DelegationPlan {
+            channel_id: String::new(),
+            channel_title: msg.chars().take(40).collect(),
+            subtasks: pup_keys
+                .iter()
+                .map(|k| Subtask {
+                    pup: k.clone(),
+                    description: msg.to_string(),
+                    depends_on: vec![],
+                })
+                .collect(),
+        };
+
+        let raw = match self
+            .llm_client
+            .chat_mini(vec![
+                LlmMessage {
+                    role: "system".into(),
+                    content: system_prompt,
+                },
+                LlmMessage {
+                    role: "user".into(),
+                    content: user_prompt,
+                },
+            ])
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                debug!("[alpha] decompose: LLM error: {e}");
+                return fallback();
+            }
+        };
+
+        // Parse JSON — be lenient about markdown fences
+        let json_str = raw
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        #[derive(serde::Deserialize)]
+        struct LlmPlan {
+            channel_title: String,
+            subtasks: Vec<Subtask>,
+        }
+
+        match serde_json::from_str::<LlmPlan>(json_str) {
+            Ok(parsed) => {
+                // Validate: all pup keys must be known
+                let valid: Vec<Subtask> = parsed
+                    .subtasks
+                    .into_iter()
+                    .filter(|st| pup_keys.contains(&st.pup))
+                    .collect();
+                if valid.is_empty() {
+                    debug!("[alpha] decompose: no valid subtasks parsed, using fallback");
+                    return fallback();
+                }
+                DelegationPlan {
+                    channel_id: String::new(),
+                    channel_title: parsed.channel_title,
+                    subtasks: valid,
+                }
+            }
+            Err(e) => {
+                debug!("[alpha] decompose: JSON parse error: {e}");
+                fallback()
+            }
+        }
+    }
+
+    /// DAG-based multi-pup dispatch. Decomposes the request, builds execution layers,
+    /// runs layers sequentially (pups within a layer run in parallel), and aggregates.
+    async fn run_dag(
+        &self,
+        msg: &str,
+        required_pups: Vec<String>,
+        app_handle: &tauri::AppHandle,
+    ) -> Result<String> {
+        debug!("[alpha] run_dag: pups={required_pups:?}");
+
+        // 1. Decompose into subtasks
+        let mut plan = self.decompose(msg, &required_pups).await;
+
+        // 2. Build execution layers — fall back to run_parallel_pack on cycle
+        let layers = match build_execution_layers(&plan.subtasks) {
+            Ok(l) => l,
+            Err(e) => {
+                debug!("[alpha] run_dag: DAG build error ({e}), falling back to parallel pack");
+                return self.run_parallel_pack(msg, required_pups, app_handle).await;
+            }
+        };
+
+        // 3. Create channel
+        let task_id = Uuid::new_v4().to_string();
+        let all_members: Vec<&str> = required_pups.iter().map(|s| s.as_str()).collect();
+        let channel_id = self
+            .channel_manager
+            .create_channel(&task_id, &plan.channel_title, &all_members)
+            .await?;
+        plan.channel_id = channel_id.clone();
+
+        // 4. Emit delegation_plan event
+        let _ = app_handle.emit("delegation_plan", &plan);
+
+        // 5. Post Alpha briefing
+        let briefing = format!(
+            "Pack Channel 已建立。任务：{}\n共 {} 个执行层，涉及 Pup：{}",
+            msg,
+            layers.len(),
+            required_pups
+                .iter()
+                .map(|k| pup_display_name(k))
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+        let _ = self
+            .channel_manager
+            .post_text(&channel_id, "alpha", &briefing, &[])
+            .await;
+
+        // 6. Spawn timeout monitor loop
+        let monitor_channel_id = channel_id.clone();
+        let monitor_cm = self.channel_manager.clone();
+        let monitor_app = app_handle.clone();
+        let timeout_handle = tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                let timed_out = monitor_cm
+                    .monitor
+                    .check_timeouts(&monitor_channel_id)
+                    .await;
+                for (pup_id, _kind) in timed_out {
+                    debug!(
+                        "[alpha] run_dag: pup '{pup_id}' timed out in channel {monitor_channel_id}"
+                    );
+                    let _ = monitor_cm
+                        .post_status(&monitor_channel_id, &pup_id, "failed")
+                        .await;
+                    let _ = monitor_app.emit(
+                        "stream_activity",
+                        ActivityEvent {
+                            kind: "routing".into(),
+                            label: format!("{} timed out", pup_display_name(&pup_id)),
+                        },
+                    );
+                }
+            }
+        });
+
+        // 7. Execute layers sequentially, pups within a layer in parallel
+        let owner_summary = self
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .await;
+
+        let mut all_results: Vec<(String, String)> = Vec::new();
+        // Accumulated context from prior layers to inject as deps
+        let mut dep_context: HashMap<String, String> = HashMap::new();
+
+        for (layer_idx, layer) in layers.iter().enumerate() {
+            debug!(
+                "[alpha] run_dag: executing layer {} with {} pups",
+                layer_idx,
+                layer.len()
+            );
+
+            let mut layer_handles = Vec::new();
+
+            for subtask in layer {
+                let pup_key = subtask.pup.clone();
+                let pup_description = subtask.description.clone();
+                let deps: Vec<String> = subtask.depends_on.clone();
+
+                // Build injected context from dependency outputs
+                let injected: String = if deps.is_empty() {
+                    String::new()
+                } else {
+                    deps.iter()
+                        .filter_map(|dep| dep_context.get(dep))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                };
+
+                let self_clone = self.clone();
+                let owner_ctx = owner_summary.clone();
+                let ch_id = channel_id.clone();
+                let app_clone = app_handle.clone();
+
+                // Post started status
+                let _ = self
+                    .channel_manager
+                    .post_status(&channel_id, &pup_key, "started")
+                    .await;
+
+                let cm_clone = self.channel_manager.clone();
+                let handle = tauri::async_runtime::spawn(async move {
+                    // Register heartbeat
+                    cm_clone.monitor.register(&ch_id, &pup_key).await;
+
+                    // Spawn heartbeat loop
+                    let hb_ch_id = ch_id.clone();
+                    let hb_pup = pup_key.clone();
+                    let hb_cm = cm_clone.clone();
+                    let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                    let _hb_handle = tauri::async_runtime::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            crate::channel::heartbeat::HEARTBEAT_INTERVAL,
+                        );
+                        interval.tick().await; // skip first immediate tick
+                        loop {
+                            tokio::select! {
+                                _ = interval.tick() => {
+                                    hb_cm.post_heartbeat(&hb_ch_id, &hb_pup).await;
+                                }
+                                _ = &mut hb_stop_rx => {
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    // Build full task description with injected dep context
+                    let full_msg = if injected.is_empty() {
+                        pup_description.clone()
+                    } else {
+                        format!(
+                            "{}\n\n## Context from previous steps\n{}",
+                            pup_description, injected
+                        )
+                    };
+
+                    // Emit activity event
+                    let _ = app_clone.emit(
+                        "stream_activity",
+                        ActivityEvent {
+                            kind: "routing".into(),
+                            label: format!("pack:{}", pup_display_name(&pup_key)),
+                        },
+                    );
+
+                    // Run the pup
+                    let result = self_clone
+                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                    // Stop heartbeat loop
+                    let _ = hb_stop_tx.send(());
+                    cm_clone.monitor.unregister(&ch_id, &pup_key).await;
+
+                    // Post result text and done status
+                    let _ = cm_clone
+                        .post_text(&ch_id, &pup_key, &result, &[])
+                        .await;
+                    let status = if result.starts_with("Error:") {
+                        "failed"
+                    } else {
+                        "done"
+                    };
+                    let _ = cm_clone.post_status(&ch_id, &pup_key, status).await;
+
+                    (pup_key, result)
+                });
+                layer_handles.push(handle);
+            }
+
+            // Wait for all pups in this layer (with per-layer timeout of 300s)
+            let joined = tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                futures_util::future::join_all(layer_handles),
+            )
+            .await;
+
+            let layer_results: Vec<(String, String)> = match joined {
+                Ok(results) => results.into_iter().filter_map(|r| r.ok()).collect(),
+                Err(_) => {
+                    debug!("[alpha] run_dag: layer {} timed out", layer_idx);
+                    vec![]
+                }
+            };
+
+            // Update dep_context for next layer
+            for (pup_key, result) in &layer_results {
+                dep_context.insert(pup_key.clone(), result.clone());
+            }
+
+            all_results.extend(layer_results);
+        }
+
+        // 8. Cancel timeout monitor
+        timeout_handle.abort();
+
+        // 9. Aggregate results
+        let _ = app_handle.emit(
+            "stream_activity",
+            ActivityEvent {
+                kind: "routing".into(),
+                label: "pack → 汇总".into(),
+            },
+        );
+
+        let aggregated = self.aggregate_channel_results(msg, &all_results).await;
+
+        // 10. Complete channel
+        let _ = self.channel_manager.complete(&channel_id).await;
+
+        aggregated
+    }
+
+    /// Entry point for external bridge messages (Telegram, Discord, Slack).
+    /// Uses the same routing as process_user_message_stream but returns a Result
+    /// instead of emitting Tauri events.
+    pub async fn process_bridge_message(&self, msg: String) -> anyhow::Result<String> {
+        let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
+        let owner_summary = self.get_owner_summary(&owner_md).await;
+        let classify_history = self.build_classify_history().await;
+        let pup_key = self.classify_intent(&msg, &owner_summary, &classify_history).await;
+
+        if let Some(pups_str) = pup_key.strip_prefix("channel:") {
+            let pups: Vec<String> = pups_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if pups.len() >= 2 {
+                let results = self.run_pups_for_results(&msg, &pups).await;
+                return self.aggregate_channel_results(&msg, &results).await;
+            }
+        }
+
+        // Single pup path
+        let pup = self.specialist_registry.read().await.get(&pup_key).cloned();
+        if pup.is_some() {
+            return self.run_pup_for_channel(&pup_key, &msg, &owner_summary).await;
+        }
+
+        // Alpha fallback — use non-streaming chat
+        let pup_history = self.build_history("alpha").await;
+        let relevant_memories = self.memory.search_long_term(&msg, 5).await.unwrap_or_default();
+        let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
+        self.alpha_reply_bridge(&msg, &owner_summary, &pup_history, &relevant_memories, &pending_tasks).await
+    }
+
+    /// Non-streaming alpha reply for bridge use (no AppHandle required).
+    async fn alpha_reply_bridge(
+        &self,
+        msg: &str,
+        owner_summary: &str,
+        history: &[LlmMessage],
+        memories: &[String],
+        pending_tasks: &[crate::memory::system::TaskRecord],
+    ) -> Result<String> {
+        let mut system_content = if owner_summary.contains("## Boundaries") {
+            let summary: String = owner_summary.chars().take(1000).collect();
+            format!(
+                "You are Alpha Pup, a loyal personal AI assistant. \
+                 Respond in the user's preferred language. Owner profile:\n\n{summary}"
+            )
+        } else {
+            "You are Alpha Pup, a loyal personal AI assistant. Be concise and helpful.".to_string()
+        };
+
+        if !memories.is_empty() {
+            let bullets: String = memories
+                .iter()
+                .map(|m| format!("- {}", m.chars().take(200).collect::<String>()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            system_content.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
+        }
+
+        if !pending_tasks.is_empty() {
+            let tasks_str: String = pending_tasks
+                .iter()
+                .map(|t| format!("- id:{} [{}] {}", t.id, t.status, t.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            system_content.push_str(&format!("\n\n## 当前任务\n{tasks_str}"));
+        }
+
+        let mut messages = vec![LlmMessage {
+            role: "system".into(),
+            content: system_content,
+        }];
+        messages.extend_from_slice(history);
+        messages.push(LlmMessage {
+            role: "user".into(),
+            content: msg.to_string(),
+        });
+
+        self.llm_client.chat(messages).await
+    }
+
+    /// Run multiple pups and collect results without channel overhead (bridge path).
+    async fn run_pups_for_results(&self, msg: &str, pup_keys: &[String]) -> Vec<(String, String)> {
+        let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
+        let owner_summary = self.get_owner_summary(&owner_md).await;
+        let handles: Vec<_> = pup_keys
+            .iter()
+            .map(|key| {
+                let s = self.clone();
+                let k = key.clone();
+                let m = msg.to_string();
+                let o = owner_summary.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = s
+                        .run_pup_for_channel(&k, &m, &o)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+                    (k, result)
+                })
+            })
+            .collect();
+        futures_util::future::join_all(handles)
+            .await
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect()
     }
 
     /// Run a specialist pup's tool-call loop for a channel task (no streaming to chat).

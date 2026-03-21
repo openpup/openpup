@@ -850,6 +850,17 @@ pub async fn list_channels(
         .map_err(|e| e.to_string())
 }
 
+/// Get the number of currently active Pack Channels.
+#[tauri::command]
+pub async fn get_active_channel_count(state: State<'_, AppState>) -> Result<i64, String> {
+    state
+        .alpha
+        .channel_manager
+        .active_count()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Get all messages for a specific channel.
 #[tauri::command]
 pub async fn get_channel_messages(

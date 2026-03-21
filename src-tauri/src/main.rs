@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod bridge;
 mod channel;
 mod commands;
 mod config;
@@ -23,6 +24,7 @@ use agents::ops_pup::OpsPup;
 use agents::plugins::load_dynamic_pups;
 use agents::research_pup::ResearchPup;
 use agents::writer_pup::WriterPup;
+use channel::manager::ChannelManager;
 use commands::AppState;
 use llm::client::LlmClient;
 use mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
@@ -75,7 +77,7 @@ fn main() {
 
     let rt = Runtime::new().expect("failed to create tokio runtime");
 
-    let (app_state, permission_checker, scheduler) = rt.block_on(async {
+    let (app_state, permission_checker, scheduler, channel_manager, alpha_for_bridge) = rt.block_on(async {
         let home_dir = dirs::home_dir().expect("cannot determine home directory");
         let workspace_root = home_dir.join(".openpup");
         let db_path = workspace_root.join("database.db");
@@ -207,6 +209,7 @@ fn main() {
         });
 
         let pup_config_path = workspace_root.join("pups_config.json");
+        let channel_manager = Arc::new(ChannelManager::new(memory.clone()));
         let alpha = Arc::new(AlphaPup::new(
             memory.clone(),
             llm_client.clone(),
@@ -214,6 +217,7 @@ fn main() {
             file_layer.clone(),
             skill_executor.clone(),
             Some(pup_config_path),
+            channel_manager.clone(),
         ));
 
         // Register built-in specialist pups
@@ -241,13 +245,19 @@ fn main() {
             jobs_path,
         };
 
+        let alpha_for_bridge = alpha.clone();
         let app_state = AppState { alpha, file_layer };
-        (app_state, permission_checker, scheduler)
+        (app_state, permission_checker, scheduler, channel_manager, alpha_for_bridge)
     });
 
     let checker_for_setup = permission_checker.clone();
     // Scheduler is moved into setup closure where AppHandle is available
     let scheduler_for_setup = scheduler;
+    let channel_manager_for_setup = channel_manager;
+
+    // Bridge manager — started in setup closure (only if configured)
+    let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+    let bridge_manager = Arc::new(bridge::BridgeManager::new(bridge_cfg, alpha_for_bridge));
 
     tauri::Builder::default()
         .manage(app_state)
@@ -315,6 +325,7 @@ fn main() {
             // Pack Channel
             commands::list_channels,
             commands::get_channel_messages,
+            commands::get_active_channel_count,
             // Pack page per-pup conversation
             commands::get_pup_conversation,
             commands::get_pup_message_count,
@@ -324,7 +335,9 @@ fn main() {
         ])
         .setup(move |app| {
             checker_for_setup.init_handle(app.handle().clone());
+            channel_manager_for_setup.init_handle(app.handle().clone());
             scheduler_for_setup.start(app.handle().clone());
+            bridge_manager.start();
             Ok(())
         })
         .run(tauri::generate_context!())

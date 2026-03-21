@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub pups: PupsConfig,
     #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub bridge: Option<crate::bridge::types::BridgeConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
