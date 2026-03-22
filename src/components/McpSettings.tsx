@@ -34,7 +34,7 @@ export const McpSettings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [mcpUrl, setMcpUrl] = useState('');
   const [token, setToken] = useState('');
   const [description, setDescription] = useState('');
   const [adding, setAdding] = useState(false);
@@ -62,14 +62,14 @@ export const McpSettings: React.FC = () => {
   };
 
   const add = async () => {
-    if (!name.trim() || !baseUrl.trim()) return;
+    if (!name.trim() || !mcpUrl.trim()) return;
     setAdding(true);
     setError(null);
     try {
       await invoke('add_mcp_server', {
-        entry: { name: name.trim(), base_url: baseUrl.trim(), token: token.trim(), description: description.trim() },
+        entry: { name: name.trim(), base_url: mcpUrl.trim(), token: token.trim(), description: description.trim() },
       });
-      setName(''); setBaseUrl(''); setToken(''); setDescription('');
+      setName(''); setMcpUrl(''); setToken(''); setDescription('');
       await load();
     } catch (e) { setError(String(e)); }
     finally { setAdding(false); }
@@ -234,8 +234,8 @@ export const McpSettings: React.FC = () => {
           <input
             style={inputStyle}
             placeholder={t('mcp_url_ph', lang)}
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
+            value={mcpUrl}
+            onChange={(e) => setMcpUrl(e.target.value)}
           />
           <input
             style={inputStyle}
@@ -262,9 +262,9 @@ export const McpSettings: React.FC = () => {
             fontSize: 12,
             fontWeight: 500,
             marginTop: 4,
-            opacity: (adding || !name.trim() || !baseUrl.trim()) ? 0.5 : 1,
+            opacity: (adding || !name.trim() || !mcpUrl.trim()) ? 0.5 : 1,
           }}
-          disabled={adding || !name.trim() || !baseUrl.trim()}
+          disabled={adding || !name.trim() || !mcpUrl.trim()}
           onClick={() => void add()}
         >
           {adding ? t('mcp_adding', lang) : t('mcp_add_btn', lang)}

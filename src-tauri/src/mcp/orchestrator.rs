@@ -223,9 +223,10 @@ impl MCPOrchestrator {
     }
 
     /// Discover tools from a remote MCP server via streamable HTTP transport.
+    ///
+    /// `base_url` is treated as the full MCP endpoint URL configured by the user.
     async fn discover_server_tools(&self, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
-        let mcp_url = format!("{}/mcp", entry.base_url.trim_end_matches('/'));
-        rmcp_list_tools(&mcp_url, entry).await
+        rmcp_list_tools(&entry.base_url, entry).await
     }
 
     /// Return all discovered tools (remote cache + built-in local tools).
@@ -388,8 +389,7 @@ impl MCPOrchestrator {
 
 /// Call a remote MCP tool via streamable HTTP transport.
 async fn call_remote(entry: &McpServerEntry, tool: &str, params: &Value) -> Result<Value> {
-    let mcp_url = format!("{}/mcp", entry.base_url.trim_end_matches('/'));
-    rmcp_call_tool(&mcp_url, entry, tool, params).await
+    rmcp_call_tool(&entry.base_url, entry, tool, params).await
 }
 
 /// Streamable HTTP-based tool listing via rmcp.

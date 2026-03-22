@@ -111,7 +111,7 @@ impl SkillExecutor {
             serde_json::json!({ "role": "user", "content": input }),
         ];
 
-        const MAX_ITERATIONS: usize = 12;
+        const MAX_ITERATIONS: usize = 20;
 
         for iteration in 0..MAX_ITERATIONS {
             if abort.load(Ordering::Relaxed) {

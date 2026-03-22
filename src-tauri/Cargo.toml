@@ -25,7 +25,7 @@ flate2 = "1"
 libloading = "0.8"
 dotenvy = "0.15"
 open = "5"
-rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "1.2.0", features = ["client", "reqwest", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"

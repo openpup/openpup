@@ -600,7 +600,7 @@ impl AlphaPup {
     /// Maximum MCP tools to inject per call — prevents context bloat and
     /// hitting provider tool-count limits. When the user has more MCP tools
     /// than this, `tools_for_task` keeps only the most relevant ones.
-    const MAX_MCP_TOOLS: usize = 20;
+    const MAX_MCP_TOOLS: usize =100;
 
     /// Build tool schemas for all currently enabled installed skills.
     /// Reads from the live in-memory registry — no disk I/O, safe to call each iteration.
@@ -694,7 +694,7 @@ impl AlphaPup {
         }
 
         let mut msgs = messages;
-        const MAX_ITER: usize = 12;
+        const MAX_ITER: usize = 20;
 
         for iter in 0..MAX_ITER {
             if abort.load(Ordering::Relaxed) {
