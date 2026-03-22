@@ -50,7 +50,7 @@ export const PupManager: React.FC = () => {
       await invoke('update_pup', { key, systemPromptOverride: draftPrompt, enabled });
       setEditing(null);
       await load();
-      flash(lang === 'zh' ? '已保存' : 'Saved');
+      flash(t('pup_saved', lang));
     } catch (e) { setError(String(e)); }
   };
 
@@ -71,7 +71,7 @@ export const PupManager: React.FC = () => {
       await invoke('remove_custom_pup', { key });
       setConfirmDelete(null);
       await load();
-      flash(lang === 'zh' ? '已删除' : 'Removed');
+      flash(t('pup_removed', lang));
     } catch (e) { setError(String(e)); }
   };
 
@@ -88,7 +88,7 @@ export const PupManager: React.FC = () => {
       });
       setAddKey(''); setAddName(''); setAddDesc(''); setAddPrompt('');
       await load();
-      flash(lang === 'zh' ? '已添加' : 'Added');
+      flash(t('pup_added', lang));
     } catch (e) { setError(String(e)); }
     finally { setAdding(false); }
   };
@@ -200,13 +200,13 @@ export const PupManager: React.FC = () => {
                       onClick={() => void removePup(pup.key)}
                       style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 12 }}
                     >
-                      {lang === 'zh' ? '确认删除' : 'Confirm'}
+                      {t('common_confirm', lang)}
                     </button>
                     <button
                       onClick={() => setConfirmDelete(null)}
                       style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none', cursor: 'pointer', fontSize: 12 }}
                     >
-                      {lang === 'zh' ? '取消' : 'Cancel'}
+                      {t('common_cancel', lang)}
                     </button>
                   </>
                 ) : (

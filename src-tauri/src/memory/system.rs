@@ -7,7 +7,8 @@ use sqlx::{
     Pool, Row, Sqlite,
 };
 
-use crate::channel::types::{ChannelMessageRecord, ChannelRecord};
+use crate::channel::types::{ChannelMessageRecord, ChannelRecord, DelegationPlan};
+use crate::bridge::types::{BridgeConnectionState, BridgeConnectionStatus, InboundMessage, OutboundMessage};
 use crate::llm::client::LlmClient;
 
 #[derive(Clone)]
@@ -261,6 +262,18 @@ impl MemorySystem {
 
         sqlx::query(
             r#"
+      CREATE TABLE IF NOT EXISTS channel_plans (
+        channel_id  TEXT PRIMARY KEY,
+        plan_json   TEXT NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
       CREATE TABLE IF NOT EXISTS custom_pups (
         id            TEXT PRIMARY KEY,
         name          TEXT NOT NULL UNIQUE,
@@ -270,6 +283,41 @@ impl MemorySystem {
         color         TEXT NOT NULL DEFAULT '#888780',
         enabled       INTEGER NOT NULL DEFAULT 1,
         created_at    INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // ── External Bridge tables ─────────────────────────────────────────────
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS external_messages (
+        id           TEXT PRIMARY KEY,
+        platform     TEXT NOT NULL,
+        chat_id      TEXT NOT NULL,
+        direction    TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+        user_id      TEXT,
+        message_id   TEXT,
+        reply_to_id  TEXT,
+        msg_type     TEXT,
+        content      TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS bridge_connections (
+        platform    TEXT PRIMARY KEY,
+        status      TEXT NOT NULL DEFAULT 'unconfigured',
+        connected   INTEGER NOT NULL DEFAULT 0,
+        last_seen   INTEGER,
+        error_msg   TEXT
       );
       "#,
         )
@@ -343,6 +391,46 @@ impl MemorySystem {
         Ok(())
     }
 
+    pub async fn save_channel_plan(&self, plan: &DelegationPlan) -> Result<()> {
+        let now = Utc::now().timestamp();
+        let plan_json = serde_json::to_string(plan)?;
+        sqlx::query(
+            r#"
+            INSERT INTO channel_plans (channel_id, plan_json, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(channel_id) DO UPDATE SET
+              plan_json = excluded.plan_json,
+              updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&plan.channel_id)
+        .bind(plan_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_channel_plan(&self, channel_id: &str) -> Result<Option<DelegationPlan>> {
+        let row = sqlx::query(
+            r#"
+            SELECT plan_json
+            FROM channel_plans
+            WHERE channel_id = ?1
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let plan_json: String = row.get("plan_json");
+        Ok(Some(serde_json::from_str(&plan_json)?))
+    }
+
     pub async fn active_channel_count(&self) -> Result<i64> {
         let row =
             sqlx::query("SELECT COUNT(*) as cnt FROM pack_channels WHERE status='active'")
@@ -360,10 +448,130 @@ impl MemorySystem {
         Ok(())
     }
 
+    pub async fn clear_completed_channels(&self) -> Result<i64> {
+        sqlx::query(
+            r#"
+            DELETE FROM channel_plans
+            WHERE channel_id IN (
+              SELECT id FROM pack_channels WHERE status = 'completed'
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let deleted_messages = sqlx::query(
+            r#"
+            DELETE FROM channel_messages
+            WHERE channel_id IN (
+              SELECT id FROM pack_channels WHERE status = 'completed'
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM channel_members
+            WHERE channel_id IN (
+              SELECT id FROM pack_channels WHERE status = 'completed'
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM pack_channels WHERE status = 'completed'")
+            .execute(&self.pool)
+            .await?;
+
+        Ok(deleted_messages.rows_affected() as i64)
+    }
+
+    pub async fn clear_stale_active_channels(&self, max_age_seconds: i64) -> Result<i64> {
+        let cutoff = Utc::now().timestamp() - max_age_seconds;
+
+        sqlx::query(
+            r#"
+            DELETE FROM channel_plans
+            WHERE channel_id IN (
+              SELECT c.id
+              FROM pack_channels c
+              WHERE c.status = 'active'
+                AND COALESCE(
+                  (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+                  c.created_at
+                ) < ?1
+            )
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        let deleted_channels = sqlx::query(
+            r#"
+            DELETE FROM channel_messages
+            WHERE channel_id IN (
+              SELECT c.id
+              FROM pack_channels c
+              WHERE c.status = 'active'
+                AND COALESCE(
+                  (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+                  c.created_at
+                ) < ?1
+            )
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM channel_members
+            WHERE channel_id IN (
+              SELECT c.id
+              FROM pack_channels c
+              WHERE c.status = 'active'
+                AND COALESCE(
+                  (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+                  c.created_at
+                ) < ?1
+            )
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM pack_channels
+            WHERE status = 'active'
+              AND COALESCE(
+                (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = pack_channels.id),
+                created_at
+              ) < ?1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(deleted_channels.rows_affected() as i64)
+    }
+
     pub async fn list_channels(&self, limit: i64) -> Result<Vec<ChannelRecord>> {
         let rows = sqlx::query(
             r#"
       SELECT c.id, c.task_id, c.title, c.status, c.created_at, c.completed_at,
+             COALESCE(
+               (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+               c.completed_at,
+               c.created_at
+             ) AS updated_at,
              COALESCE(GROUP_CONCAT(m.pup_id), '') AS members
       FROM pack_channels c
       LEFT JOIN channel_members m ON c.id = m.channel_id
@@ -392,6 +600,7 @@ impl MemorySystem {
                     status: row.get("status"),
                     created_at: row.get("created_at"),
                     completed_at: row.get("completed_at"),
+                    updated_at: row.get("updated_at"),
                     members,
                 }
             })
@@ -451,6 +660,112 @@ impl MemorySystem {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn record_external_inbound(&self, id: &str, message: &InboundMessage) -> Result<()> {
+        sqlx::query(
+            r#"
+      INSERT INTO external_messages
+      (id, platform, chat_id, direction, user_id, message_id, content, created_at)
+      VALUES (?1, ?2, ?3, 'inbound', ?4, ?5, ?6, ?7)
+      "#,
+        )
+        .bind(id)
+        .bind(message.platform.as_str())
+        .bind(&message.chat_id)
+        .bind(&message.user_id)
+        .bind(&message.message_id)
+        .bind(&message.text)
+        .bind(message.timestamp)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn record_external_outbound(&self, id: &str, message: &OutboundMessage) -> Result<()> {
+        sqlx::query(
+            r#"
+      INSERT INTO external_messages
+      (id, platform, chat_id, direction, reply_to_id, msg_type, content, created_at)
+      VALUES (?1, ?2, ?3, 'outbound', ?4, ?5, ?6, ?7)
+      "#,
+        )
+        .bind(id)
+        .bind(message.platform.as_str())
+        .bind(&message.chat_id)
+        .bind(message.reply_to_id.as_deref())
+        .bind(format!("{:?}", message.msg_type).to_lowercase())
+        .bind(&message.text)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_bridge_connection(
+        &self,
+        platform: &str,
+        status: &BridgeConnectionState,
+        connected: bool,
+        last_seen: Option<i64>,
+        error_msg: Option<&str>,
+    ) -> Result<()> {
+        let status_str = match status {
+            BridgeConnectionState::Unconfigured => "unconfigured",
+            BridgeConnectionState::Connecting => "connecting",
+            BridgeConnectionState::Connected => "connected",
+            BridgeConnectionState::Error => "error",
+        };
+        sqlx::query(
+            r#"
+      INSERT INTO bridge_connections (platform, status, connected, last_seen, error_msg)
+      VALUES (?1, ?2, ?3, ?4, ?5)
+      ON CONFLICT(platform) DO UPDATE SET
+        status=excluded.status,
+        connected=excluded.connected,
+        last_seen=excluded.last_seen,
+        error_msg=excluded.error_msg
+      "#,
+        )
+        .bind(platform)
+        .bind(status_str)
+        .bind(if connected { 1 } else { 0 })
+        .bind(last_seen)
+        .bind(error_msg)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_bridge_connections(&self) -> Result<Vec<BridgeConnectionStatus>> {
+        let rows = sqlx::query(
+            r#"
+      SELECT platform, status, connected, last_seen, error_msg
+      FROM bridge_connections
+      ORDER BY platform ASC
+      "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let status = match row.get::<String, _>("status").as_str() {
+                    "connected" => BridgeConnectionState::Connected,
+                    "connecting" => BridgeConnectionState::Connecting,
+                    "error" => BridgeConnectionState::Error,
+                    _ => BridgeConnectionState::Unconfigured,
+                };
+                BridgeConnectionStatus {
+                    platform: row.get("platform"),
+                    status,
+                    connected: row.get::<i64, _>("connected") != 0,
+                    last_seen: row.get("last_seen"),
+                    error_msg: row.get("error_msg"),
+                }
+            })
+            .collect())
     }
 
     /// Semantic search over long-term memories using cosine similarity.

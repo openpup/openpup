@@ -10,6 +10,7 @@ pub struct ChannelRecord {
     pub status: String,
     pub created_at: i64,
     pub completed_at: Option<i64>,
+    pub updated_at: i64,
     /// Participating pup keys (from channel_members join).
     pub members: Vec<String>,
 }

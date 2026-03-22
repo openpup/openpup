@@ -7,24 +7,53 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.2...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.3...HEAD)
 
-### Planned — v0.1.3: Multi-Pup Async Collaboration
+### Planned — v0.2.0: Configurable Organization OS
 
-#### Backend
+Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 
-- **Parallel execution engine** — refactor `do_stream` to spawn multiple pups concurrently via `tokio::join!`, each streaming independently
-- **Channel message persistence** — add SQLite tables `channels` / `channel_messages` (channel_id, pup, kind, content, timestamp)
-- **Pup-to-pup messaging protocol** — define message kinds (`text` / `artifact` / `@mention`) so Research can pass artifacts to Writer
-- **Alpha task decomposition** — Alpha produces a structured delegation plan before dispatching to each pup
-- **Result aggregation** — Alpha merges all pup outputs and emits `stream_done` once all complete (`aggregate_pup_results` already drafted)
+#### Product Direction
 
-#### Frontend
+- **Configurable organization model** — support user-defined organizations, units, roles, mandates, and operating protocols rather than a fixed "AI company" template
+- **Persistent role ownership** — upgrade pups from per-task specialists into long-lived organizational roles with ongoing responsibilities and memory
+- **Escalation-based execution** — reserve `Pack Channel` / DAG coordination for complex work, while simpler work can stay within a single role or handoff chain
+- **External operating surfaces** — evolve Telegram into a lightweight control surface and Discord into a richer collaborative surface for visible multi-role interaction
 
-- **Pack Channel live subscription** — consume Tauri `channel_message` events in real time, replacing the current static mock
-- **Sidebar badge** — show an orange numeric badge on the Pack Channel nav item when a channel is active
-- **Jump-back on completion** — display a "View final reply" button at the channel footer when all pups finish, linking back to main Chat
-- **Task breakdown card in Alpha bubble** — render a subtask card (`① Dev Pup → … / ② Writer Pup → …`) when a multi-pup collaboration is initiated
+#### System Capabilities
+
+- **Role inboxes and work queues** — give each role a persistent backlog for routines, reactive triggers, escalations, and directed work
+- **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
+- **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
+- **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.3](https://github.com/openpup/openpup/compare/v0.1.2...v0.1.3) — 2026-03-22
+
+### Added
+
+- **Pack Channel runtime** — multi-pup DAG execution now creates persisted channels, plans, statuses, and live message history instead of staying as a static mock
+- **Context Inspector component** — extracted the right-side inspector into a dedicated component while preserving the `Pack Channel` experience
+- **External Bridge workspace** — added a dedicated `Bridge` navigation page and `BridgeSettings` UI for Telegram / Discord / Slack bridge configuration
+- **Per-bridge proxy settings** — each bridge can now store its own proxy URL in config, with Telegram applying it to outbound and polling HTTP clients
+- **Telegram bridge progress relay** — Telegram now receives richer progress updates for routed collaboration, layer execution, per-pup completion, aggregation, and stop acknowledgement
+- **Bridge-to-channel mapping** — bridge-triggered collaboration now creates real `Pack Channel` records so work is visible both in chat surfaces and in the desktop UI
+
+### Fixed
+
+- **Unicode truncation panic** — replaced byte slicing with character-safe truncation in bridge result formatting and other high-risk output preview paths
+- **Bridge memory persistence** — bridge conversations now enter the regular post-processing path so conversation history, diary updates, memory extraction, and task creation all stay in sync
+- **Telegram final send validation** — Telegram bridge now checks HTTP status and Bot API payload success instead of assuming `sendMessage` worked
+- **Bridge status visibility** — Telegram connection status now updates on polling success, inbound activity, and non-timeout send/poll errors so manual refresh reflects real backend state
+- **Bridge stop control** — stop phrases such as `stop`, `cancel`, `停止`, and `停止吧` now flip the shared abort flag and send an explicit stop acknowledgement
+- **Bridge collaboration observability** — messages classified as `channel:*` no longer disappear into an internal-only path; they now produce actual channel records and visible progress
+
+### Changed
+
+- **Bridge polling cadence** — the bridge status indicator now refreshes every 5 seconds instead of every 4 seconds
+- **Settings information architecture** — bridge configuration was moved out of the general Settings page into its own navigation entry to keep operational controls grouped together
+- **Release planning** — the next major planning track is now documented as `Roadmap 2.0`, focused on evolving openpup into a configurable organization operating system
 
 ---
 

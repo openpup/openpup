@@ -9,8 +9,9 @@ pub fn format_progress(done_pups: &[String], layer_index: usize) -> String {
 
 /// Truncate long results for mobile screens.
 pub fn format_result(output: &str) -> String {
-    if output.len() > 800 {
-        format!("{}\n\n\u{2026}(full result saved locally, open openpup to view)", &output[..800])
+    let truncated: String = output.chars().take(800).collect();
+    if truncated.len() < output.len() {
+        format!("{truncated}\n\n\u{2026}(full result saved locally, open openpup to view)")
     } else {
         output.to_string()
     }

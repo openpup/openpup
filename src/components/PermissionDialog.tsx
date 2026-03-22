@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLang, t } from '../i18n';
 
 export interface PermissionRequest {
   request_id: string;
@@ -18,18 +19,22 @@ interface Props {
   onDeny: () => void;
 }
 
-const RISK: Record<string, { bar: string; badge: string; badgeText: string; approveLabel: string; approveBg: string; approveColor: string }> = {
-  high:   { bar: '#E24B4A', badge: 'rgba(226,75,74,0.12)', badgeText: '#E24B4A', approveLabel: '允许', approveBg: 'var(--color-text-primary)', approveColor: 'var(--color-background-primary)' },
-  medium: { bar: '#BA7517', badge: 'rgba(186,117,23,0.12)', badgeText: '#BA7517', approveLabel: '允许', approveBg: '#BA7517', approveColor: '#fff' },
-  low:    { bar: '#1D9E75', badge: 'rgba(29,158,117,0.12)', badgeText: '#1D9E75', approveLabel: '允许', approveBg: '#1D9E75', approveColor: '#fff' },
+const RISK: Record<string, { bar: string; badge: string; badgeText: string; approveBg: string; approveColor: string }> = {
+  high:   { bar: '#E24B4A', badge: 'rgba(226,75,74,0.12)', badgeText: '#E24B4A', approveBg: 'var(--color-text-primary)', approveColor: 'var(--color-background-primary)' },
+  medium: { bar: '#BA7517', badge: 'rgba(186,117,23,0.12)', badgeText: '#BA7517', approveBg: '#BA7517', approveColor: '#fff' },
+  low:    { bar: '#1D9E75', badge: 'rgba(29,158,117,0.12)', badgeText: '#1D9E75', approveBg: '#1D9E75', approveColor: '#fff' },
 };
 
-const RISK_LABEL: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' };
-
 export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }) => {
+  const { lang } = useLang();
   const [remember, setRemember] = React.useState(false);
   const cfg = RISK[request.risk_level] ?? RISK.medium;
   const isHigh = request.risk_level === 'high';
+  const riskLabel = request.risk_level === 'high'
+    ? t('permission_risk_high', lang)
+    : request.risk_level === 'low'
+      ? t('permission_risk_low', lang)
+      : t('permission_risk_medium', lang);
 
   return (
     <div
@@ -53,7 +58,7 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
         <div style={{ padding: '16px 18px 12px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: '4px' }}>
-              {request.skill_name} 需要你的许可
+              {request.skill_name} {t('permission_requires_approval', lang)}
             </div>
             <div style={{ fontSize: '11.5px', color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
               {request.action_description}
@@ -66,7 +71,7 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
             background: cfg.badge, color: cfg.badgeText,
             border: `0.5px solid ${cfg.bar}`,
           }}>
-            {RISK_LABEL[request.risk_level] ?? '中风险'}
+            {riskLabel}
           </span>
         </div>
 
@@ -83,13 +88,13 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
             lineHeight: 1.6,
           }}>
             {request.details.affected_files?.length ? (
-              <div><span style={{ color: 'var(--color-text-tertiary)' }}>目标文件 · </span>{request.details.affected_files.join(', ')}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>{t('permission_affected_files', lang)} · </span>{request.details.affected_files.join(', ')}</div>
             ) : null}
             {request.details.network_destinations?.length ? (
-              <div><span style={{ color: 'var(--color-text-tertiary)' }}>目标平台 · </span>{request.details.network_destinations.join(', ')}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>{t('permission_network_destinations', lang)} · </span>{request.details.network_destinations.join(', ')}</div>
             ) : null}
             {typeof request.details.estimated_cost === 'number' ? (
-              <div><span style={{ color: 'var(--color-text-tertiary)' }}>预计费用 · </span>${request.details.estimated_cost}</div>
+              <div><span style={{ color: 'var(--color-text-tertiary)' }}>{t('permission_estimated_cost', lang)} · </span>${request.details.estimated_cost}</div>
             ) : null}
           </div>
         )}
@@ -108,7 +113,7 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
               onChange={(e) => setRemember(e.target.checked)}
               style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#1D9E75' }}
             />
-            记住选择，下次不再询问
+            {t('permission_remember', lang)}
           </label>
         )}
 
@@ -122,7 +127,7 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
               border: '0.5px solid var(--color-border-secondary)',
             }}
           >
-            拒绝
+            {t('permission_deny', lang)}
           </button>
           <button
             onClick={() => onApprove(isHigh ? false : remember)}
@@ -132,7 +137,7 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
               border: 'none',
             }}
           >
-            {cfg.approveLabel}
+            {t('permission_allow', lang)}
           </button>
         </div>
       </div>

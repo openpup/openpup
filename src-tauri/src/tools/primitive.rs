@@ -29,6 +29,10 @@ pub struct ToolRegistry {
     http: reqwest::Client,
 }
 
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
 impl ToolRegistry {
     pub fn new(workspace_root: PathBuf, memory: Arc<MemorySystem>) -> Self {
         Self {
@@ -229,7 +233,7 @@ impl ToolRegistry {
     // ── Tool implementations ───────────────────────────────────────────────────
 
     async fn shell_exec(&self, command: &str) -> Result<String> {
-        debug!("[tool/shell_exec] $ {}", &command[..command.len().min(120)]);
+        debug!("[tool/shell_exec] $ {}", truncate_chars(command, 120));
         let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -249,11 +253,11 @@ impl ToolRegistry {
         };
         let trimmed = combined.trim().to_string();
         // Cap output to avoid overflowing the context window
-        if trimmed.len() > 16_384 {
+        if trimmed.chars().count() > 16_384 {
             Ok(format!(
                 "{}\n… [truncated, {} chars total]",
-                &trimmed[..16_384],
-                trimmed.len()
+                truncate_chars(&trimmed, 16_384),
+                trimmed.chars().count()
             ))
         } else {
             Ok(trimmed)
@@ -266,11 +270,11 @@ impl ToolRegistry {
         let content = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(|e| anyhow!("file_read '{}': {e}", resolved.display()))?;
-        if content.len() > 32_768 {
+        if content.chars().count() > 32_768 {
             Ok(format!(
                 "{}\n… [truncated, {} chars total]",
-                &content[..32_768],
-                content.len()
+                truncate_chars(&content, 32_768),
+                content.chars().count()
             ))
         } else {
             Ok(content)
@@ -300,7 +304,7 @@ impl ToolRegistry {
     }
 
     async fn http_get(&self, url: &str) -> Result<String> {
-        debug!("[tool/http_get] {}", &url[..url.len().min(120)]);
+        debug!("[tool/http_get] {}", truncate_chars(url, 120));
         let resp = self
             .http
             .get(url)
@@ -313,11 +317,11 @@ impl ToolRegistry {
         if !status.is_success() {
             return Err(anyhow!("http_get '{url}': HTTP {status}"));
         }
-        if body.len() > 8_192 {
+        if body.chars().count() > 8_192 {
             Ok(format!(
                 "{}\n… [truncated, {} chars total]",
-                &body[..8_192],
-                body.len()
+                truncate_chars(&body, 8_192),
+                body.chars().count()
             ))
         } else {
             Ok(body)

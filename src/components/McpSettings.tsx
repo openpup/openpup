@@ -192,13 +192,13 @@ export const McpSettings: React.FC = () => {
                   onClick={() => void remove(s.name)}
                   style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontSize: 11 }}
                 >
-                  {lang === 'zh' ? '确认删除' : 'Confirm'}
+                  {t('common_confirm', lang)}
                 </button>
                 <button
                   onClick={() => setConfirmDelete(null)}
                   style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none', cursor: 'pointer', fontSize: 11 }}
                 >
-                  {lang === 'zh' ? '取消' : 'Cancel'}
+                  {t('common_cancel', lang)}
                 </button>
               </>
             ) : (

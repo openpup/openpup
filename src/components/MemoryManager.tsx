@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
+import { formatDateOnly } from '../utils/locale';
 
 interface LongTermMemoryItem {
   id: string; content: string; memory_type: string; importance: number; created_at: number;
@@ -177,7 +178,7 @@ export const MemoryManager: React.FC = () => {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
               <span style={{ color: 'var(--color-text-tertiary)' }}>
-                {new Date(item.created_at * 1000).toLocaleDateString()}
+                {formatDateOnly(item.created_at, lang)}
               </span>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button

@@ -6,6 +6,7 @@ use tauri::{Emitter, State};
 use tracing::{debug, warn};
 
 use crate::agents::alpha::{AlphaPup, PupConfig};
+use crate::bridge::types::{BridgeConfig, BridgeConnectionStatus};
 use crate::llm::client::Provider;
 use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry, McpToolInfo};
 use crate::memory::file_layer::FileLayer;
@@ -681,6 +682,28 @@ pub async fn quick_set_model(state: State<'_, AppState>, model: String) -> Resul
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_bridge_config() -> Result<BridgeConfig, String> {
+    Ok(crate::config::load().bridge.unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn save_bridge_config(config: BridgeConfig) -> Result<(), String> {
+    let mut cfg = crate::config::load();
+    cfg.bridge = Some(config);
+    crate::config::save(&cfg).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_bridge_status(state: State<'_, AppState>) -> Result<Vec<BridgeConnectionStatus>, String> {
+    state
+        .alpha
+        .memory
+        .list_bridge_connections()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ─── Conversation search ──────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -871,6 +894,45 @@ pub async fn get_channel_messages(
         .alpha
         .memory
         .get_channel_messages(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Get the persisted delegation plan for a specific channel.
+#[tauri::command]
+pub async fn get_channel_plan(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<Option<crate::channel::types::DelegationPlan>, String> {
+    state
+        .alpha
+        .memory
+        .get_channel_plan(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete all completed Pack Channels and their persisted messages/members.
+#[tauri::command]
+pub async fn clear_completed_channels(state: State<'_, AppState>) -> Result<i64, String> {
+    state
+        .alpha
+        .memory
+        .clear_completed_channels()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete active Pack Channels that have not updated for longer than max_age_seconds.
+#[tauri::command]
+pub async fn clear_stale_channels(
+    state: State<'_, AppState>,
+    max_age_seconds: Option<i64>,
+) -> Result<i64, String> {
+    state
+        .alpha
+        .memory
+        .clear_stale_active_channels(max_age_seconds.unwrap_or(30 * 60))
         .await
         .map_err(|e| e.to_string())
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
+import { formatRelativeTime } from '../utils/locale';
 
 interface TaskItem {
   id: string;
@@ -10,14 +11,6 @@ interface TaskItem {
   created_at: number;
   completed_at: number | null;
   result: string | null;
-}
-
-function relativeTime(ts: number): string {
-  const diff = Math.floor(Date.now() / 1000) - ts;
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  return `${Math.floor(diff / 86400)} 天前`;
 }
 
 const STATUS_COLOR: Record<string, React.CSSProperties> = {
@@ -352,8 +345,8 @@ const TaskCard: React.FC<{
       </div>
       {expanded && (
         <div style={{ paddingLeft: '4px', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
-          <div>{t('task_created_at', _lang as Parameters<typeof t>[1])}：{relativeTime(task.created_at)}</div>
-          {task.completed_at && <div>{t('task_completed_at', _lang as Parameters<typeof t>[1])}：{relativeTime(task.completed_at)}</div>}
+          <div>{t('task_created_at', _lang as Parameters<typeof t>[1])}：{formatRelativeTime(task.created_at, _lang as Parameters<typeof t>[1])}</div>
+          {task.completed_at && <div>{t('task_completed_at', _lang as Parameters<typeof t>[1])}：{formatRelativeTime(task.completed_at, _lang as Parameters<typeof t>[1])}</div>}
           {task.result && <div style={{ color: 'var(--color-text-secondary)' }}>{task.result}</div>}
         </div>
       )}

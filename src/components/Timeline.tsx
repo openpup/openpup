@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useLang, t } from '../i18n';
+import { formatRelativeTime } from '../utils/locale';
 
 interface TimelineEvent {
   role: string;
@@ -21,14 +22,6 @@ interface SkillRunItem {
 }
 
 type Filter = 'all' | 'alpha' | 'you' | 'skills';
-
-function relativeTime(ts: number): string {
-  const diff = Math.floor(Date.now() / 1000) - ts;
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  return `${Math.floor(diff / 86400)} 天前`;
-}
 
 const STATUS_COLOR: Record<string, React.CSSProperties> = {
   completed: { color: 'var(--color-text-success)' },
@@ -245,7 +238,7 @@ export const Timeline: React.FC = () => {
                 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
-                    {evt.pup_name} · {relativeTime(evt.timestamp)}
+                    {evt.pup_name} · {formatRelativeTime(evt.timestamp, lang)}
                   </div>
                   <div style={{ fontSize: '12.5px', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {evt.content}
@@ -293,7 +286,7 @@ export const Timeline: React.FC = () => {
                     <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
                     <span>{run.triggered_by}</span>
                     <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
-                    <span>{relativeTime(run.started_at)}</span>
+                    <span>{formatRelativeTime(run.started_at, lang)}</span>
                   </div>
                   {run.output && (
                     <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -333,7 +326,7 @@ export const Timeline: React.FC = () => {
                 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
-                    {evt.pup_name} · {relativeTime(evt.timestamp)}
+                    {evt.pup_name} · {formatRelativeTime(evt.timestamp, lang)}
                   </div>
                   <div style={{ fontSize: '12.5px', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {evt.content}

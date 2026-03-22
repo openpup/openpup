@@ -24,6 +24,8 @@ use crate::memory::system::{MemorySystem, TaskRecord};
 use crate::skills::executor::SkillExecutor;
 use crate::tools::primitive::ToolPermissions;
 
+type BridgeProgressHook = Arc<dyn Fn(String) + Send + Sync>;
+
 // ─── Pup configuration ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +108,7 @@ pub struct AlphaPup {
     owner_summary_cache: Arc<RwLock<Option<(String, std::time::Instant)>>>,
     msg_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
+    layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
 }
 
 impl AlphaPup {
@@ -144,12 +147,68 @@ impl AlphaPup {
             owner_summary_cache: Arc::new(RwLock::new(None)),
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             channel_manager,
+            layer_hook: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub async fn set_layer_hook(
+        &self,
+        hook: Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>,
+    ) {
+        *self.layer_hook.write().await = hook;
+    }
+
+    fn emit_bridge_progress(progress_hook: &Option<BridgeProgressHook>, text: impl Into<String>) {
+        if let Some(hook) = progress_hook {
+            hook(text.into());
         }
     }
 
     pub async fn register_pup(&self, pup: Arc<dyn SpecialistPup>) {
         let mut guard = self.specialist_registry.write().await;
         guard.insert(pup.name().to_string(), pup);
+    }
+
+    async fn configured_pup(&self, key: &str) -> Option<PupConfig> {
+        self.pup_configs.read().await.get(key).cloned()
+    }
+
+    async fn enabled_configured_pup_keys(&self) -> Vec<String> {
+        let guard = self.pup_configs.read().await;
+        let mut keys: Vec<String> = guard
+            .values()
+            .filter(|cfg| cfg.enabled)
+            .map(|cfg| cfg.key.clone())
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    async fn resolve_pup(&self, key: &str) -> Result<Arc<dyn SpecialistPup>> {
+        if let Some(cfg) = self.configured_pup(key).await {
+            if !cfg.enabled {
+                return Err(anyhow!("Pup '{key}' is disabled."));
+            }
+            if cfg.is_custom {
+                let pup: Arc<dyn SpecialistPup> = Arc::new(CustomPup {
+                    key: cfg.key,
+                    display_name: cfg.display_name,
+                    system_prompt: cfg.system_prompt_override,
+                });
+                return Ok(pup);
+            }
+        }
+
+        let pup = self.specialist_registry.read().await.get(key).cloned();
+        if let Some(pup) = pup {
+            return Ok(pup);
+        }
+
+        if self.configured_pup(key).await.is_some() {
+            Err(anyhow!("Pup '{key}' is configured but unavailable at runtime."))
+        } else {
+            Err(anyhow!("Pup '{key}' not found."))
+        }
     }
 
     /// Seed `msg_count` from the actual number of conversation exchanges already
@@ -213,42 +272,10 @@ impl AlphaPup {
                     let self_clone = self.clone();
                     let msg_clone = msg.clone();
                     let pup_key_clone = pup_key.clone();
+                    let reply_clone = reply.clone();
                     tauri::async_runtime::spawn(async move {
-                        // 1. Persist conversation turns tagged with the pup that handled them
                         let _ = self_clone
-                            .memory
-                            .add_conversation(&pup_key_clone, "user", &msg_clone)
-                            .await;
-                        let _ = self_clone
-                            .memory
-                            .add_conversation(&pup_key_clone, "assistant", &reply)
-                            .await;
-
-                        // 2. Always write a brief diary entry for the conversation
-                        let pup_label = pup_display_name(&pup_key_clone);
-                        let snippet: String = msg_clone.chars().take(80).collect();
-                        let ellipsis = if msg_clone.chars().count() > 80 {
-                            "…"
-                        } else {
-                            ""
-                        };
-                        let diary_line = format!("💬 [{pup_label}] {snippet}{ellipsis}");
-                        let _ = self_clone.file_layer.append_daily_diary(&[diary_line]);
-
-                        // 3. Extract long-term memories every 3 exchanges; compress context
-                        //    every 10 exchanges (per-pup).
-                        //    msg_count is seeded from DB on startup so restarts don't reset it.
-                        let count = self_clone.msg_count.fetch_add(1, Ordering::Relaxed);
-                        if count % 3 == 0 {
-                            let _ = self_clone.maybe_extract_memories(&pup_key_clone).await;
-                        }
-                        if count % 10 == 0 {
-                            let _ = self_clone.maybe_compress_context(&pup_key_clone).await;
-                        }
-
-                        // 4. Maybe create a task record
-                        self_clone
-                            .maybe_create_task(&msg_clone, &pup_key_clone)
+                            .post_process_conversation_turn(&pup_key_clone, &msg_clone, &reply_clone)
                             .await;
                     });
                 }
@@ -382,12 +409,11 @@ impl AlphaPup {
         }
 
         // Route to specialist pup — build task context then run shared tool loop
-        let override_prompt = {
-            let cfgs = self.pup_configs.read().await;
-            cfgs.get(&pup_key).map(|c| c.system_prompt_override.clone())
-        };
-        let pup = self.specialist_registry.read().await.get(&pup_key).cloned();
-        if let Some(pup) = pup {
+        let override_prompt = self
+            .configured_pup(&pup_key)
+            .await
+            .map(|c| c.system_prompt_override);
+        if let Ok(pup) = self.resolve_pup(&pup_key).await {
             let mut enriched_memories = relevant_memories.clone();
             if !pending_tasks.is_empty() {
                 let task_lines: String = pending_tasks
@@ -999,6 +1025,7 @@ impl AlphaPup {
             .create_channel(&task_id, &plan.channel_title, &all_members)
             .await?;
         plan.channel_id = channel_id.clone();
+        self.memory.save_channel_plan(&plan).await?;
 
         // 4. Emit delegation_plan event
         let _ = app_handle.emit("delegation_plan", &plan);
@@ -1186,6 +1213,14 @@ impl AlphaPup {
             }
 
             all_results.extend(layer_results);
+
+            if let Some(hook) = self.layer_hook.read().await.clone() {
+                let done_pups = layer
+                    .iter()
+                    .map(|subtask| pup_display_name(&subtask.pup))
+                    .collect::<Vec<_>>();
+                hook(layer_idx, done_pups);
+            }
         }
 
         // 8. Cancel timeout monitor
@@ -1208,11 +1243,245 @@ impl AlphaPup {
         aggregated
     }
 
+    async fn run_dag_bridge(
+        &self,
+        msg: &str,
+        required_pups: Vec<String>,
+        progress_hook: Option<BridgeProgressHook>,
+    ) -> Result<String> {
+        debug!("[alpha] run_dag_bridge: pups={required_pups:?}");
+
+        let mut plan = self.decompose(msg, &required_pups).await;
+        let layers = match build_execution_layers(&plan.subtasks) {
+            Ok(layers) => layers,
+            Err(e) => {
+                debug!("[alpha] run_dag_bridge: DAG build error ({e}), falling back to single layer");
+                vec![plan.subtasks.clone()]
+            }
+        };
+
+        let task_id = Uuid::new_v4().to_string();
+        let all_members: Vec<&str> = required_pups.iter().map(|s| s.as_str()).collect();
+        let channel_id = self
+            .channel_manager
+            .create_channel(&task_id, &plan.channel_title, &all_members)
+            .await?;
+        plan.channel_id = channel_id.clone();
+        self.memory.save_channel_plan(&plan).await?;
+
+        let briefing = format!(
+            "Bridge 协作已建立。任务：{}\n共 {} 个执行层，涉及 Pup：{}",
+            msg,
+            layers.len(),
+            required_pups
+                .iter()
+                .map(|key| pup_display_name(key))
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+        let _ = self
+            .channel_manager
+            .post_text(&channel_id, "alpha", &briefing, &[])
+            .await;
+        Self::emit_bridge_progress(
+            &progress_hook,
+            format!("协作频道已创建：{}", plan.channel_title),
+        );
+
+        let monitor_channel_id = channel_id.clone();
+        let monitor_cm = self.channel_manager.clone();
+        let timeout_progress = progress_hook.clone();
+        let timeout_handle = tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                let timed_out = monitor_cm
+                    .monitor
+                    .check_timeouts(&monitor_channel_id)
+                    .await;
+                for (pup_id, _kind) in timed_out {
+                    let _ = monitor_cm
+                        .post_status(&monitor_channel_id, &pup_id, "failed")
+                        .await;
+                    if let Some(hook) = &timeout_progress {
+                        hook(format!("{} 超时，已标记失败", pup_display_name(&pup_id)));
+                    }
+                }
+            }
+        });
+
+        let owner_summary = self
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .await;
+
+        let mut all_results: Vec<(String, String)> = Vec::new();
+        let mut dep_context: HashMap<String, String> = HashMap::new();
+
+        for (layer_idx, layer) in layers.iter().enumerate() {
+            Self::emit_bridge_progress(
+                &progress_hook,
+                format!(
+                    "开始第 {} 层：{}",
+                    layer_idx + 1,
+                    layer
+                        .iter()
+                        .map(|subtask| pup_display_name(&subtask.pup))
+                        .collect::<Vec<_>>()
+                        .join("、")
+                ),
+            );
+
+            let mut layer_handles = Vec::new();
+
+            for subtask in layer {
+                let pup_key = subtask.pup.clone();
+                let pup_description = subtask.description.clone();
+                let deps: Vec<String> = subtask.depends_on.clone();
+
+                let injected: String = if deps.is_empty() {
+                    String::new()
+                } else {
+                    deps.iter()
+                        .filter_map(|dep| dep_context.get(dep))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                };
+
+                let self_clone = self.clone();
+                let owner_ctx = owner_summary.clone();
+                let ch_id = channel_id.clone();
+                let cm_clone = self.channel_manager.clone();
+                let progress_for_task = progress_hook.clone();
+
+                let _ = self
+                    .channel_manager
+                    .post_status(&channel_id, &pup_key, "started")
+                    .await;
+                Self::emit_bridge_progress(
+                    &progress_hook,
+                    format!("{} 开始执行", pup_display_name(&pup_key)),
+                );
+
+                let handle = tauri::async_runtime::spawn(async move {
+                    cm_clone.monitor.register(&ch_id, &pup_key).await;
+
+                    let hb_ch_id = ch_id.clone();
+                    let hb_pup = pup_key.clone();
+                    let hb_cm = cm_clone.clone();
+                    let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                    let _hb_handle = tauri::async_runtime::spawn(async move {
+                        let mut interval = tokio::time::interval(
+                            crate::channel::heartbeat::HEARTBEAT_INTERVAL,
+                        );
+                        interval.tick().await;
+                        loop {
+                            tokio::select! {
+                                _ = interval.tick() => {
+                                    hb_cm.post_heartbeat(&hb_ch_id, &hb_pup).await;
+                                }
+                                _ = &mut hb_stop_rx => {
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    let full_msg = if injected.is_empty() {
+                        pup_description.clone()
+                    } else {
+                        format!(
+                            "{}\n\n## Context from previous steps\n{}",
+                            pup_description, injected
+                        )
+                    };
+
+                    let result = self_clone
+                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                    let _ = hb_stop_tx.send(());
+                    cm_clone.monitor.unregister(&ch_id, &pup_key).await;
+
+                    let _ = cm_clone
+                        .post_text(&ch_id, &pup_key, &result, &[])
+                        .await;
+                    let status = if result.starts_with("Error:") {
+                        "failed"
+                    } else {
+                        "done"
+                    };
+                    let _ = cm_clone.post_status(&ch_id, &pup_key, status).await;
+
+                    if let Some(hook) = &progress_for_task {
+                        let summary = if status == "failed" {
+                            format!("{} 执行失败", pup_display_name(&pup_key))
+                        } else {
+                            format!("{} 已完成", pup_display_name(&pup_key))
+                        };
+                        hook(summary);
+                    }
+
+                    (pup_key, result)
+                });
+                layer_handles.push(handle);
+            }
+
+            let joined = tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                futures_util::future::join_all(layer_handles),
+            )
+            .await;
+
+            let layer_results: Vec<(String, String)> = match joined {
+                Ok(results) => results.into_iter().filter_map(|r| r.ok()).collect(),
+                Err(_) => {
+                    Self::emit_bridge_progress(
+                        &progress_hook,
+                        format!("第 {} 层等待超时", layer_idx + 1),
+                    );
+                    vec![]
+                }
+            };
+
+            for (pup_key, result) in &layer_results {
+                dep_context.insert(pup_key.clone(), result.clone());
+            }
+
+            all_results.extend(layer_results);
+
+            if let Some(hook) = self.layer_hook.read().await.clone() {
+                let done_pups = layer
+                    .iter()
+                    .map(|subtask| pup_display_name(&subtask.pup))
+                    .collect::<Vec<_>>();
+                hook(layer_idx, done_pups);
+            }
+        }
+
+        timeout_handle.abort();
+        Self::emit_bridge_progress(&progress_hook, "正在汇总最终结果…");
+
+        let aggregated = self.aggregate_channel_results(msg, &all_results).await?;
+        let _ = self
+            .channel_manager
+            .post_text(&channel_id, "alpha", &aggregated, &[])
+            .await;
+        let _ = self.channel_manager.complete(&channel_id).await;
+
+        Ok(aggregated)
+    }
+
     /// Entry point for external bridge messages (Telegram, Discord, Slack).
     /// Uses the same routing as process_user_message_stream but returns a Result
     /// instead of emitting Tauri events.
     #[allow(dead_code)]
-    pub async fn process_bridge_message(&self, msg: String) -> anyhow::Result<String> {
+    pub async fn process_bridge_message(
+        &self,
+        msg: String,
+        progress_hook: Option<BridgeProgressHook>,
+    ) -> anyhow::Result<String> {
+        self.abort_flag.store(false, Ordering::Relaxed);
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.get_owner_summary(&owner_md).await;
         let classify_history = self.build_classify_history().await;
@@ -1225,22 +1494,44 @@ impl AlphaPup {
                 .filter(|s| !s.is_empty())
                 .collect();
             if pups.len() >= 2 {
-                let results = self.run_pups_for_results(&msg, &pups).await;
-                return self.aggregate_channel_results(&msg, &results).await;
+                Self::emit_bridge_progress(
+                    &progress_hook,
+                    format!(
+                        "已触发协作：{}",
+                        pups.iter()
+                            .map(|pup| pup_display_name(pup))
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    ),
+                );
+                let reply = self.run_dag_bridge(&msg, pups, progress_hook.clone()).await?;
+                if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
+                    self.post_process_conversation_turn("alpha", &msg, &reply).await?;
+                }
+                return Ok(reply);
             }
         }
 
         // Single pup path
-        let pup = self.specialist_registry.read().await.get(&pup_key).cloned();
-        if pup.is_some() {
-            return self.run_pup_for_channel(&pup_key, &msg, &owner_summary).await;
+        if self.resolve_pup(&pup_key).await.is_ok() {
+            let reply = self.run_pup_for_channel(&pup_key, &msg, &owner_summary).await?;
+            if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
+                self.post_process_conversation_turn(&pup_key, &msg, &reply).await?;
+            }
+            return Ok(reply);
         }
 
         // Alpha fallback — use non-streaming chat
         let pup_history = self.build_history("alpha").await;
         let relevant_memories = self.memory.search_long_term(&msg, 5).await.unwrap_or_default();
         let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
-        self.alpha_reply_bridge(&msg, &owner_summary, &pup_history, &relevant_memories, &pending_tasks).await
+        let reply = self
+            .alpha_reply_bridge(&msg, &owner_summary, &pup_history, &relevant_memories, &pending_tasks)
+            .await?;
+        if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
+            self.post_process_conversation_turn("alpha", &msg, &reply).await?;
+        }
+        Ok(reply)
     }
 
     /// Non-streaming alpha reply for bridge use (no AppHandle required).
@@ -1256,7 +1547,7 @@ impl AlphaPup {
             let summary: String = owner_summary.chars().take(1000).collect();
             format!(
                 "You are Alpha Pup, a loyal personal AI assistant. \
-                 Respond in the user's preferred language. Owner profile:\n\n{summary}"
+         Respond in the user's preferred language. Owner profile:\n\n{summary}"
             )
         } else {
             "You are Alpha Pup, a loyal personal AI assistant. Be concise and helpful.".to_string()
@@ -1290,7 +1581,33 @@ impl AlphaPup {
             content: msg.to_string(),
         });
 
-        self.llm_client.chat(messages).await
+        self.llm_client
+            .chat_stream(messages, |_tok, _is_reasoning| {}, &self.abort_flag)
+            .await
+    }
+
+    async fn post_process_conversation_turn(&self, pup_key: &str, msg: &str, reply: &str) -> Result<()> {
+        self.memory.add_conversation(pup_key, "user", msg).await?;
+        self.memory
+            .add_conversation(pup_key, "assistant", reply)
+            .await?;
+
+        let pup_label = pup_display_name(pup_key);
+        let snippet: String = msg.chars().take(80).collect();
+        let ellipsis = if msg.chars().count() > 80 { "…" } else { "" };
+        let diary_line = format!("💬 [{pup_label}] {snippet}{ellipsis}");
+        let _ = self.file_layer.append_daily_diary(&[diary_line]);
+
+        let count = self.msg_count.fetch_add(1, Ordering::Relaxed);
+        if count % 3 == 0 {
+            let _ = self.maybe_extract_memories(pup_key).await;
+        }
+        if count % 10 == 0 {
+            let _ = self.maybe_compress_context(pup_key).await;
+        }
+
+        self.maybe_create_task(msg, pup_key).await;
+        Ok(())
     }
 
     /// Run multiple pups and collect results without channel overhead (bridge path).
@@ -1327,15 +1644,15 @@ impl AlphaPup {
         msg: &str,
         owner_summary: &str,
     ) -> Result<String> {
-        let pup = self.specialist_registry.read().await.get(pup_key).cloned();
-        let Some(pup) = pup else {
-            return Ok(format!("Pup '{pup_key}' not available in registry."));
+        let pup = match self.resolve_pup(pup_key).await {
+            Ok(pup) => pup,
+            Err(err) => return Ok(err.to_string()),
         };
 
-        let override_prompt = {
-            let cfgs = self.pup_configs.read().await;
-            cfgs.get(pup_key).map(|c| c.system_prompt_override.clone())
-        };
+        let override_prompt = self
+            .configured_pup(pup_key)
+            .await
+            .map(|c| c.system_prompt_override);
 
         let task = Task {
             id: Uuid::new_v4().to_string(),
@@ -1419,13 +1736,7 @@ impl AlphaPup {
             return "alpha".to_string();
         }
 
-        let enabled_pups: Vec<String> = {
-            let cfgs = self.pup_configs.read().await;
-            cfgs.values()
-                .filter(|c| c.enabled)
-                .map(|c| c.key.clone())
-                .collect()
-        };
+        let enabled_pups = self.enabled_configured_pup_keys().await;
         let skill_entries = self
             .skill_executor
             .registry
@@ -1453,10 +1764,10 @@ impl AlphaPup {
             format!("\nInstalled skills:\n{}", skill_lines.join("\n"))
         };
 
-        let snippet = if owner_summary.len() > 400 {
-            &owner_summary[..400]
+        let snippet = if owner_summary.chars().count() > 400 {
+            owner_summary.chars().take(400).collect::<String>()
         } else {
-            owner_summary
+            owner_summary.to_string()
         };
         let pup_hints: String = {
             let cfgs = self.pup_configs.read().await;
@@ -1568,7 +1879,7 @@ impl AlphaPup {
                 .await
             {
                 Ok(s) => s,
-                Err(_) => format!("{}…", &owner_md[..800]),
+                Err(_) => format!("{}…", owner_md.chars().take(800).collect::<String>()),
             }
         };
         {
@@ -1889,13 +2200,6 @@ impl AlphaPup {
             let mut guard = self.pup_configs.write().await;
             guard.insert(key.clone(), cfg);
         }
-        // Register a CustomPup instance in the specialist registry
-        let pup: Arc<dyn SpecialistPup> = Arc::new(CustomPup {
-            key,
-            display_name,
-            system_prompt,
-        });
-        self.register_pup(pup).await;
         self.persist_pup_configs().await
     }
 
@@ -1909,6 +2213,7 @@ impl AlphaPup {
             }
             guard.remove(key);
         }
+        // Evict any stale cached runtime instance from older app sessions/logic.
         self.specialist_registry.write().await.remove(key);
         self.persist_pup_configs().await
     }

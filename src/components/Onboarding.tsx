@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useLang, type Lang, t } from '../i18n';
 
 interface OnboardingData {
   name: string;
@@ -16,82 +17,132 @@ interface LlmConfig {
   api_base: string; // empty = use provider default
 }
 
-const QUESTIONS: {
+const QUESTIONS_BY_LANG: Record<Lang, {
   key: keyof OnboardingData;
   pup_text: string;
   placeholder: string;
   section: string;
   skippable?: boolean;
-}[] = [
-  {
-    key: 'name',
-    pup_text: '我是你的 Alpha Pup 🐾 很高兴认识你！\n\n你叫什么名字？或者你希望我怎么称呼你？',
-    placeholder: '例如：小明，或者叫我 Alex 就好',
-    section: '## Name',
-  },
-  {
-    key: 'boundaries',
-    pup_text: '很高兴认识你！\n\n你最不希望我在没有你确认的情况下替你做的事是什么？',
-    placeholder: '例如：不自动发送任何公开消息，不删除文件',
-    section: '## Boundaries',
-  },
-  {
-    key: 'pain_points',
-    pup_text: '你每周最浪费时间的重复性工作是什么？',
-    placeholder: '例如：整理 GitHub issues，写周报，回复重复邮件',
-    section: '## Pain Points',
-    skippable: true,
-  },
-  {
-    key: 'language',
-    pup_text: '你偏好用哪种语言和我交流？代码和注释呢？',
-    placeholder: '例如：对话：中文，代码：English',
-    section: '## Language',
-    skippable: true,
-  },
-  {
-    key: 'work_schedule',
-    pup_text: '你通常几点开始工作，几点结束？有不想被打扰的时段吗？',
-    placeholder: '例如：9:00–18:00 PST，晚上 22:00 后请勿打扰',
-    section: '## Work Schedule',
-    skippable: true,
-  },
-  {
-    key: 'tools',
-    pup_text: '你最常用什么工具？（GitHub / Notion / Calendar / 邮件 等）',
-    placeholder: '例如：GitHub、Notion、Google Calendar、Gmail',
-    section: '## Tools',
-    skippable: true,
-  },
-];
+}[]> = {
+  zh: [
+    {
+      key: 'name',
+      pup_text: '我是你的 Alpha Pup 🐾 很高兴认识你！\n\n你叫什么名字？或者你希望我怎么称呼你？',
+      placeholder: '例如：小明，或者叫我 Alex 就好',
+      section: '## Name',
+    },
+    {
+      key: 'boundaries',
+      pup_text: '很高兴认识你！\n\n你最不希望我在没有你确认的情况下替你做的事是什么？',
+      placeholder: '例如：不自动发送任何公开消息，不删除文件',
+      section: '## Boundaries',
+    },
+    {
+      key: 'pain_points',
+      pup_text: '你每周最浪费时间的重复性工作是什么？',
+      placeholder: '例如：整理 GitHub issues，写周报，回复重复邮件',
+      section: '## Pain Points',
+      skippable: true,
+    },
+    {
+      key: 'language',
+      pup_text: '你偏好用哪种语言和我交流？代码和注释呢？',
+      placeholder: '例如：对话：中文，代码：English',
+      section: '## Language',
+      skippable: true,
+    },
+    {
+      key: 'work_schedule',
+      pup_text: '你通常几点开始工作，几点结束？有不想被打扰的时段吗？',
+      placeholder: '例如：9:00–18:00 PST，晚上 22:00 后请勿打扰',
+      section: '## Work Schedule',
+      skippable: true,
+    },
+    {
+      key: 'tools',
+      pup_text: '你最常用什么工具？（GitHub / Notion / Calendar / 邮件 等）',
+      placeholder: '例如：GitHub、Notion、Google Calendar、Gmail',
+      section: '## Tools',
+      skippable: true,
+    },
+  ],
+  en: [
+    {
+      key: 'name',
+      pup_text: "I'm your Alpha Pup 🐾 Nice to meet you!\n\nWhat should I call you?",
+      placeholder: 'For example: Alex, or just call me Ben',
+      section: '## Name',
+    },
+    {
+      key: 'boundaries',
+      pup_text: "Nice to meet you!\n\nWhat's something you never want me to do without your confirmation?",
+      placeholder: 'For example: do not send public messages automatically, do not delete files',
+      section: '## Boundaries',
+    },
+    {
+      key: 'pain_points',
+      pup_text: 'What repetitive work wastes the most time for you each week?',
+      placeholder: 'For example: triaging GitHub issues, writing status updates, replying to repetitive email',
+      section: '## Pain Points',
+      skippable: true,
+    },
+    {
+      key: 'language',
+      pup_text: 'Which language do you prefer for conversation? What about code and comments?',
+      placeholder: 'For example: chat: Chinese, code: English',
+      section: '## Language',
+      skippable: true,
+    },
+    {
+      key: 'work_schedule',
+      pup_text: "What are your usual working hours? Any times when you don't want to be interrupted?",
+      placeholder: 'For example: 9:00-18:00 PST, please do not ping me after 22:00',
+      section: '## Work Schedule',
+      skippable: true,
+    },
+    {
+      key: 'tools',
+      pup_text: 'What tools do you use the most? (GitHub / Notion / Calendar / Email / etc.)',
+      placeholder: 'For example: GitHub, Notion, Google Calendar, Gmail',
+      section: '## Tools',
+      skippable: true,
+    },
+  ],
+};
 
 // Step indices
-const TOTAL_PROFILE = QUESTIONS.length;        // 0..5
+const TOTAL_PROFILE = QUESTIONS_BY_LANG.zh.length; // 0..5
 const STEP_LLM = TOTAL_PROFILE;                // 6
 const STEP_CONFIRM = TOTAL_PROFILE + 1;        // 7
 
-function buildOwnerMd(answers: Partial<OnboardingData>): string {
+function buildOwnerMd(answers: Partial<OnboardingData>, lang: Lang): string {
+  const questions = QUESTIONS_BY_LANG[lang];
   const lines: string[] = ['# Owner Profile', ''];
-  for (const q of QUESTIONS) {
+  for (const q of questions) {
     const val = answers[q.key];
     lines.push(q.section);
-    lines.push(val ? val.trim() : '_（未填写）_');
+    lines.push(val ? val.trim() : t('onboarding_field_empty', lang));
     lines.push('');
   }
   return lines.join('\n');
 }
 
-const PRESET_MODELS = [
-  { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '' },
-  { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '' },
-  { label: '自定义…', value: '__custom__', base: '' },
-];
+function presetModels(lang: Lang) {
+  return [
+    { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '' },
+    { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '' },
+    { label: t('onboarding_custom_model', lang), value: '__custom__', base: '' },
+  ];
+}
 
 interface Props {
   onComplete: () => void;
 }
 
 export const Onboarding: React.FC<Props> = ({ onComplete }) => {
+  const { lang } = useLang();
+  const questions = QUESTIONS_BY_LANG[lang];
+  const models = presetModels(lang);
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Partial<OnboardingData>>({});
   const [currentInput, setCurrentInput] = useState('');
@@ -101,7 +152,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
   // LLM config state
-  const [llmPreset, setLlmPreset] = useState(PRESET_MODELS[0].value);
+  const [llmPreset, setLlmPreset] = useState(models[0].value);
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ api_key: '', model: 'gpt-4o', api_base: '' });
   const [llmError, setLlmError] = useState('');
 
@@ -113,13 +164,13 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [step]);
 
-  const ownerMdPreview = buildOwnerMd(answers);
+  const ownerMdPreview = buildOwnerMd(answers, lang);
   const progressPct = Math.min((step / (STEP_CONFIRM)) * 100, 100);
 
   // ── Profile questions navigation ──────────────────────────────────────────
 
   const advance = (value: string) => {
-    const key = QUESTIONS[step].key;
+    const key = questions[step].key;
     const newAnswers = { ...answers, [key]: value };
     setAnswers(newAnswers);
     setCurrentInput('');
@@ -148,7 +199,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const handlePresetChange = (value: string) => {
     setLlmPreset(value);
     if (value !== '__custom__') {
-      const preset = PRESET_MODELS.find((p) => p.value === value);
+      const preset = models.find((p) => p.value === value);
       if (preset) {
         setLlmConfig((prev) => ({ ...prev, model: preset.value, api_base: preset.base }));
       }
@@ -156,10 +207,10 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   };
 
   const handleLlmNext = () => {
-    if (!llmConfig.api_key.trim()) { setLlmError('API Key 为必需项，请填写后继续'); return; }
-    if (!llmConfig.model.trim()) { setLlmError('请填写模型名称'); return; }
+    if (!llmConfig.api_key.trim()) { setLlmError(t('onboarding_llm_required', lang)); return; }
+    if (!llmConfig.model.trim()) { setLlmError(t('onboarding_model_required', lang)); return; }
     setLlmError('');
-    setEditableOwnerMd(buildOwnerMd(answers));
+    setEditableOwnerMd(buildOwnerMd(answers, lang));
     setStep(STEP_CONFIRM);
   };
 
@@ -198,7 +249,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
     } catch (e) {
       console.error('Onboarding save error:', e);
       setSaving(false);
-      setLlmError(`保存失败：${e}`);
+      setLlmError(`${t('onboarding_save_failed_prefix', lang)}${e}`);
     }
   };
 
@@ -207,9 +258,9 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const isCustomPreset = llmPreset === '__custom__';
   const stepLabel = step < TOTAL_PROFILE
     ? `${step + 1} / ${TOTAL_PROFILE}`
-    : step === STEP_LLM ? 'AI 配置' : '确认';
+    : step === STEP_LLM ? t('onboarding_step_ai', lang) : t('onboarding_step_confirm', lang);
 
-  const currentQuestion = step < TOTAL_PROFILE ? QUESTIONS[step] : null;
+  const currentQuestion = step < TOTAL_PROFILE ? questions[step] : null;
 
   // Shared input style
   const inputStyle: React.CSSProperties = {
@@ -240,7 +291,9 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0, display: 'inline-block' }} />
           <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--color-text-secondary)', userSelect: 'none' }}>
             open<span style={{ color: '#1D9E75' }}>pup</span>
-            <span style={{ marginLeft: '10px', color: 'var(--color-text-tertiary)' }}>“用 ChatGPT 三个月，它还是不知道你喜欢下雨天。OpenPup 记得。”</span>
+            <span style={{ marginLeft: '10px', color: 'var(--color-text-tertiary)' }}>
+              {t('onboarding_tagline', lang)}
+            </span>
           </span>
         </div>
         <div style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>{stepLabel}</div>
@@ -260,7 +313,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
           <div style={{ flex: 1, overflow: 'auto', padding: '32px', background: 'var(--color-background-primary)' }}>
 
             {/* Answered profile questions */}
-            {QUESTIONS.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q, idx) => (
+            {questions.slice(0, step < TOTAL_PROFILE ? step : TOTAL_PROFILE).map((q, idx) => (
               <div key={q.key} className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ marginBottom: '32px', animationDelay: `${idx * 50}ms` }}>
                 {/* Pup bubble */}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
@@ -280,7 +333,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <span style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontStyle: 'italic', paddingRight: '4px' }}>（跳过）</span>
+                    <span style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontStyle: 'italic', paddingRight: '4px' }}>{t('onboarding_skipped', lang)}</span>
                   </div>
                 )}
               </div>
@@ -294,7 +347,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     🐾
                   </div>
                   <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', whiteSpace: 'pre-line', maxWidth: '672px' }}>
-                    {QUESTIONS[step].pup_text}
+                    {questions[step].pup_text}
                   </div>
                 </div>
               </div>
@@ -308,21 +361,21 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     🐾
                   </div>
                   <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', maxWidth: '448px' }}>
-                    最后一步——我需要 AI 接口才能工作。<br /><br />
-                    请选择你的模型供应商并填入 API Key。
+                    {t('onboarding_llm_intro_title', lang)}<br /><br />
+                    {t('onboarding_llm_intro_body', lang)}
                   </div>
                 </div>
 
                 <div style={{ paddingLeft: '40px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* Preset picker */}
                   <div>
-                    <label style={labelStyle}>选择模型</label>
+                    <label style={labelStyle}>{t('onboarding_select_model', lang)}</label>
                     <select
                       style={{ ...inputStyle, cursor: 'pointer' }}
                       value={llmPreset}
                       onChange={(e) => handlePresetChange(e.target.value)}
                     >
-                      {PRESET_MODELS.map((p) => (
+                      {models.map((p) => (
                         <option key={p.value} value={p.value}>{p.label}</option>
                       ))}
                     </select>
@@ -331,10 +384,10 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   {/* Custom model name */}
                   {isCustomPreset && (
                     <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                      <label style={labelStyle}>模型名称</label>
+                      <label style={labelStyle}>{t('onboarding_model_name', lang)}</label>
                       <input
                         style={inputStyle}
-                        placeholder="例如：gpt-4o、claude-3-5-sonnet-20241022"
+                        placeholder={t('onboarding_model_name_ph', lang)}
                         value={llmConfig.model}
                         onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
                       />
@@ -351,14 +404,16 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                       value={llmConfig.api_key}
                       onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_key: e.target.value }))}
                     />
-                    <p style={{ marginTop: '6px', fontSize: '11px', color: 'var(--color-text-tertiary)' }}>API Key 仅存储在本地，不会上传至任何服务器。</p>
+                    <p style={{ marginTop: '6px', fontSize: '11px', color: 'var(--color-text-tertiary)' }}>
+                      {t('onboarding_api_key_hint', lang)}
+                    </p>
                   </div>
 
                   {/* Base URL */}
                   {(isCustomPreset || llmConfig.api_base) && (
                     <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                       <label style={labelStyle}>
-                        Base URL <span style={{ color: 'var(--color-text-tertiary)' }}>（可选）</span>
+                        {t('onboarding_base_url_optional', lang)}
                       </label>
                       <input
                         style={inputStyle}
@@ -379,7 +434,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     style={{ width: '100%', marginTop: '4px', padding: '10px 16px', borderRadius: '8px', background: '#1D9E75', color: '#fff', fontSize: '15px', fontWeight: 500, border: 'none', cursor: 'pointer', transition: 'opacity 0.15s' }}
                     onClick={handleLlmNext}
                   >
-                    下一步 →
+                    {t('onboarding_next', lang)}
                   </button>
                 </div>
               </div>
@@ -392,13 +447,17 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   🐾
                 </div>
                 <div style={{ background: 'var(--color-background-primary)', border: '1px solid var(--color-border-primary)', borderLeft: '2px solid #1D9E75', borderRadius: '12px', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', maxWidth: '672px' }}>
-                  好了，{answers.name ? `${answers.name}！` : ''}我对你有了初步了解 🐾
-                  <br /><br />
-                  这些都会写在{' '}
-                  <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', fontSize: '13px', background: 'var(--color-background-secondary)', padding: '1px 6px', borderRadius: '4px' }}>~/.openpup/OWNER.md</code>{' '}
-                  里，你随时可以打开直接修改。
-                  <br /><br />
-                  右侧是预览，确认无误后点击「确认并开始」。
+                  <>
+                    {answers.name
+                      ? `${t('onboarding_confirm_with_name_prefix', lang)}${answers.name}${t('onboarding_confirm_with_name_suffix', lang)}`
+                      : t('onboarding_confirm_without_name', lang)}
+                    <br /><br />
+                    {t('onboarding_confirm_saved', lang)}{' '}
+                    <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', fontSize: '13px', background: 'var(--color-background-secondary)', padding: '1px 6px', borderRadius: '4px' }}>~/.openpup/OWNER.md</code>{' '}
+                    {t('onboarding_confirm_saved_suffix', lang)}
+                    <br /><br />
+                    {t('onboarding_confirm_preview', lang)}
+                  </>
                 </div>
               </div>
             )}
@@ -412,7 +471,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 ref={inputRef}
                 style={{ flex: 1, resize: 'none', borderRadius: '8px', background: 'var(--color-background-primary)', border: '1px solid var(--color-border-secondary)', padding: '12px 16px', fontSize: '15px', color: 'var(--color-text-primary)', outline: 'none', transition: 'border-color 0.15s', fontFamily: 'inherit' }}
                 rows={3}
-                placeholder={QUESTIONS[step].placeholder}
+                placeholder={questions[step].placeholder}
                 value={currentInput}
                 onChange={(e) => setCurrentInput(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -423,14 +482,14 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                   onClick={handleNext}
                   disabled={!currentInput.trim()}
                 >
-                  {step < TOTAL_PROFILE - 1 ? '下一步 →' : '下一步 →'}
+                  {t('onboarding_next', lang)}
                 </button>
                 {currentQuestion?.skippable && (
                   <button
                     style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'center', transition: 'color 0.15s' }}
                     onClick={handleSkip}
                   >
-                    跳过
+                    {t('onboarding_skip', lang)}
                   </button>
                 )}
               </div>
@@ -441,7 +500,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
         {/* Right: OWNER.md live preview — hidden below ~800px window width */}
         <div className="hidden lg:flex" style={{ width: '320px', borderLeft: '1px solid var(--color-border-primary)', padding: '20px', flexDirection: 'column', background: 'var(--color-background-secondary)', flexShrink: 0 }}>
           <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--color-text-tertiary)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-            OWNER.md 预览
+            {t('onboarding_preview_title', lang)}
           </div>
 
           {step === 0 ? (
@@ -449,29 +508,20 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ borderRadius: '12px', border: '1px solid var(--color-border-primary)', background: 'var(--color-background-primary)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <p style={{ fontSize: '13px', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                  你的回答会保存到
+                  {t('onboarding_preview_intro_prefix', lang)}
                   <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', fontSize: '12px', margin: '0 4px', background: 'var(--color-background-secondary)', padding: '1px 4px', borderRadius: '4px' }}>~/.openpup/OWNER.md</code>
-                  文件中。
+                  {t('onboarding_preview_intro_suffix', lang)}
                 </p>
                 <p style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  每次对话前，你的 pup 都会先读这份档案——这样它们就能记住你的名字、工作习惯和边界。
+                  {t('onboarding_preview_explanation', lang)}
                 </p>
                 <p style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  随时可以直接编辑这个文件来更新你的偏好。
+                  {t('onboarding_preview_edit_hint', lang)}
                 </p>
               </div>
               <div style={{ borderRadius: '12px', border: '1px solid var(--color-border-primary)', background: 'var(--color-background-primary)', padding: '12px 16px' }}>
-                <p style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>之后会长这样</p>
-                <pre style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{`# Owner Profile
-
-## Name
-Alex
-
-## Boundaries
-不自动发消息，不删文件
-
-## Pain Points
-整理 issues，写周报…`}</pre>
+                <p style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>{t('onboarding_preview_example_title', lang)}</p>
+                <pre style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t('onboarding_preview_example_content', lang)}</pre>
               </div>
             </div>
           ) : (
@@ -493,7 +543,7 @@ Alex
                   onClick={() => void handleSave()}
                   disabled={saving}
                 >
-                  {saving ? '保存中…' : '确认并开始 →'}
+                  {saving ? t('onboarding_saving', lang) : t('onboarding_save_and_start', lang)}
                 </button>
               </>
             )

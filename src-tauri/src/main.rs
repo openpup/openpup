@@ -295,6 +295,9 @@ fn main() {
             commands::get_safe_config,
             commands::set_llm_provider,
             commands::quick_set_model,
+            commands::get_bridge_config,
+            commands::save_bridge_config,
+            commands::get_bridge_status,
             // Pup management
             commands::list_pups,
             commands::update_pup,
@@ -325,7 +328,10 @@ fn main() {
             // Pack Channel
             commands::list_channels,
             commands::get_channel_messages,
+            commands::get_channel_plan,
             commands::get_active_channel_count,
+            commands::clear_completed_channels,
+            commands::clear_stale_channels,
             // Pack page per-pup conversation
             commands::get_pup_conversation,
             commands::get_pup_message_count,

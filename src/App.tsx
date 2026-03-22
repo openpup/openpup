@@ -12,6 +12,8 @@ import { PupManager } from './components/PupManager';
 import { TaskManager } from './components/TaskManager';
 import { PermissionDialog, PermissionRequest } from './components/PermissionDialog';
 import { PackChannel } from './components/PackChannel';
+import { BridgeSettings } from './components/BridgeSettings';
+import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
 
 interface ChatMessage {
@@ -84,7 +86,7 @@ interface ContextStats {
   };
 }
 
-type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'settings';
+type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'bridge' | 'settings';
 
 // Pup accent colors per spec (used for dot, left-border, tag)
 const PUP_COLOR: Record<string, string> = {
@@ -295,12 +297,13 @@ const AppInner: React.FC = () => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [activeNav, setActiveNav] = useState<NavItem>('chat');
+  const [channelDetailMode, setChannelDetailMode] = useState(false);
   const activeNavRef = useRef<string>('chat');
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
   // Auto-expand sidebar section when an item inside it becomes active
   useEffect(() => {
     const toolsItems: NavItem[] = ['memories', 'timeline', 'tasks', 'skills'];
-    const configItems: NavItem[] = ['pups', 'mcp', 'settings'];
+    const configItems: NavItem[] = ['pups', 'mcp', 'bridge', 'settings'];
     if (toolsItems.includes(activeNav)) setToolsExpanded(true);
     if (configItems.includes(activeNav)) setConfigExpanded(true);
   }, [activeNav]);
@@ -309,6 +312,39 @@ const AppInner: React.FC = () => {
   const [pups, setPups] = useState<PupConfig[]>([]);
   const [selectedPupKey, setSelectedPupKey] = useState<string>('alpha');
   const [memoriesTab, setMemoriesTab] = useState<'long_term' | 'diary'>('long_term');
+  const {
+    channels,
+    activeChannelId,
+    messages: channelMessages,
+    plan: channelPlan,
+    isCompleted: channelCompleted,
+    completionEventCount,
+    activeCount: activeChannelCount,
+    error: channelError,
+    setActiveChannelId,
+    clearCompletedChannels,
+    clearStaleChannels,
+  } = usePackChannel();
+
+  useEffect(() => {
+    if (channelPlan?.channel_id) {
+      setActiveNav('channel');
+      setChannelDetailMode(true);
+    }
+  }, [channelPlan]);
+
+  useEffect(() => {
+    if (activeNav === 'channel' && activeChannelId && channelMessages.length > 0) {
+      setChannelDetailMode(true);
+    }
+  }, [activeNav, activeChannelId, channelMessages.length]);
+
+  useEffect(() => {
+    if (completionEventCount === 0) return;
+    if (activeNavRef.current !== 'channel') return;
+    setChannelDetailMode(false);
+    setActiveNav('chat');
+  }, [completionEventCount]);
   // Context stats
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
   // Settings state
@@ -325,6 +361,8 @@ const AppInner: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  /** True while CJK IME composition is active; `isComposing` alone misses some Enter-to-commit keydowns. */
+  const imeComposingRef = useRef(false);
   // Debounce token-by-token scroll during streaming
   const scrollTimer = useRef<ReturnType<typeof setTimeout>>();
   // Track which message IDs have already been animated so history doesn't re-animate
@@ -398,7 +436,7 @@ const AppInner: React.FC = () => {
         setStreamingPupName('');
         setStreamingSteps([]);
         setSending(false);
-        if (content && activeNavRef.current !== 'channel') {
+        if (content) {
           setMessages((msgs) => [
             ...msgs,
             { id: crypto.randomUUID(), role: 'assistant', content, pup_name },
@@ -483,7 +521,7 @@ const AppInner: React.FC = () => {
     setStreamingSteps([]);
     setStreamingPupName('Alpha');
     setSending(true);
-    const forcedPup = null; // @mention routing handled by backend
+    const forcedPup = selectedPupKey !== 'alpha' ? selectedPupKey : null;
     await invoke('send_message', { input: trimmed, forcedPup }).catch((e: unknown) => {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${String(e)}`, pup_name: 'Alpha' }]);
       setStreamingContent('');
@@ -504,12 +542,16 @@ const AppInner: React.FC = () => {
   };
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const ne = e.nativeEvent;
+    if (imeComposingRef.current || ne.isComposing || ne.keyCode === 229) return;
+    e.preventDefault();
+    void send();
   };
 
   const exportWorkspace = async () => {
     setExporting(true); setSettingsErr(null); setSettingsMsg(null);
-    try { setSettingsMsg(`已导出到：${await invoke<string>('export_workspace')}`); }
+    try { setSettingsMsg(`${t('settings_export_success_prefix', lang)} ${await invoke<string>('export_workspace')}`); }
     catch (e: unknown) { setSettingsErr(String(e)); }
     finally { setExporting(false); }
   };
@@ -536,7 +578,7 @@ const AppInner: React.FC = () => {
   if (!onboardingDone) return (
     <Onboarding onComplete={() => {
       setOnboardingDone(true); loadMemoryChips();
-      setMessages([{ id: 'welcome', role: 'assistant', content: '好了，我对你有了初步了解 🐾 这些都写在 ~/.openpup/OWNER.md 里，随时可以修改。让我们开始吧——今天想先做什么？', pup_name: 'Alpha' }]);
+      setMessages([{ id: 'welcome', role: 'assistant', content: t('onboarding_complete_message', lang), pup_name: 'Alpha' }]);
     }} />
   );
 
@@ -559,11 +601,29 @@ const AppInner: React.FC = () => {
           cursor: 'pointer',
         }}
       >
-        {label}
+        <span>{label}</span>
+        {navKey === 'channel' && activeChannelCount > 0 && (
+          <span style={{
+            marginLeft: 'auto',
+            minWidth: '18px',
+            height: '18px',
+            padding: '0 6px',
+            borderRadius: '999px',
+            background: 'rgba(186,117,23,0.14)',
+            color: '#BA7517',
+            fontSize: '11px',
+            lineHeight: '18px',
+            textAlign: 'center',
+            fontWeight: 500,
+          }}>
+            {activeChannelCount}
+          </span>
+        )}
       </button>
     );
   };
 
+  const isPrimaryView = activeNav === 'chat' || activeNav === 'channel';
   const isChatActive = activeNav === 'chat';
 
   return (
@@ -584,22 +644,86 @@ const AppInner: React.FC = () => {
             ))}
           </div>
           <div className="flex-1" />
-          <button onClick={() => setSidebarCollapsed(false)} style={{ fontSize: "13px", color: 'var(--color-text-tertiary)', padding: '4px 8px' }}>›</button>
+          <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: '4px' }}>
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              style={{ fontSize: "13px", color: 'var(--color-text-tertiary)', padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer' }}
+              title={t('sidebar_expand', lang)}
+            >
+              ›
+            </button>
+          </div>
         </div>
       ) : (
         /* Expanded 176px sidebar */
-        <div className="flex flex-col shrink-0 overflow-y-auto" style={{ width: '176px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
-          {/* Logo */}
-          <div className="flex items-center justify-between px-4 py-4" style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}>
-            <span className="select-none" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>
-              open<span style={{ color: '#1D9E75' }}>pup</span>
-            </span>
-            <button onClick={() => setSidebarCollapsed(true)} style={{ fontSize: "13px", color: 'var(--color-text-tertiary)', lineHeight: 1, padding: '2px 4px' }} title={t('sidebar_collapse', lang)}>‹</button>
+        <div className="flex flex-col shrink-0 overflow-y-auto" style={{ width: '188px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+          {/* Primary mode switch */}
+          <div className="px-3 py-3" style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '4px',
+              alignItems: 'center',
+              padding: '4px',
+              borderRadius: '12px',
+              background: 'var(--color-background-secondary)',
+            }}>
+              <button
+                onClick={() => { setActiveNav('chat'); inputRef.current?.focus(); }}
+                style={{
+                  border: 'none',
+                  borderRadius: '9px',
+                  padding: '8px 10px',
+                  fontSize: '12px',
+                  fontWeight: activeNav === 'chat' ? 600 : 500,
+                  color: activeNav === 'chat' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  background: activeNav === 'chat' ? 'var(--color-background-primary)' : 'transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                {t('nav_chat', lang)}
+              </button>
+              <button
+                onClick={() => { setActiveNav('channel'); setChannelDetailMode(false); }}
+                style={{
+                  border: 'none',
+                  borderRadius: '9px',
+                  padding: '8px 10px',
+                  fontSize: '12px',
+                  fontWeight: activeNav === 'channel' ? 600 : 500,
+                  color: activeNav === 'channel' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  background: activeNav === 'channel' ? 'var(--color-background-primary)' : 'transparent',
+                  cursor: 'pointer',
+                  position: 'relative',
+                }}
+              >
+                <span>{t('nav_pack_channel', lang)}</span>
+                {activeChannelCount > 0 && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '5px',
+                    right: '8px',
+                    minWidth: '16px',
+                    height: '16px',
+                    padding: '0 4px',
+                    borderRadius: '999px',
+                    background: 'rgba(186,117,23,0.16)',
+                    color: '#BA7517',
+                    fontSize: '10px',
+                    lineHeight: '16px',
+                    textAlign: 'center',
+                    fontWeight: 600,
+                  }}>
+                    {activeChannelCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-col flex-1 px-2 pt-3 pb-3 gap-4">
             {/* 狗群 section */}
-            <div>
+            <div style={{ display: isPrimaryView ? 'block' : 'none' }}>
               <div className="px-2 pb-1.5" style={{ fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {t('pup_section', lang)}
               </div>
@@ -641,12 +765,11 @@ const AppInner: React.FC = () => {
                 onClick={() => setToolsExpanded(v => !v)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
               >
-                <span>{lang === 'zh' ? '工具' : 'Tools'}</span>
+                <span>{t('sidebar_tools', lang)}</span>
                 <span style={{ fontSize: "10px", opacity: 0.6 }}>{toolsExpanded ? '▾' : '▸'}</span>
               </button>
               {toolsExpanded && (
                 <>
-                  <NavBtn label={t('nav_pack_channel', lang)} navKey="channel" />
                   <NavBtn label={t('nav_timeline', lang)} navKey="timeline" />
                   <NavBtn label={t('nav_memories', lang)} navKey="memories" />
                   <NavBtn label={t('nav_tasks', lang)} navKey="tasks" />
@@ -660,7 +783,7 @@ const AppInner: React.FC = () => {
                 onClick={() => setConfigExpanded(v => !v)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
               >
-                <span>{lang === 'zh' ? '配置' : 'Config'}</span>
+                <span>{t('sidebar_config', lang)}</span>
                 <span style={{ fontSize: "10px", opacity: 0.6 }}>{configExpanded ? '▾' : '▸'}</span>
               </button>
               {configExpanded && (
@@ -668,6 +791,7 @@ const AppInner: React.FC = () => {
                   <NavBtn label={t('nav_pups', lang)} navKey="pups" onClick={loadPups} />
                   <NavBtn label={t('nav_skills', lang)} navKey="skills" />
                   <NavBtn label={t('nav_mcp', lang)} navKey="mcp" />
+                  <NavBtn label={t('nav_bridge', lang)} navKey="bridge" />
                   <NavBtn label={t('nav_settings', lang)} navKey="settings" />
                 </>
               )}
@@ -675,7 +799,7 @@ const AppInner: React.FC = () => {
 
             <div className="flex-1" />
 
-            {/* Mode pill + lang toggle */}
+            {/* Mode pill + utilities */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <button
                 onClick={async () => {
@@ -684,8 +808,8 @@ const AppInner: React.FC = () => {
                   setExecMode(next);
                 }}
                 title={execMode === 'leashed'
-                  ? (lang === 'zh' ? '牵绳模式：危险操作需每次确认。点击切换放养模式' : 'Leashed: risky actions require approval. Click to switch')
-                  : (lang === 'zh' ? '放养模式：受信任技能可自动执行。点击切换牵绳模式' : 'Free run: trusted skills run automatically. Click to switch')
+                  ? t('mode_tooltip_leashed', lang)
+                  : t('mode_tooltip_free', lang)
                 }
                 style={{
                   display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
@@ -702,12 +826,12 @@ const AppInner: React.FC = () => {
                   onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
                   style={{ fontSize: "11px", color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px' }}
                 >
-                  {lang === 'zh' ? 'EN' : '中文'}
+                  {t('settings_lang_toggle_button', lang)}
                 </button>
                 {/* Theme toggle: sun/moon icon */}
                 <button
                   onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                  title={theme === 'dark' ? (lang === 'zh' ? '切换浅色' : 'Light mode') : (lang === 'zh' ? '切换深色' : 'Dark mode')}
+                  title={theme === 'dark' ? t('theme_light', lang) : t('theme_dark', lang)}
                   style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px', lineHeight: 1 }}
                 >
                   {theme === 'dark' ? (
@@ -729,6 +853,15 @@ const AppInner: React.FC = () => {
                     <path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
                   </svg>
                 </button>
+                <button
+                  onClick={() => setSidebarCollapsed(true)}
+                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px', lineHeight: 1 }}
+                  title={t('sidebar_collapse', lang)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
               </div>
             </div>
           </div>
@@ -737,7 +870,6 @@ const AppInner: React.FC = () => {
 
         {/* ── Main content ── */}
         <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--color-background-primary)' }}>
-
           {/* ── Chat ── */}
           {activeNav === 'chat' && (
             <>
@@ -889,6 +1021,8 @@ const AppInner: React.FC = () => {
                     el.style.height = 'auto';
                     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
                   }}
+                  onCompositionStart={() => { imeComposingRef.current = true; }}
+                  onCompositionEnd={() => { imeComposingRef.current = false; }}
                   onKeyDown={onKeyDown}
                   style={{
                     flex: 1, resize: 'none', outline: 'none',
@@ -952,7 +1086,27 @@ const AppInner: React.FC = () => {
           {/* ── Pack Channel ── */}
           {activeNav === 'channel' && (
             <div className="flex-1 overflow-hidden flex flex-col">
-              <PackChannel />
+              <PackChannel
+                channels={channels}
+                activeChannelId={activeChannelId}
+                messages={channelMessages}
+                error={channelError}
+                plan={channelPlan}
+                isCompleted={channelCompleted}
+                detailMode={channelDetailMode}
+                onSelectChannel={(id) => {
+                  setActiveChannelId(id);
+                  setChannelDetailMode(true);
+                }}
+                onBackToList={() => setChannelDetailMode(false)}
+                onOpenFinalReply={() => {
+                  setChannelDetailMode(false);
+                  setActiveNav('chat');
+                }}
+                onClearCompleted={() => void clearCompletedChannels()}
+                onClearStale={() => void clearStaleChannels()}
+                customPupColors={Object.fromEntries(pups.map((pup) => [pup.key, '#888780']))}
+              />
             </div>
           )}
 
@@ -979,6 +1133,11 @@ const AppInner: React.FC = () => {
           {/* ── MCP ── */}
           {activeNav === 'mcp' && (
             <div className="flex-1 overflow-auto px-5 py-4"><McpSettings /></div>
+          )}
+
+          {/* ── Bridge ── */}
+          {activeNav === 'bridge' && (
+            <div className="flex-1 overflow-auto px-5 py-4"><BridgeSettings /></div>
           )}
 
           {/* ── Settings ── */}

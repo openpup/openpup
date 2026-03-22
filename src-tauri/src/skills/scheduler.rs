@@ -107,8 +107,9 @@ async fn run_job(
         Err(e) => ("failed".to_string(), format!("Error: {e}")),
     };
 
+    let output_preview: String = output.chars().take(1000).collect();
     let _ = memory
-        .complete_skill_run(&run_id, &status, &output[..output.len().min(1000)])
+        .complete_skill_run(&run_id, &status, &output_preview)
         .await;
 
     let _ = app_handle.emit(
@@ -240,8 +241,9 @@ async fn tick_alpha_heartbeat(
 
     let run_id = Uuid::new_v4().to_string();
     let _ = memory.record_skill_run(&run_id, "alpha_heartbeat", "heartbeat").await;
+    let response_preview: String = response.chars().take(1000).collect();
     let _ = memory
-        .complete_skill_run(&run_id, "completed", &response[..response.len().min(1000)])
+        .complete_skill_run(&run_id, "completed", &response_preview)
         .await;
     let _ = app_handle.emit("heartbeat_completed", serde_json::json!({}));
 }

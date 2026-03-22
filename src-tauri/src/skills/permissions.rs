@@ -167,6 +167,27 @@ impl PermissionChecker {
         }
     }
 
+    pub async fn request_via_bridge(
+        &self,
+        action_desc: &str,
+        skill: &str,
+        bridge_ctx: &crate::bridge::types::BridgeContext,
+    ) -> Result<bool> {
+        bridge_ctx
+            .out_tx
+            .send(crate::bridge::types::OutboundMessage {
+                platform: bridge_ctx.platform.clone(),
+                chat_id: bridge_ctx.chat_id.clone(),
+                text: crate::bridge::formatter::format_perm_request(action_desc, skill),
+                reply_to_id: None,
+                msg_type: crate::bridge::types::OutboundType::PermRequest,
+            })
+            .await?;
+
+        let reply = timeout(Duration::from_secs(300), bridge_ctx.wait_for_reply()).await?;
+        Ok(matches!(reply.as_deref(), Some("yes") | Some("YES") | Some("Yes")))
+    }
+
     // ── Internal ────────────────────────────────────────────────────────────────
 
     async fn request_user_confirmation(&self, skill_name: &str, action: &Action) -> Result<bool> {
