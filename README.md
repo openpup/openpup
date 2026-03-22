@@ -4,7 +4,7 @@
 
 # OpenPup
 
-**一只记得你是谁的本地 AI 助手 · The local AI that remembers who you are**
+**一只记得你是谁的本地汪 · The local Pup that remembers who you are**
 
 > Not another ChatGPT wrapper.
 > Its memory files are yours to edit. Its skills run on your machine.
@@ -51,6 +51,7 @@ All data lives in `~/.openpup/` — plain files, SQLite, no cloud.
 |----------|----------|
 | [README.en.md](README.en.md) | Full English guide — install, config, CLI, skills, MCP |
 | [README.zh.md](README.zh.md) | 完整中文说明 |
+| [docs/roadmap2.0.md](docs/roadmap2.0.md) | 路线图 |
 | [docs/architecture.md](docs/architecture.md) | Technical design — agent routing, memory system, IPC, data flow |
 
 ## License
