@@ -20,8 +20,11 @@
 **[English →](README.en.md)** · **[中文 →](README.zh.md)** · **[Architecture →](docs/architecture.md)**
 
 <img src="openpup.png" width="860" alt="OpenPup interface">
-<img src="pack-channel.png" width="860" alt="Pack Channel collaboration interface">
 
+
+Ming Dynasty
+<img src="openpup-ming.png" width="860" alt="Pack Channel collaboration interface">
+[openpup-backup-Ming.zip](./openpup-backup-Ming.zip)
 </div>
 
 ---
@@ -51,7 +54,7 @@ All data lives in `~/.openpup/` — plain files, SQLite, no cloud.
 |----------|----------|
 | [README.en.md](README.en.md) | Full English guide — install, config, CLI, skills, MCP |
 | [README.zh.md](README.zh.md) | 完整中文说明 |
-| [docs/roadmap2.0.md](docs/roadmap2.0.md) | 路线图 |
+| [docs/roadmap2.0.md](docs/roadmap2.0.md) | RoadMap |
 | [docs/architecture.md](docs/architecture.md) | Technical design — agent routing, memory system, IPC, data flow |
 
 ## License
