@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "openpup"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2981,7 +2981,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-tauri"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",

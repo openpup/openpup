@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.3...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.5...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,31 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.5](https://github.com/openpup/openpup/compare/v0.1.3...v0.1.5) — 2026-03-22
+
+### Added
+
+- **WeChat bridge integration** — openpup now includes a first-party WeChat bridge with QR login, persisted account state, reconnect handling, and desktop configuration flow
+- **Structured Pack Channel review events** — objections, review comments, change requests, resumes, and workflow state are now first-class persisted channel records rather than ad-hoc prompt text
+- **Review workflow state sync** — active channels now persist `awaiting_review`, layer index, review round, user-blocked state, and related workflow metadata across backend and frontend
+- **Pup visual metadata utility** — pup display labels and accent colors are now derived from a shared frontend utility so chat, channel, and timeline surfaces stay visually consistent
+
+### Fixed
+
+- **Blocked downstream work flowing forward** — downstream pups now receive a stronger review contract and can raise explicit structured review objections instead of packaging unusable upstream context as a normal result
+- **Review continue semantics** — continuing from a blocked review now resumes the objecting pup so it can complete its current task, instead of rerunning the whole layer or skipping ahead in the DAG
+- **Pack Channel activity visibility** — channel timelines now include richer intermediate activity entries so users can see what pups are doing between `started` and `done`
+- **Review card information density** — review entries and controls were compressed so review-heavy channels remain readable without oversized cards or input surfaces
+- **Pup identity mismatches across surfaces** — pack channel, chat, and timeline color/name handling now stay in sync for `alpha`, `you`, built-in pups, and custom pups
+
+### Changed
+
+- **Pack Channel review UX** — review requests now surface concise metadata, friendlier action labels, and an explicit operator panel for comment / request changes / continue
+- **Pack Channel execution gating** — waiting-for-review channels no longer trip execution timeout monitoring while a human decision is pending
+- **Version baseline** — desktop app, Tauri bundle, npm workspace, and CLI package versions are aligned for the `0.1.5` release line
 
 ---
 

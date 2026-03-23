@@ -10,7 +10,7 @@ use colored::Colorize;
 #[command(
     name = "openpup",
     about = "🐾 openpup CLI — your pup pack, at the terminal",
-    version = "0.1.0"
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
     #[command(subcommand)]

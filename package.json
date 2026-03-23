@@ -1,6 +1,6 @@
 {
   "name": "openpup",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "private": true,
   "description": "Openpup - single-owner multi-agent desktop companion (Tauri + React + Rust)",
   "scripts": {
