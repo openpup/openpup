@@ -1,8 +1,8 @@
 import React from 'react';
-import type { DelegationPlan } from '../types/channel';
+import type { ChannelMessageRecord, ChannelWorkflowState, DelegationPlan } from '../types/channel';
 import { useLang, t } from '../i18n';
 
-type InspectorTab = 'plan' | 'members' | 'artifacts';
+type InspectorTab = 'plan' | 'members' | 'artifacts' | 'reviews';
 type InspectorTone = 'idle' | 'running' | 'done';
 
 interface MemberState {
@@ -20,9 +20,12 @@ interface ArtifactItem {
 
 interface ContextInspectorProps {
   plan: DelegationPlan | null;
+  workflow: ChannelWorkflowState | null;
   members: MemberState[];
   artifacts: ArtifactItem[];
+  reviews: ChannelMessageRecord[];
   getPupAccent: (name: string) => string;
+  getPupLabel: (name: string) => string;
   formatRelativeTime: (timestamp: number) => string;
 }
 
@@ -39,9 +42,12 @@ function statusTone(tone: InspectorTone) {
 
 export const ContextInspector: React.FC<ContextInspectorProps> = ({
   plan,
+  workflow,
   members,
   artifacts,
+  reviews,
   getPupAccent,
+  getPupLabel,
   formatRelativeTime,
 }) => {
   const { lang } = useLang();
@@ -99,6 +105,7 @@ export const ContextInspector: React.FC<ContextInspectorProps> = ({
                 ['plan', t('ctx_tab_plan', lang)],
                 ['members', t('ctx_tab_members', lang)],
                 ['artifacts', t('ctx_tab_artifacts', lang)],
+                ['reviews', t('ctx_tab_reviews', lang)],
               ].map(([key, label]) => (
                 <button
                   key={key}
@@ -133,14 +140,14 @@ export const ContextInspector: React.FC<ContextInspectorProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <span style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', minWidth: '20px' }}>{idx + 1}.</span>
                       <span style={{ fontSize: '13px', fontWeight: 600, color: getPupAccent(subtask.pup) }}>
-                        {subtask.pup}
+                        {getPupLabel(subtask.pup)}
                       </span>
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
                       {subtask.description}
                     </div>
                     <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
-                      {subtask.depends_on.length > 0 ? `${t('ctx_depends_on', lang)}: ${subtask.depends_on.join(', ')}` : t('ctx_no_upstream', lang)}
+                      {subtask.depends_on.length > 0 ? `${t('ctx_depends_on', lang)}: ${subtask.depends_on.map((name) => getPupLabel(name)).join(', ')}` : t('ctx_no_upstream', lang)}
                     </div>
                   </div>
                 )) : (
@@ -163,7 +170,7 @@ export const ContextInspector: React.FC<ContextInspectorProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: getPupAccent(member), flexShrink: 0 }} />
-                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-text-primary)' }}>{member}</span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-text-primary)' }}>{getPupLabel(member)}</span>
                       </div>
                       <span style={{
                         fontSize: '11px',
@@ -203,6 +210,55 @@ export const ContextInspector: React.FC<ContextInspectorProps> = ({
                 )) : (
                   <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.7 }}>
                     {t('ctx_no_artifacts', lang)}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === 'reviews' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {workflow && (
+                  <div style={{
+                    borderRadius: '16px',
+                    padding: '14px',
+                    border: '0.5px solid var(--color-border-tertiary)',
+                    background: 'var(--color-background-primary)',
+                  }}>
+                    <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                      {t('ctx_review_state', lang)}
+                    </div>
+                    <div style={{ fontSize: '13px', color: 'var(--color-text-primary)', fontWeight: 600 }}>
+                      {workflow.status === 'awaiting_review' ? t('pack_review_waiting', lang) : t('pack_badge_running', lang)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: '8px' }}>
+                      {t('ctx_review_round', lang)} {workflow.review_round || 0}
+                      {typeof workflow.current_layer === 'number' ? ` · ${t('ctx_review_layer', lang)} ${workflow.current_layer + 1}` : ''}
+                    </div>
+                  </div>
+                )}
+                {reviews.length > 0 ? reviews.map((review) => (
+                  <div key={review.id} style={{
+                    borderRadius: '16px',
+                    padding: '14px',
+                    border: '0.5px solid var(--color-border-tertiary)',
+                    background: 'var(--color-background-primary)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: getPupAccent(review.sender) }}>
+                        {getPupLabel(review.sender)}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{formatRelativeTime(review.timestamp)}</span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      {review.msg_type}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                      {review.content || '—'}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: '13px', color: 'var(--color-text-tertiary)', lineHeight: 1.7 }}>
+                    {t('ctx_no_reviews', lang)}
                   </div>
                 )}
               </div>

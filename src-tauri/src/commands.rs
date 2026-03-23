@@ -275,6 +275,7 @@ pub async fn get_top_memories(
 #[derive(Serialize)]
 pub struct TimelineEvent {
     pub role: String,
+    pub pup_key: String,
     pub pup_name: String,
     pub content: String,
     pub timestamp: i64,
@@ -294,6 +295,11 @@ pub async fn list_timeline_events(
     Ok(rows
         .into_iter()
         .map(|(role, content, timestamp)| TimelineEvent {
+            pup_key: if role == "assistant" {
+                "alpha".to_string()
+            } else {
+                "you".to_string()
+            },
             pup_name: if role == "assistant" {
                 "Alpha".to_string()
             } else {
@@ -1030,6 +1036,89 @@ pub async fn get_channel_plan(
         .alpha
         .memory
         .get_channel_plan(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Get the current workflow state for a specific Pack Channel.
+#[tauri::command]
+pub async fn get_channel_workflow_state(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<Option<crate::channel::types::ChannelWorkflowState>, String> {
+    state
+        .alpha
+        .channel_manager
+        .workflow_state(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Add a review comment without unblocking execution.
+#[tauri::command]
+pub async fn submit_channel_review_comment(
+    state: State<'_, AppState>,
+    channel_id: String,
+    comment: String,
+    reply_to: Option<String>,
+    sender: Option<String>,
+) -> Result<(), String> {
+    state
+        .alpha
+        .channel_manager
+        .submit_review_comment(
+            &channel_id,
+            sender.as_deref().unwrap_or("you"),
+            &comment,
+            reply_to.as_deref(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Request changes for the current review gate.
+#[tauri::command]
+pub async fn request_channel_changes(
+    state: State<'_, AppState>,
+    channel_id: String,
+    comment: String,
+    reply_to: Option<String>,
+    sender: Option<String>,
+) -> Result<(), String> {
+    state
+        .alpha
+        .channel_manager
+        .request_changes(
+            &channel_id,
+            sender.as_deref().unwrap_or("you"),
+            &comment,
+            reply_to.as_deref(),
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Explicitly continue a paused Pack Channel.
+#[tauri::command]
+pub async fn continue_channel(
+    state: State<'_, AppState>,
+    channel_id: String,
+    comment: Option<String>,
+    sender: Option<String>,
+) -> Result<(), String> {
+    state
+        .alpha
+        .channel_manager
+        .continue_channel(
+            &channel_id,
+            sender.as_deref().unwrap_or("you"),
+            comment
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("继续"),
+        )
         .await
         .map_err(|e| e.to_string())
 }

@@ -15,18 +15,26 @@ import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
+import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  pup_key?: string;
   pup_name?: string;
   timestamp?: number;
 }
 
 interface StreamDonePayload {
+  pup_key: string;
   pup_name: string;
   content: string;
+}
+
+interface StreamingPupState {
+  key: string;
+  name: string;
 }
 
 interface MemoryChip {
@@ -87,60 +95,6 @@ interface ContextStats {
 }
 
 type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'bridge' | 'settings';
-
-// Pup accent colors per spec (used for dot, left-border, tag)
-const PUP_COLOR: Record<string, string> = {
-  alpha:      '#1D9E75',
-  dev:        '#378ADD',
-  writer:     '#BA7517',
-  ops:        '#888780',
-  research:   '#7F77DD',
-  life_admin: '#DB3491',
-};
-
-const PUP_DOT: Record<string, string> = {
-  alpha: 'bg-emerald-500',
-  dev: 'bg-sky-500',
-  writer: 'bg-amber-400',
-  ops: 'bg-stone-400',
-  research: 'bg-purple-500',
-  life_admin: 'bg-pink-500',
-};
-
-const PUP_TAG: Record<string, string> = {
-  Alpha: 'bg-emerald-900/60 text-emerald-300',
-  'Dev Pup': 'bg-sky-900/60 text-sky-300',
-  'Writer Pup': 'bg-amber-900/60 text-amber-300',
-  'Ops Pup': 'bg-stone-800 text-stone-300',
-  'Research Pup': 'bg-purple-900/60 text-purple-300',
-  'Life Admin Pup': 'bg-pink-900/60 text-pink-300',
-};
-
-// Pup key → accent color for left border
-function pupLeftBorder(pupName: string): string {
-  const map: Record<string, string> = {
-    'Alpha': PUP_COLOR.alpha,
-    'Dev Pup': PUP_COLOR.dev,
-    'Writer Pup': PUP_COLOR.writer,
-    'Ops Pup': PUP_COLOR.ops,
-    'Research Pup': PUP_COLOR.research,
-    'Life Admin Pup': PUP_COLOR.life_admin,
-  };
-  return map[pupName] ?? PUP_COLOR.alpha;
-}
-
-// Pup tag background+color per spec (accent-matched per pup)
-function pupTagStyle(pupName: string): { background: string; color: string } {
-  const map: Record<string, { background: string; color: string }> = {
-    'Alpha':          { background: 'var(--color-background-success)', color: 'var(--color-text-success)' },
-    'Dev Pup':        { background: 'var(--color-background-info)',    color: 'var(--color-text-info)' },
-    'Writer Pup':     { background: 'var(--color-background-warning)', color: 'var(--color-text-warning)' },
-    'Research Pup':   { background: 'rgba(127, 119, 221, 0.12)',       color: '#7F77DD' },
-    'Ops Pup':        { background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)' },
-    'Life Admin Pup': { background: 'rgba(219, 52, 145, 0.10)',        color: '#DB3491' },
-  };
-  return map[pupName] ?? { background: 'var(--color-background-success)', color: 'var(--color-text-success)' };
-}
 
 // ─── LLM Config Panel ────────────────────────────────────────────────────────
 
@@ -292,7 +246,7 @@ const AppInner: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingReasoningContent, setStreamingReasoningContent] = useState('');
-  const [streamingPupName, setStreamingPupName] = useState('');
+  const [streamingPupName, setStreamingPupName] = useState<StreamingPupState | null>(null);
   const [streamingSteps, setStreamingSteps] = useState<ActivityStep[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -317,6 +271,7 @@ const AppInner: React.FC = () => {
     activeChannelId,
     messages: channelMessages,
     plan: channelPlan,
+    workflow: channelWorkflow,
     isCompleted: channelCompleted,
     completionEventCount,
     activeCount: activeChannelCount,
@@ -324,6 +279,9 @@ const AppInner: React.FC = () => {
     setActiveChannelId,
     clearCompletedChannels,
     clearStaleChannels,
+    continueChannel,
+    requestChannelChanges,
+    submitChannelReviewComment,
   } = usePackChannel();
 
   useEffect(() => {
@@ -403,7 +361,7 @@ const AppInner: React.FC = () => {
         setOnboardingDone(done);
         if (done) {
           loadMemoryChips();
-          setMessages([{ id: 'welcome', role: 'assistant', content: t('chat_welcome', lang), pup_name: 'Alpha' }]);
+          setMessages([{ id: 'welcome', role: 'assistant', content: t('chat_welcome', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
         }
       })
       .catch(() => setOnboardingDone(false));
@@ -428,18 +386,18 @@ const AppInner: React.FC = () => {
         setStreamingReasoningContent((p) => p + e.payload);
       }),
       listen<StreamDonePayload>('stream_done', (e) => {
-        const { pup_name, content } = e.payload;
+        const { pup_key, pup_name, content } = e.payload;
         // Use backend authoritative content — immune to token ordering issues.
         streamingContentRef.current = '';
         setStreamingContent('');
         setStreamingReasoningContent('');
-        setStreamingPupName('');
+        setStreamingPupName(null);
         setStreamingSteps([]);
         setSending(false);
         if (content) {
           setMessages((msgs) => [
             ...msgs,
-            { id: crypto.randomUUID(), role: 'assistant', content, pup_name },
+            { id: crypto.randomUUID(), role: 'assistant', content, pup_key, pup_name },
           ]);
           void loadMemoryChips();
           // Load context stats after message completes
@@ -453,11 +411,11 @@ const AppInner: React.FC = () => {
       listen<string>('stream_error', (e) => {
         setMessages((msgs) => [
           ...msgs,
-          { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${e.payload}`, pup_name: 'Alpha' },
+          { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${e.payload}`, pup_key: 'alpha', pup_name: 'Alpha' },
         ]);
         setStreamingContent('');
         setStreamingReasoningContent('');
-        setStreamingPupName('');
+        setStreamingPupName(null);
         setStreamingSteps([]);
         setSending(false);
       }),
@@ -519,14 +477,14 @@ const AppInner: React.FC = () => {
     setStreamingContent('');
     setStreamingReasoningContent('');
     setStreamingSteps([]);
-    setStreamingPupName('Alpha');
+    setStreamingPupName({ key: 'alpha', name: 'Alpha' });
     setSending(true);
     const forcedPup = selectedPupKey !== 'alpha' ? selectedPupKey : null;
     await invoke('send_message', { input: trimmed, forcedPup }).catch((e: unknown) => {
-      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${String(e)}`, pup_name: 'Alpha' }]);
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${String(e)}`, pup_key: 'alpha', pup_name: 'Alpha' }]);
       setStreamingContent('');
       setStreamingReasoningContent('');
-      setStreamingPupName('');
+      setStreamingPupName(null);
       setSending(false);
     });
   };
@@ -536,7 +494,7 @@ const AppInner: React.FC = () => {
     streamingContentRef.current = '';
     setStreamingContent('');
     setStreamingReasoningContent('');
-    setStreamingPupName('');
+    setStreamingPupName(null);
     setSending(false);
     await invoke('abort_message').catch(() => {});
   };
@@ -578,7 +536,7 @@ const AppInner: React.FC = () => {
   if (!onboardingDone) return (
     <Onboarding onComplete={() => {
       setOnboardingDone(true); loadMemoryChips();
-      setMessages([{ id: 'welcome', role: 'assistant', content: t('onboarding_complete_message', lang), pup_name: 'Alpha' }]);
+      setMessages([{ id: 'welcome', role: 'assistant', content: t('onboarding_complete_message', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
     }} />
   );
 
@@ -625,6 +583,9 @@ const AppInner: React.FC = () => {
 
   const isPrimaryView = activeNav === 'chat' || activeNav === 'channel';
   const isChatActive = activeNav === 'chat';
+  const getPupAccent = (pupKey: string) => pupAccentColor(pupKey);
+  const getPupTagStyle = (pupKey: string) => pupTagStyle(pupKey);
+  const pupMetaByKey = buildPupMetaByKey(pups);
 
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
@@ -635,11 +596,11 @@ const AppInner: React.FC = () => {
         <div className="flex flex-col items-center pt-4 pb-3 shrink-0" style={{ width: '48px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
           <div className="flex flex-col gap-3">
             <button onClick={() => { setActiveNav('chat'); inputRef.current?.focus(); }} className="p-2 -m-2 group" title="Alpha">
-              <span className="block w-2 h-2 rounded-full" style={{ background: '#1D9E75' }} />
+              <span className="block w-2 h-2 rounded-full" style={{ background: getPupAccent('alpha') }} />
             </button>
             {pups.filter((p) => p.key !== 'alpha').map((pup) => (
               <button key={pup.key} onClick={() => { setActiveNav('chat'); insertMention(pup.key); }} className="p-2 -m-2" title={pup.display_name}>
-                <span className="block w-2 h-2 rounded-full" style={{ background: PUP_COLOR[pup.key] ?? '#888780' }} />
+                <span className="block w-2 h-2 rounded-full" style={{ background: getPupAccent(pup.key) }} />
               </button>
             ))}
           </div>
@@ -738,7 +699,7 @@ const AppInner: React.FC = () => {
                   border: 'none', cursor: 'pointer',
                 }}
               >
-                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0 }} />
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: getPupAccent('alpha'), flexShrink: 0 }} />
                 Alpha
               </button>
               {pups.filter((p) => p.key !== 'alpha').map((pup) => (
@@ -753,7 +714,7 @@ const AppInner: React.FC = () => {
                     border: 'none', cursor: 'pointer',
                   }}
                 >
-                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: PUP_COLOR[pup.key] ?? '#888780', flexShrink: 0 }} />
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: getPupAccent(pup.key), flexShrink: 0 }} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pup.display_name}</span>
                 </button>
               ))}
@@ -911,7 +872,7 @@ const AppInner: React.FC = () => {
                   {messages.map((m) => {
                     const isNew = !animatedMsgIds.current.has(m.id);
                     animatedMsgIds.current.add(m.id);
-                    const accentColor = pupLeftBorder(m.pup_name ?? 'Alpha');
+                    const accentColor = getPupAccent(m.pup_key ?? 'alpha');
                     return m.role === 'user' ? (
                       <div key={m.id} className={isNew ? 'animate-msg-in' : ''} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <div style={{
@@ -932,7 +893,7 @@ const AppInner: React.FC = () => {
                           <span style={{
                             display: 'inline-block', marginBottom: '4px',
                             fontSize: "10px", padding: '1px 7px', borderRadius: '10px',
-                            ...pupTagStyle(m.pup_name),
+                            ...getPupTagStyle(m.pup_key ?? 'alpha'),
                           }}>
                             {m.pup_name}
                           </span>
@@ -959,15 +920,15 @@ const AppInner: React.FC = () => {
                       <span style={{
                         display: 'inline-block', marginBottom: '4px',
                         fontSize: "10px", padding: '1px 7px', borderRadius: '10px',
-                        ...pupTagStyle(streamingPupName || 'Alpha'),
+                        ...getPupTagStyle(streamingPupName?.key ?? 'alpha'),
                       }}>
-                        {streamingPupName || 'Alpha'}
+                        {streamingPupName?.name || 'Alpha'}
                       </span>
                       <div style={{
                         background: 'var(--color-background-primary)',
                         border: '0.5px solid var(--color-border-tertiary)',
                         borderRadius: '10px 10px 10px 4px',
-                        borderLeft: `2px solid ${pupLeftBorder(streamingPupName || 'Alpha')}`,
+                        borderLeft: `2px solid ${getPupAccent(streamingPupName?.key ?? 'alpha')}`,
                         padding: '9px 11px',
                         fontSize: "13px",
                         lineHeight: 1.6,
@@ -1092,6 +1053,7 @@ const AppInner: React.FC = () => {
                 messages={channelMessages}
                 error={channelError}
                 plan={channelPlan}
+                workflow={channelWorkflow}
                 isCompleted={channelCompleted}
                 detailMode={channelDetailMode}
                 onSelectChannel={(id) => {
@@ -1105,7 +1067,10 @@ const AppInner: React.FC = () => {
                 }}
                 onClearCompleted={() => void clearCompletedChannels()}
                 onClearStale={() => void clearStaleChannels()}
-                customPupColors={Object.fromEntries(pups.map((pup) => [pup.key, '#888780']))}
+                onContinueChannel={(channelId, comment) => void continueChannel(channelId, comment)}
+                onRequestChannelChanges={(channelId, comment, replyTo) => void requestChannelChanges(channelId, comment, replyTo)}
+                onSubmitReviewComment={(channelId, comment, replyTo) => void submitChannelReviewComment(channelId, comment, replyTo)}
+                pupMetaByKey={pupMetaByKey}
               />
             </div>
           )}

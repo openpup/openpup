@@ -10,7 +10,9 @@ use sqlx::{
 use crate::bridge::types::{
     BridgeConnectionState, BridgeConnectionStatus, InboundMessage, OutboundMessage,
 };
-use crate::channel::types::{ChannelMessageRecord, ChannelRecord, DelegationPlan};
+use crate::channel::types::{
+    ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
+};
 use crate::llm::client::LlmClient;
 
 #[derive(Clone)]
@@ -211,6 +213,10 @@ impl MemorySystem {
         task_id      TEXT NOT NULL,
         title        TEXT NOT NULL,
         status       TEXT NOT NULL DEFAULT 'active',
+        current_layer INTEGER,
+        review_round INTEGER NOT NULL DEFAULT 0,
+        awaiting_user INTEGER NOT NULL DEFAULT 0,
+        blocked_reason TEXT,
         created_at   INTEGER NOT NULL,
         completed_at INTEGER,
         created_by   TEXT NOT NULL DEFAULT 'alpha'
@@ -219,6 +225,23 @@ impl MemorySystem {
         )
         .execute(&self.pool)
         .await?;
+
+        let _ = sqlx::query("ALTER TABLE pack_channels ADD COLUMN current_layer INTEGER")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE pack_channels ADD COLUMN review_round INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query(
+            "ALTER TABLE pack_channels ADD COLUMN awaiting_user INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE pack_channels ADD COLUMN blocked_reason TEXT")
+            .execute(&self.pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -232,12 +255,16 @@ impl MemorySystem {
         status_val    TEXT,
         mentions      TEXT,
         reply_to      TEXT,
+        event_payload TEXT,
         timestamp     INTEGER NOT NULL
       );
       "#,
         )
         .execute(&self.pool)
         .await?;
+        let _ = sqlx::query("ALTER TABLE channel_messages ADD COLUMN event_payload TEXT")
+            .execute(&self.pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -372,12 +399,15 @@ impl MemorySystem {
         artifact_name: Option<&str>,
         status_val: Option<&str>,
         mentions: &[&str],
+        reply_to: Option<&str>,
+        event_payload: Option<&serde_json::Value>,
     ) -> Result<()> {
         let mentions_json = serde_json::to_string(mentions).unwrap_or_default();
+        let event_payload_json = event_payload.map(serde_json::to_string).transpose()?;
         sqlx::query(
             r#"INSERT INTO channel_messages
-         (id, channel_id, sender, content, msg_type, artifact_name, status_val, mentions, timestamp)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"#,
+         (id, channel_id, sender, content, msg_type, artifact_name, status_val, mentions, reply_to, event_payload, timestamp)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#,
         )
         .bind(id)
         .bind(channel_id)
@@ -387,10 +417,72 @@ impl MemorySystem {
         .bind(artifact_name)
         .bind(status_val)
         .bind(&mentions_json)
+        .bind(reply_to)
+        .bind(event_payload_json)
         .bind(Utc::now().timestamp())
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn set_channel_workflow_state(
+        &self,
+        channel_id: &str,
+        status: &str,
+        current_layer: Option<i64>,
+        review_round: i64,
+        awaiting_user: bool,
+        blocked_reason: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE pack_channels
+            SET status = ?1,
+                current_layer = ?2,
+                review_round = ?3,
+                awaiting_user = ?4,
+                blocked_reason = ?5
+            WHERE id = ?6
+            "#,
+        )
+        .bind(status)
+        .bind(current_layer)
+        .bind(review_round)
+        .bind(if awaiting_user { 1 } else { 0 })
+        .bind(blocked_reason)
+        .bind(channel_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_channel_workflow_state(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<ChannelWorkflowState>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, status, current_layer, review_round, awaiting_user, blocked_reason
+            FROM pack_channels
+            WHERE id = ?1
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(ChannelWorkflowState {
+            channel_id: row.get("id"),
+            status: row.get("status"),
+            current_layer: row.get("current_layer"),
+            review_round: row.get("review_round"),
+            awaiting_user: row.get::<i64, _>("awaiting_user") != 0,
+            blocked_reason: row.get("blocked_reason"),
+        }))
     }
 
     pub async fn save_channel_plan(&self, plan: &DelegationPlan) -> Result<()> {
@@ -434,14 +526,18 @@ impl MemorySystem {
     }
 
     pub async fn active_channel_count(&self) -> Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pack_channels WHERE status='active'")
-            .fetch_one(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM pack_channels WHERE status IN ('active', 'awaiting_review')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.get::<i64, _>("cnt"))
     }
 
     pub async fn complete_channel(&self, channel_id: &str) -> Result<()> {
-        sqlx::query("UPDATE pack_channels SET status='completed', completed_at=?1 WHERE id=?2")
+        sqlx::query(
+            "UPDATE pack_channels SET status='completed', completed_at=?1, current_layer=NULL, awaiting_user=0, blocked_reason=NULL WHERE id=?2",
+        )
             .bind(Utc::now().timestamp())
             .bind(channel_id)
             .execute(&self.pool)
@@ -568,6 +664,7 @@ impl MemorySystem {
         let rows = sqlx::query(
             r#"
       SELECT c.id, c.task_id, c.title, c.status, c.created_at, c.completed_at,
+             c.current_layer, c.review_round, c.awaiting_user, c.blocked_reason,
              COALESCE(
                (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
                c.completed_at,
@@ -602,6 +699,10 @@ impl MemorySystem {
                     created_at: row.get("created_at"),
                     completed_at: row.get("completed_at"),
                     updated_at: row.get("updated_at"),
+                    current_layer: row.get("current_layer"),
+                    review_round: row.get("review_round"),
+                    awaiting_user: row.get::<i64, _>("awaiting_user") != 0,
+                    blocked_reason: row.get("blocked_reason"),
                     members,
                 }
             })
@@ -614,7 +715,7 @@ impl MemorySystem {
     ) -> Result<Vec<ChannelMessageRecord>> {
         let rows = sqlx::query(
       r#"
-      SELECT id, channel_id, sender, content, msg_type, artifact_name, status_val, mentions, timestamp
+      SELECT id, channel_id, sender, content, msg_type, artifact_name, status_val, mentions, reply_to, event_payload, timestamp
       FROM channel_messages
       WHERE channel_id = ?1
       ORDER BY timestamp ASC
@@ -631,6 +732,9 @@ impl MemorySystem {
                     row.get::<Option<String>, _>("mentions").unwrap_or_default();
                 let mentions: Vec<String> =
                     serde_json::from_str(&mentions_json).unwrap_or_default();
+                let event_payload_json: String = row
+                    .get::<Option<String>, _>("event_payload")
+                    .unwrap_or_default();
                 ChannelMessageRecord {
                     id: row.get("id"),
                     channel_id: row.get("channel_id"),
@@ -640,6 +744,8 @@ impl MemorySystem {
                     artifact_name: row.get("artifact_name"),
                     status_val: row.get("status_val"),
                     mentions,
+                    reply_to: row.get("reply_to"),
+                    event_payload: serde_json::from_str(&event_payload_json).ok(),
                     timestamp: row.get("timestamp"),
                 }
             })

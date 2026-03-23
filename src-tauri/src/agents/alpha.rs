@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::agents::custom_pup::CustomPup;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
 use crate::channel::dag::build_execution_layers;
-use crate::channel::manager::ChannelManager;
+use crate::channel::manager::{ChannelManager, ReviewDecision};
 use crate::channel::types::{DelegationPlan, Subtask};
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
@@ -76,6 +76,7 @@ fn default_pup_configs() -> HashMap<String, PupConfig> {
 
 #[derive(serde::Serialize, Clone)]
 struct StreamDonePayload {
+    pup_key: String,
     pup_name: String,
     /// Authoritative final content from the backend (empty when aborted).
     content: String,
@@ -87,6 +88,58 @@ pub struct ActivityEvent {
     /// "routing" | "skill" | "tool_call" | "tool_done"
     pub kind: String,
     pub label: String,
+}
+
+#[derive(Clone)]
+struct LayerExecutionResult {
+    pup_key: String,
+    result: String,
+    message_id: String,
+    review_request: Option<ParsedReviewRequest>,
+}
+
+#[derive(Clone)]
+struct ParsedReviewRequest {
+    requester_pup: String,
+    target_pup: Option<String>,
+    summary: String,
+    blocking: bool,
+    suggested_action: Option<String>,
+}
+
+#[derive(Clone)]
+struct ReviewToolContext {
+    allowed_targets: Vec<String>,
+}
+
+fn build_downstream_review_contract(allowed_targets: &[String]) -> String {
+    let targets = if allowed_targets.is_empty() {
+        "none".to_string()
+    } else {
+        allowed_targets.join(", ")
+    };
+    format!(
+        "## Downstream review contract\n\
+You are executing a downstream task that depends on upstream outputs.\n\
+- Your allowed review targets are: {targets}\n\
+- If any upstream output is missing facts, failed to gather required data, is ambiguous, contradictory, stale, or otherwise unusable, you MUST call `request_review` before giving a final answer.\n\
+- Do NOT package blocked inputs into a normal deliverable.\n\
+- Do NOT write a polished summary of failure and pretend the task is complete.\n\
+- Only continue normally when the upstream context is genuinely sufficient for your task.\n\
+- Prefer `blocking=true` when the dependency problem means the workflow should pause for review."
+    )
+}
+
+enum AgentRunResult {
+    FinalText(String),
+    ReviewRequest(ToolReviewRequest),
+}
+
+struct ToolReviewRequest {
+    target_pup: Option<String>,
+    summary: String,
+    blocking: bool,
+    suggested_action: Option<String>,
 }
 
 // ─── AlphaPup ─────────────────────────────────────────────────────────────────
@@ -259,6 +312,7 @@ impl AlphaPup {
                 let _ = app_handle.emit(
                     "stream_done",
                     StreamDonePayload {
+                        pup_key: pup_key.clone(),
                         pup_name: pup_display_name(&pup_key),
                         content: if aborted {
                             String::new()
@@ -465,6 +519,7 @@ impl AlphaPup {
                     &pup_key,
                     msgs,
                     &tool_perms,
+                    None,
                     move |tok| {
                         let _ = handle.emit("stream_token", tok);
                     },
@@ -474,6 +529,12 @@ impl AlphaPup {
                     &self.abort_flag,
                 )
                 .await?;
+            let output = match output {
+                AgentRunResult::FinalText(text) => text,
+                AgentRunResult::ReviewRequest(_) => {
+                    "Error: review requests are not supported in direct chat.".to_string()
+                }
+            };
             return Ok((output, pup_key));
         }
 
@@ -579,6 +640,7 @@ impl AlphaPup {
             "alpha",
             messages,
             &tool_perms,
+            None,
             move |tok| {
                 // Emit reasoning tokens separately if the LLM uses them.
                 // For now all tokens from the tool loop go to stream_token.
@@ -590,6 +652,12 @@ impl AlphaPup {
             &self.abort_flag,
         )
         .await
+        .map(|result| match result {
+            AgentRunResult::FinalText(text) => text,
+            AgentRunResult::ReviewRequest(_) => {
+                "Error: review requests are not supported for Alpha chat.".to_string()
+            }
+        })
     }
 
     // ── Unified agent tool-call loop ──────────────────────────────────────────
@@ -648,10 +716,11 @@ impl AlphaPup {
         agent_name: &str,
         messages: Vec<serde_json::Value>,
         tool_perms: &PupToolPermissions,
+        review_tool: Option<&ReviewToolContext>,
         on_token: impl Fn(String) + Send + Sync,
         on_activity: impl Fn(String, String) + Send + Sync,
         abort: &AbortFlag,
-    ) -> Result<String> {
+    ) -> Result<AgentRunResult> {
         let primitive_perms = ToolPermissions {
             shell: tool_perms.shell,
             filesystem: tool_perms.filesystem,
@@ -678,6 +747,41 @@ impl AlphaPup {
             }
         }));
 
+        if let Some(review_tool) = review_tool {
+            let mut target_options = review_tool.allowed_targets.clone();
+            target_options.sort();
+            target_options.dedup();
+            available_tools.push(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "request_review",
+                    "description": "Required for downstream blocking cases. If an upstream dependency is missing, failed, ambiguous, contradictory, or unusable, call this instead of writing a normal final answer.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_pup": {
+                                "type": ["string", "null"],
+                                "description": format!("The upstream pup to review. Allowed targets: {}. Choose the specific dependency when possible. Use null only if the issue is with the overall layer.", if target_options.is_empty() { "none".to_string() } else { target_options.join(", ") }),
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "A concise objection summary, max 120 Chinese chars or similar length. State exactly why the upstream output cannot be used."
+                            },
+                            "blocking": {
+                                "type": "boolean",
+                                "description": "Whether execution should pause for human review. Use true when you cannot complete your task reliably with the current upstream context."
+                            },
+                            "suggested_action": {
+                                "type": ["string", "null"],
+                                "description": "Optional short suggestion such as rerun_upstream, clarify_requirements, or continue_with_risk."
+                            }
+                        },
+                        "required": ["summary", "blocking"]
+                    }
+                }
+            }));
+        }
+
         if tool_perms.mcp {
             // Extract the task from the last user message to drive tool selection
             let task_hint = messages
@@ -703,7 +807,7 @@ impl AlphaPup {
         for iter in 0..MAX_ITER {
             if abort.load(Ordering::Relaxed) {
                 debug!("[{agent_name}] aborted at iteration {iter}");
-                return Ok(String::new());
+                return Ok(AgentRunResult::FinalText(String::new()));
             }
 
             // Rebuild skill tools each iteration so newly installed skills are visible immediately.
@@ -718,7 +822,7 @@ impl AlphaPup {
                 Some(r) => r,
                 None => {
                     debug!("[{agent_name}] aborted during LLM call");
-                    return Ok(String::new());
+                    return Ok(AgentRunResult::FinalText(String::new()));
                 }
             };
 
@@ -726,7 +830,7 @@ impl AlphaPup {
                 let text = response.content.unwrap_or_default();
                 debug!("[{agent_name}] final answer: {} chars", text.len());
                 on_token(text.clone());
-                return Ok(text);
+                return Ok(AgentRunResult::FinalText(text));
             }
 
             // Execute each tool call and feed results back
@@ -738,7 +842,61 @@ impl AlphaPup {
                 let (act_kind, act_label) = describe_tool_call(&tc.name, &tc.arguments);
                 on_activity(act_kind, act_label);
 
-                let result = if tc.name == "task_update" {
+                let result = if tc.name == "request_review" {
+                    let target_pup = tc
+                        .arguments
+                        .get("target_pup")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| value.trim().to_string());
+                    if let Some(review_tool) = review_tool {
+                        if let Some(target) = target_pup.as_ref() {
+                            if !review_tool
+                                .allowed_targets
+                                .iter()
+                                .any(|allowed| allowed == target)
+                            {
+                                return Ok(AgentRunResult::FinalText(format!(
+                                    "Error: invalid review target '{}'",
+                                    target
+                                )));
+                            }
+                        }
+                    }
+                    let summary = tc
+                        .arguments
+                        .get("summary")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .chars()
+                        .take(120)
+                        .collect::<String>();
+                    let blocking = tc
+                        .arguments
+                        .get("blocking")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(true);
+                    let suggested_action = tc
+                        .arguments
+                        .get("suggested_action")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty());
+                    on_activity(
+                        "review".into(),
+                        format!(
+                            "request_review → {}",
+                            target_pup.clone().unwrap_or_else(|| "layer".to_string())
+                        ),
+                    );
+                    return Ok(AgentRunResult::ReviewRequest(ToolReviewRequest {
+                        target_pup,
+                        summary,
+                        blocking,
+                        suggested_action,
+                    }));
+                } else if tc.name == "task_update" {
                     let id = tc.arguments["id"].as_str().unwrap_or_default();
                     let status = tc.arguments["status"].as_str().unwrap_or("done");
                     let result_text = tc.arguments["result"].as_str();
@@ -821,7 +979,7 @@ impl AlphaPup {
                 // Check abort after each tool so we don't continue a long tool chain
                 if abort.load(Ordering::Relaxed) {
                     debug!("[{agent_name}] aborted after tool '{}'", tc.name);
-                    return Ok(String::new());
+                    return Ok(AgentRunResult::FinalText(String::new()));
                 }
             }
         }
@@ -999,6 +1157,244 @@ impl AlphaPup {
         }
     }
 
+    async fn execute_channel_layer(
+        &self,
+        channel_id: &str,
+        layer: &[Subtask],
+        dep_context: &HashMap<String, String>,
+        owner_summary: &str,
+        app_handle: &tauri::AppHandle,
+        review_feedback: &HashMap<String, Vec<String>>,
+        result_message_ids: &HashMap<String, String>,
+    ) -> Vec<LayerExecutionResult> {
+        let mut layer_handles = Vec::new();
+
+        for subtask in layer {
+            let pup_key = subtask.pup.clone();
+            let pup_description = subtask.description.clone();
+            let deps: Vec<String> = subtask.depends_on.clone();
+
+            let injected: String = if deps.is_empty() {
+                String::new()
+            } else {
+                deps.iter()
+                    .filter_map(|dep| dep_context.get(dep))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            };
+            let feedback = review_feedback.get(&pup_key).cloned().unwrap_or_default();
+
+            let self_clone = self.clone();
+            let owner_ctx = owner_summary.to_string();
+            let ch_id = channel_id.to_string();
+            let app_clone = app_handle.clone();
+            let app_activity = app_handle.clone();
+            let result_message_ids = result_message_ids.clone();
+
+            let _ = self
+                .channel_manager
+                .post_status(channel_id, &pup_key, "started")
+                .await;
+
+            let cm_clone = self.channel_manager.clone();
+            let handle = tauri::async_runtime::spawn(async move {
+                cm_clone.monitor.register(&ch_id, &pup_key).await;
+
+                let hb_ch_id = ch_id.clone();
+                let hb_pup = pup_key.clone();
+                let hb_cm = cm_clone.clone();
+                let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                let _hb_handle = tauri::async_runtime::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
+                    interval.tick().await;
+                    loop {
+                        tokio::select! {
+                            _ = interval.tick() => {
+                                hb_cm.post_heartbeat(&hb_ch_id, &hb_pup).await;
+                            }
+                            _ = &mut hb_stop_rx => {
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                let mut full_msg = if injected.is_empty() {
+                    pup_description.clone()
+                } else {
+                    format!(
+                        "{}\n\n{}\n\n## Context from previous steps\n{}",
+                        pup_description,
+                        build_downstream_review_contract(&deps),
+                        injected
+                    )
+                };
+                if !feedback.is_empty() {
+                    full_msg.push_str("\n\n## Review feedback\n");
+                    full_msg.push_str(&feedback.join("\n"));
+                }
+
+                let _ = app_clone.emit(
+                    "stream_activity",
+                    ActivityEvent {
+                        kind: "routing".into(),
+                        label: format!("pack:{}", pup_display_name(&pup_key)),
+                    },
+                );
+
+                let result = self_clone
+                    .run_pup_for_channel_with_activity(
+                        &pup_key,
+                        &full_msg,
+                        &owner_ctx,
+                        {
+                            let review_tool = if deps.is_empty() {
+                                None
+                            } else {
+                                Some(ReviewToolContext {
+                                    allowed_targets: deps.clone(),
+                                })
+                            };
+                            review_tool
+                        },
+                        {
+                            let cm_activity = cm_clone.clone();
+                            let ch_activity = ch_id.clone();
+                            let pup_activity = pup_key.clone();
+                            move |kind, label| {
+                                let entry = format_activity_entry(&kind, &label);
+                                let cm_emit = cm_activity.clone();
+                                let ch_emit = ch_activity.clone();
+                                let pup_emit = pup_activity.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ =
+                                        cm_emit.post_activity(&ch_emit, &pup_emit, &entry).await;
+                                });
+                                let _ = app_activity
+                                    .emit("stream_activity", ActivityEvent { kind, label });
+                            }
+                        },
+                    )
+                    .await
+                    .unwrap_or_else(|e| AgentRunResult::FinalText(format!("Error: {e}")));
+
+                let _ = hb_stop_tx.send(());
+                cm_clone.monitor.unregister(&ch_id, &pup_key).await;
+
+                if let AgentRunResult::ReviewRequest(review_request) = result {
+                    let reply_to = review_request
+                        .target_pup
+                        .as_ref()
+                        .and_then(|target| result_message_ids.get(target))
+                        .cloned();
+                    let target_pup = review_request.target_pup.clone();
+                    let suggested_action = review_request.suggested_action.clone();
+                    let _ = cm_clone
+                        .post_message(
+                            &ch_id,
+                            &pup_key,
+                            &review_request.summary,
+                            "review_request",
+                            None,
+                            None,
+                            &[],
+                            reply_to.as_deref(),
+                            Some(serde_json::json!({
+                                "target_pup": target_pup,
+                                "blocking": review_request.blocking,
+                                "suggested_action": suggested_action,
+                            })),
+                        )
+                        .await;
+                    let _ = cm_clone.post_status(&ch_id, &pup_key, "blocked").await;
+                    return LayerExecutionResult {
+                        pup_key: pup_key.clone(),
+                        result: String::new(),
+                        message_id: String::new(),
+                        review_request: Some(ParsedReviewRequest {
+                            requester_pup: pup_key,
+                            target_pup: review_request.target_pup,
+                            summary: review_request.summary,
+                            blocking: review_request.blocking,
+                            suggested_action: review_request.suggested_action,
+                        }),
+                    };
+                }
+
+                let result_text = match result {
+                    AgentRunResult::FinalText(text) => text,
+                    AgentRunResult::ReviewRequest(_) => String::new(),
+                };
+                let message_id = cm_clone
+                    .post_text(&ch_id, &pup_key, &result_text, &[])
+                    .await
+                    .ok();
+                let status = if result_text.starts_with("Error:") {
+                    "failed"
+                } else {
+                    "done"
+                };
+                let _ = cm_clone.post_status(&ch_id, &pup_key, status).await;
+
+                LayerExecutionResult {
+                    pup_key,
+                    result: result_text,
+                    message_id: message_id.unwrap_or_default(),
+                    review_request: None,
+                }
+            });
+            layer_handles.push(handle);
+        }
+
+        let joined = tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            futures_util::future::join_all(layer_handles),
+        )
+        .await;
+
+        match joined {
+            Ok(results) => results.into_iter().filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    fn build_review_request_text(
+        &self,
+        layer_idx: usize,
+        review_round: i64,
+        requests: &[ParsedReviewRequest],
+    ) -> String {
+        let items = requests
+            .iter()
+            .map(|request| {
+                let target = request
+                    .target_pup
+                    .as_ref()
+                    .map(|pup| pup_display_name(pup))
+                    .unwrap_or_else(|| "当前协作结果".to_string());
+                format!(
+                    "- {} 对 {} 有异议：{}",
+                    pup_display_name(&request.requester_pup),
+                    target,
+                    request.summary
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "第 {} 层触发第 {} 轮评审。\n\n异议摘要：\n{}\n\n默认不会在每层停下。只有出现明确异议时才进入评审。请决定继续，或要求修改。",
+            layer_idx + 1,
+            review_round,
+            if items.is_empty() {
+                "- 无".to_string()
+            } else {
+                items
+            }
+        )
+    }
+
     /// DAG-based multi-pup dispatch. Decomposes the request, builds execution layers,
     /// runs layers sequentially (pups within a layer run in parallel), and aggregates.
     async fn run_dag(
@@ -1057,6 +1453,11 @@ impl AlphaPup {
         let timeout_handle = tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                if let Ok(Some(state)) = monitor_cm.workflow_state(&monitor_channel_id).await {
+                    if state.status == "awaiting_review" {
+                        continue;
+                    }
+                }
                 let timed_out = monitor_cm.monitor.check_timeouts(&monitor_channel_id).await;
                 for (pup_id, _kind) in timed_out {
                     debug!(
@@ -1081,9 +1482,20 @@ impl AlphaPup {
             .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
-        let mut all_results: Vec<(String, String)> = Vec::new();
+        let mut all_results: HashMap<String, String> = HashMap::new();
+        let mut result_message_ids: HashMap<String, String> = HashMap::new();
         // Accumulated context from prior layers to inject as deps
         let mut dep_context: HashMap<String, String> = HashMap::new();
+        let subtask_by_pup: HashMap<String, (usize, Subtask)> = layers
+            .iter()
+            .enumerate()
+            .flat_map(|(layer_idx, layer)| {
+                layer
+                    .iter()
+                    .cloned()
+                    .map(move |subtask| (subtask.pup.clone(), (layer_idx, subtask)))
+            })
+            .collect();
 
         for (layer_idx, layer) in layers.iter().enumerate() {
             debug!(
@@ -1092,132 +1504,213 @@ impl AlphaPup {
                 layer.len()
             );
 
-            let mut layer_handles = Vec::new();
+            let mut review_round = 0_i64;
+            let mut rerun_layer = layer.clone();
+            let mut review_feedback: HashMap<String, Vec<String>> = HashMap::new();
 
-            for subtask in layer {
-                let pup_key = subtask.pup.clone();
-                let pup_description = subtask.description.clone();
-                let deps: Vec<String> = subtask.depends_on.clone();
-
-                // Build injected context from dependency outputs
-                let injected: String = if deps.is_empty() {
-                    String::new()
-                } else {
-                    deps.iter()
-                        .filter_map(|dep| dep_context.get(dep))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                };
-
-                let self_clone = self.clone();
-                let owner_ctx = owner_summary.clone();
-                let ch_id = channel_id.clone();
-                let app_clone = app_handle.clone();
-
-                // Post started status
+            loop {
                 let _ = self
                     .channel_manager
-                    .post_status(&channel_id, &pup_key, "started")
+                    .update_workflow_state(
+                        &channel_id,
+                        "active",
+                        Some(layer_idx as i64),
+                        review_round,
+                        false,
+                        None,
+                    )
                     .await;
 
-                let cm_clone = self.channel_manager.clone();
-                let handle = tauri::async_runtime::spawn(async move {
-                    // Register heartbeat
-                    cm_clone.monitor.register(&ch_id, &pup_key).await;
+                let layer_results = self
+                    .execute_channel_layer(
+                        &channel_id,
+                        &rerun_layer,
+                        &dep_context,
+                        &owner_summary,
+                        app_handle,
+                        &review_feedback,
+                        &result_message_ids,
+                    )
+                    .await;
 
-                    // Spawn heartbeat loop
-                    let hb_ch_id = ch_id.clone();
-                    let hb_pup = pup_key.clone();
-                    let hb_cm = cm_clone.clone();
-                    let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
-                    let _hb_handle = tauri::async_runtime::spawn(async move {
-                        let mut interval =
-                            tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
-                        interval.tick().await; // skip first immediate tick
-                        loop {
-                            tokio::select! {
-                                _ = interval.tick() => {
-                                    hb_cm.post_heartbeat(&hb_ch_id, &hb_pup).await;
+                if layer_results.is_empty() {
+                    debug!("[alpha] run_dag: layer {} timed out", layer_idx);
+                }
+
+                let objections: Vec<ParsedReviewRequest> = layer_results
+                    .iter()
+                    .filter_map(|result| result.review_request.clone())
+                    .collect();
+
+                for result in layer_results
+                    .iter()
+                    .filter(|result| result.review_request.is_none())
+                {
+                    dep_context.insert(result.pup_key.clone(), result.result.clone());
+                    all_results.insert(result.pup_key.clone(), result.result.clone());
+                    if !result.message_id.is_empty() {
+                        result_message_ids
+                            .insert(result.pup_key.clone(), result.message_id.clone());
+                    }
+                }
+
+                if let Some(hook) = self.layer_hook.read().await.clone() {
+                    let done_pups = rerun_layer
+                        .iter()
+                        .map(|subtask| pup_display_name(&subtask.pup))
+                        .collect::<Vec<_>>();
+                    hook(layer_idx, done_pups);
+                }
+
+                if objections.is_empty() {
+                    let _ = self
+                        .channel_manager
+                        .update_workflow_state(
+                            &channel_id,
+                            "active",
+                            Some((layer_idx + 1) as i64),
+                            review_round,
+                            false,
+                            None,
+                        )
+                        .await;
+                    break;
+                }
+
+                review_round += 1;
+                let review_rx = self
+                    .channel_manager
+                    .begin_review(
+                        &channel_id,
+                        layer_idx,
+                        review_round,
+                        &self.build_review_request_text(layer_idx, review_round, &objections),
+                    )
+                    .await?;
+
+                match review_rx.await {
+                    Ok(ReviewDecision::Continue) => {
+                        review_feedback = objections
+                            .iter()
+                            .map(|request| {
+                                (
+                                    request.requester_pup.clone(),
+                                    vec!["Owner reviewed the objection and asked you to continue with the current context. Keep going unless there is a blocking issue.".to_string()],
+                                )
+                            })
+                            .collect();
+                        let mut rerun_pups = HashSet::new();
+                        rerun_layer = objections
+                            .iter()
+                            .filter_map(|request| {
+                                if !rerun_pups.insert(request.requester_pup.clone()) {
+                                    return None;
                                 }
-                                _ = &mut hb_stop_rx => {
-                                    break;
+                                subtask_by_pup
+                                    .get(&request.requester_pup)
+                                    .map(|(_, subtask)| subtask.clone())
+                            })
+                            .collect();
+                        if rerun_layer.is_empty() {
+                            rerun_layer = layer.clone();
+                        }
+                        let _ = self
+                            .channel_manager
+                            .update_workflow_state(
+                                &channel_id,
+                                "active",
+                                Some(layer_idx as i64),
+                                review_round,
+                                false,
+                                None,
+                            )
+                            .await;
+                    }
+                    Ok(ReviewDecision::RequestChanges {
+                        sender,
+                        comment,
+                        reply_to,
+                    }) => {
+                        let feedback_line = format!("{}: {}", sender, comment.trim());
+                        let target_pup = reply_to
+                            .as_ref()
+                            .and_then(|message_id| {
+                                result_message_ids.iter().find(|(_, id)| *id == message_id)
+                            })
+                            .map(|(pup, _)| pup.clone())
+                            .or_else(|| {
+                                objections
+                                    .iter()
+                                    .find_map(|request| request.target_pup.clone())
+                            });
+
+                        review_feedback = HashMap::new();
+                        if let Some(target_pup) = target_pup.clone() {
+                            if let Some((_target_layer_idx, target_subtask)) =
+                                subtask_by_pup.get(&target_pup)
+                            {
+                                review_feedback
+                                    .insert(target_pup.clone(), vec![feedback_line.clone()]);
+                                let refreshed = self
+                                    .execute_channel_layer(
+                                        &channel_id,
+                                        &[target_subtask.clone()],
+                                        &dep_context,
+                                        &owner_summary,
+                                        app_handle,
+                                        &review_feedback,
+                                        &result_message_ids,
+                                    )
+                                    .await;
+                                for result in refreshed
+                                    .iter()
+                                    .filter(|result| result.review_request.is_none())
+                                {
+                                    dep_context
+                                        .insert(result.pup_key.clone(), result.result.clone());
+                                    all_results
+                                        .insert(result.pup_key.clone(), result.result.clone());
+                                    if !result.message_id.is_empty() {
+                                        result_message_ids.insert(
+                                            result.pup_key.clone(),
+                                            result.message_id.clone(),
+                                        );
+                                    }
                                 }
                             }
                         }
-                    });
+                        review_feedback = objections
+                            .iter()
+                            .map(|request| {
+                                (
+                                    request.requester_pup.clone(),
+                                    vec![format!(
+                                        "Owner requested upstream changes. Re-evaluate with the refreshed context. Note: {}",
+                                        feedback_line
+                                    )],
+                                )
+                            })
+                            .collect();
+                        rerun_layer = layer.clone();
 
-                    // Build full task description with injected dep context
-                    let full_msg = if injected.is_empty() {
-                        pup_description.clone()
-                    } else {
-                        format!(
-                            "{}\n\n## Context from previous steps\n{}",
-                            pup_description, injected
-                        )
-                    };
-
-                    // Emit activity event
-                    let _ = app_clone.emit(
-                        "stream_activity",
-                        ActivityEvent {
-                            kind: "routing".into(),
-                            label: format!("pack:{}", pup_display_name(&pup_key)),
-                        },
-                    );
-
-                    // Run the pup
-                    let result = self_clone
-                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"));
-
-                    // Stop heartbeat loop
-                    let _ = hb_stop_tx.send(());
-                    cm_clone.monitor.unregister(&ch_id, &pup_key).await;
-
-                    // Post result text and done status
-                    let _ = cm_clone.post_text(&ch_id, &pup_key, &result, &[]).await;
-                    let status = if result.starts_with("Error:") {
-                        "failed"
-                    } else {
-                        "done"
-                    };
-                    let _ = cm_clone.post_status(&ch_id, &pup_key, status).await;
-
-                    (pup_key, result)
-                });
-                layer_handles.push(handle);
-            }
-
-            // Wait for all pups in this layer (with per-layer timeout of 300s)
-            let joined = tokio::time::timeout(
-                std::time::Duration::from_secs(300),
-                futures_util::future::join_all(layer_handles),
-            )
-            .await;
-
-            let layer_results: Vec<(String, String)> = match joined {
-                Ok(results) => results.into_iter().filter_map(|r| r.ok()).collect(),
-                Err(_) => {
-                    debug!("[alpha] run_dag: layer {} timed out", layer_idx);
-                    vec![]
+                        let _ = self
+                            .channel_manager
+                            .update_workflow_state(
+                                &channel_id,
+                                "active",
+                                Some(layer_idx as i64),
+                                review_round,
+                                false,
+                                Some("changes_requested"),
+                            )
+                            .await;
+                    }
+                    Err(_) => {
+                        timeout_handle.abort();
+                        let _ = self.channel_manager.clear_review_session(&channel_id).await;
+                        return Err(anyhow!("review session interrupted"));
+                    }
                 }
-            };
-
-            // Update dep_context for next layer
-            for (pup_key, result) in &layer_results {
-                dep_context.insert(pup_key.clone(), result.clone());
-            }
-
-            all_results.extend(layer_results);
-
-            if let Some(hook) = self.layer_hook.read().await.clone() {
-                let done_pups = layer
-                    .iter()
-                    .map(|subtask| pup_display_name(&subtask.pup))
-                    .collect::<Vec<_>>();
-                hook(layer_idx, done_pups);
             }
         }
 
@@ -1233,7 +1726,12 @@ impl AlphaPup {
             },
         );
 
-        let aggregated = self.aggregate_channel_results(msg, &all_results).await;
+        let aggregated = self
+            .aggregate_channel_results(
+                msg,
+                &all_results.into_iter().collect::<Vec<(String, String)>>(),
+            )
+            .await;
 
         // 10. Complete channel
         let _ = self.channel_manager.complete(&channel_id).await;
@@ -1662,9 +2160,34 @@ impl AlphaPup {
         msg: &str,
         owner_summary: &str,
     ) -> Result<String> {
+        match self
+            .run_pup_for_channel_with_activity(
+                pup_key,
+                msg,
+                owner_summary,
+                None,
+                |_kind, _label| {},
+            )
+            .await?
+        {
+            AgentRunResult::FinalText(text) => Ok(text),
+            AgentRunResult::ReviewRequest(_) => {
+                Ok("Error: review requests are not supported for this execution path.".to_string())
+            }
+        }
+    }
+
+    async fn run_pup_for_channel_with_activity(
+        &self,
+        pup_key: &str,
+        msg: &str,
+        owner_summary: &str,
+        review_tool: Option<ReviewToolContext>,
+        on_activity: impl Fn(String, String) + Send + Sync,
+    ) -> Result<AgentRunResult> {
         let pup = match self.resolve_pup(pup_key).await {
             Ok(pup) => pup,
-            Err(err) => return Ok(err.to_string()),
+            Err(err) => return Ok(AgentRunResult::FinalText(err.to_string())),
         };
 
         let override_prompt = self
@@ -1694,8 +2217,9 @@ impl AlphaPup {
             pup_key,
             msgs,
             &tool_perms,
+            review_tool.as_ref(),
             |_tok| {}, // channel pups don't stream to chat
-            |_kind, _label| {},
+            on_activity,
             &self.abort_flag,
         )
         .await
@@ -2311,6 +2835,23 @@ pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, Stri
         }
         other => ("tool_call".into(), other.to_string()),
     }
+}
+
+fn format_activity_entry(kind: &str, label: &str) -> String {
+    let prefix = match kind {
+        "shell" => "Shell",
+        "file_read" => "Read",
+        "file_write" => "Write",
+        "http" => "HTTP",
+        "memory" => "Memory",
+        "task" => "Task",
+        "skill" => "Skill",
+        "mcp" => "MCP",
+        "review" => "Review",
+        "tool_call" => "Tool",
+        _ => "Activity",
+    };
+    format!("{prefix}: {label}")
 }
 
 pub fn pup_display_name(key: &str) -> String {

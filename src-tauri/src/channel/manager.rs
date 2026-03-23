@@ -1,15 +1,30 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Utc;
+use serde_json::Value;
 use tauri::Emitter;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::channel::heartbeat::HeartbeatMonitor;
-use crate::channel::types::{ChannelCompletedPayload, ChannelMessagePayload};
+use crate::channel::types::{ChannelCompletedPayload, ChannelMessagePayload, ChannelWorkflowState};
 use crate::memory::system::MemorySystem;
+
+#[derive(Debug)]
+pub enum ReviewDecision {
+    Continue,
+    RequestChanges {
+        sender: String,
+        comment: String,
+        reply_to: Option<String>,
+    },
+}
+
+struct PendingReview {
+    responder: oneshot::Sender<ReviewDecision>,
+}
 
 /// Manages pack channels: creation, messaging, heartbeat tracking, and completion.
 ///
@@ -25,6 +40,7 @@ pub struct ChannelManager {
     app_handle: Arc<OnceLock<tauri::AppHandle>>,
     /// Broadcast senders keyed by channel_id. Removed when channel is completed.
     senders: Arc<RwLock<HashMap<String, broadcast::Sender<ChannelMessagePayload>>>>,
+    review_sessions: Arc<Mutex<HashMap<String, PendingReview>>>,
     pub monitor: Arc<HeartbeatMonitor>,
 }
 
@@ -34,6 +50,7 @@ impl ChannelManager {
             memory,
             app_handle: Arc::new(OnceLock::new()),
             senders: Arc::new(RwLock::new(HashMap::new())),
+            review_sessions: Arc::new(Mutex::new(HashMap::new())),
             monitor: Arc::new(HeartbeatMonitor::new()),
         }
     }
@@ -74,12 +91,39 @@ impl ChannelManager {
         content: &str,
         mentions: &[&str],
     ) -> Result<String> {
+        self.post_message(
+            channel_id, sender, content, "text", None, None, mentions, None, None,
+        )
+        .await
+    }
+
+    pub async fn post_message(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        content: &str,
+        msg_type: &str,
+        artifact_name: Option<&str>,
+        status_val: Option<&str>,
+        mentions: &[&str],
+        reply_to: Option<&str>,
+        event_payload: Option<Value>,
+    ) -> Result<String> {
         let msg_id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
 
         self.memory
             .post_channel_message(
-                &msg_id, channel_id, sender, content, "text", None, None, mentions,
+                &msg_id,
+                channel_id,
+                sender,
+                content,
+                msg_type,
+                artifact_name,
+                status_val,
+                mentions,
+                reply_to,
+                event_payload.as_ref(),
             )
             .await?;
 
@@ -88,10 +132,12 @@ impl ChannelManager {
             id: msg_id.clone(),
             sender: sender.to_string(),
             content: content.to_string(),
-            msg_type: "text".to_string(),
-            artifact_name: None,
-            status_val: None,
+            msg_type: msg_type.to_string(),
+            artifact_name: artifact_name.map(|value| value.to_string()),
+            status_val: status_val.map(|value| value.to_string()),
             mentions: mentions.iter().map(|s| s.to_string()).collect(),
+            reply_to: reply_to.map(|value| value.to_string()),
+            event_payload,
             timestamp: now,
         };
 
@@ -119,48 +165,192 @@ impl ChannelManager {
         sender: &str,
         status_val: &str,
     ) -> Result<String> {
-        let msg_id = Uuid::new_v4().to_string();
-        let now = Utc::now().timestamp();
+        self.post_message(
+            channel_id,
+            sender,
+            "",
+            "status",
+            None,
+            Some(status_val),
+            &[],
+            None,
+            None,
+        )
+        .await
+    }
 
+    pub async fn post_activity(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        content: &str,
+    ) -> Result<String> {
+        self.post_message(
+            channel_id,
+            sender,
+            content,
+            "activity",
+            None,
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_workflow_state(
+        &self,
+        channel_id: &str,
+        status: &str,
+        current_layer: Option<i64>,
+        review_round: i64,
+        awaiting_user: bool,
+        blocked_reason: Option<&str>,
+    ) -> Result<()> {
         self.memory
-            .post_channel_message(
-                &msg_id,
+            .set_channel_workflow_state(
                 channel_id,
-                sender,
-                "", // no content for status messages
-                "status",
-                None,
-                Some(status_val),
-                &[],
+                status,
+                current_layer,
+                review_round,
+                awaiting_user,
+                blocked_reason,
             )
             .await?;
 
-        let payload = ChannelMessagePayload {
-            channel_id: channel_id.to_string(),
-            id: msg_id.clone(),
-            sender: sender.to_string(),
-            content: String::new(),
-            msg_type: "status".to_string(),
-            artifact_name: None,
-            status_val: Some(status_val.to_string()),
-            mentions: vec![],
-            timestamp: now,
-        };
-
-        // Broadcast internally
-        {
-            let guard = self.senders.read().await;
-            if let Some(tx) = guard.get(channel_id) {
-                let _ = tx.send(payload.clone());
+        if let Some(app) = self.app_handle.get() {
+            if let Some(state) = self.memory.get_channel_workflow_state(channel_id).await? {
+                let _ = app.emit("channel_workflow_updated", state);
             }
         }
 
-        // Emit Tauri event if handle is available
-        if let Some(app) = self.app_handle.get() {
-            let _ = app.emit("channel_message", payload);
-        }
+        Ok(())
+    }
 
-        Ok(msg_id)
+    pub async fn begin_review(
+        &self,
+        channel_id: &str,
+        layer_index: usize,
+        review_round: i64,
+        message: &str,
+    ) -> Result<oneshot::Receiver<ReviewDecision>> {
+        self.update_workflow_state(
+            channel_id,
+            "awaiting_review",
+            Some(layer_index as i64),
+            review_round,
+            true,
+            Some("awaiting_review"),
+        )
+        .await?;
+        self.post_message(
+            channel_id,
+            "alpha",
+            message,
+            "review_request",
+            None,
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await?;
+
+        let (tx, rx) = oneshot::channel();
+        let mut sessions = self.review_sessions.lock().await;
+        sessions.insert(channel_id.to_string(), PendingReview { responder: tx });
+        Ok(rx)
+    }
+
+    pub async fn submit_review_comment(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        content: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String> {
+        self.post_message(
+            channel_id,
+            sender,
+            content,
+            "review_comment",
+            None,
+            None,
+            &[],
+            reply_to,
+            None,
+        )
+        .await
+    }
+
+    pub async fn request_changes(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        comment: &str,
+        reply_to: Option<&str>,
+        event_payload: Option<Value>,
+    ) -> Result<()> {
+        self.post_message(
+            channel_id,
+            sender,
+            comment,
+            "review_decision",
+            None,
+            None,
+            &[],
+            reply_to,
+            event_payload,
+        )
+        .await?;
+
+        let mut sessions = self.review_sessions.lock().await;
+        let pending = sessions
+            .remove(channel_id)
+            .ok_or_else(|| anyhow!("channel is not waiting for review"))?;
+        let _ = pending.responder.send(ReviewDecision::RequestChanges {
+            sender: sender.to_string(),
+            comment: comment.to_string(),
+            reply_to: reply_to.map(|value| value.to_string()),
+        });
+        Ok(())
+    }
+
+    pub async fn continue_channel(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        comment: &str,
+    ) -> Result<()> {
+        self.post_message(
+            channel_id,
+            sender,
+            comment,
+            "review_resume",
+            None,
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await?;
+
+        let mut sessions = self.review_sessions.lock().await;
+        let pending = sessions
+            .remove(channel_id)
+            .ok_or_else(|| anyhow!("channel is not waiting for review"))?;
+        let _ = pending.responder.send(ReviewDecision::Continue);
+        Ok(())
+    }
+
+    pub async fn workflow_state(&self, channel_id: &str) -> Result<Option<ChannelWorkflowState>> {
+        self.memory.get_channel_workflow_state(channel_id).await
+    }
+
+    pub async fn clear_review_session(&self, channel_id: &str) {
+        let mut sessions = self.review_sessions.lock().await;
+        sessions.remove(channel_id);
     }
 
     /// Record a heartbeat for a pup — ONLY updates the monitor, does not persist or emit.
@@ -170,6 +360,7 @@ impl ChannelManager {
 
     /// Complete a channel: persist completion, emit event, clean up state.
     pub async fn complete(&self, channel_id: &str) -> Result<()> {
+        self.clear_review_session(channel_id).await;
         self.memory.complete_channel(channel_id).await?;
 
         if let Some(app) = self.app_handle.get() {

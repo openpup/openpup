@@ -3,9 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useLang, t } from '../i18n';
 import { formatRelativeTime } from '../utils/locale';
+import { pupAccentColor } from '../utils/pupVisuals';
 
 interface TimelineEvent {
   role: string;
+  pup_key: string;
   pup_name: string;
   content: string;
   timestamp: number;
@@ -27,11 +29,6 @@ const STATUS_COLOR: Record<string, React.CSSProperties> = {
   completed: { color: 'var(--color-text-success)' },
   failed:    { color: 'var(--color-text-danger)' },
   running:   { color: 'var(--color-text-info)' },
-};
-
-const PUP_COLORS: Record<string, string> = {
-  Alpha: '#1D9E75',
-  You:   '#BA7517',
 };
 
 export const Timeline: React.FC = () => {
@@ -80,8 +77,8 @@ export const Timeline: React.FC = () => {
   }, []);
 
   const filteredEvents = events.filter((e) => {
-    if (filter === 'alpha') return e.pup_name === 'Alpha';
-    if (filter === 'you') return e.pup_name === 'You';
+    if (filter === 'alpha') return e.pup_key === 'alpha';
+    if (filter === 'you') return e.pup_key === 'you';
     if (filter === 'skills') return false;
     return true;
   });
@@ -97,6 +94,7 @@ export const Timeline: React.FC = () => {
       setSearchResults(
         rows.map((r) => ({
           role: r.role,
+          pup_key: r.role === 'user' ? 'you' : 'alpha',
           pup_name: r.role === 'user' ? 'You' : 'Alpha',
           content: r.content,
           timestamp: r.timestamp,
@@ -234,7 +232,7 @@ export const Timeline: React.FC = () => {
                   borderRadius: '50%',
                   marginTop: '6px',
                   flexShrink: 0,
-                  background: PUP_COLORS[evt.pup_name] ?? 'var(--color-text-tertiary)',
+                  background: pupAccentColor(evt.pup_key),
                 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
@@ -322,7 +320,7 @@ export const Timeline: React.FC = () => {
                   borderRadius: '50%',
                   marginTop: '6px',
                   flexShrink: 0,
-                  background: PUP_COLORS[evt.pup_name] ?? 'var(--color-text-tertiary)',
+                  background: pupAccentColor(evt.pup_key),
                 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>

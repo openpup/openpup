@@ -1,15 +1,16 @@
 import React from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ContextInspector } from './ContextInspector';
-import type { ChannelMessageRecord, ChannelRecord, DelegationPlan } from '../types/channel';
+import type { ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan } from '../types/channel';
 import { useLang, type Lang, t } from '../i18n';
 import { formatDateTime, formatRelativeTime } from '../utils/locale';
+import type { PupMetaByKey } from '../utils/pupVisuals';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ChannelMessage = ChannelMessageRecord;
 type Channel = ChannelRecord;
-type PlanStepState = 'waiting' | 'running' | 'done' | 'failed';
+type PlanStepState = 'waiting' | 'running' | 'done' | 'failed' | 'in_review';
 
 interface PlanStepView {
   id: string;
@@ -44,27 +45,12 @@ interface DagEdgeLayout {
   colorState: PlanStepState;
 }
 
-// ─── Pup accent colors ────────────────────────────────────────────────────────
+function pupAccent(name: string, pupMetaByKey: PupMetaByKey = {}): string {
+  return pupMetaByKey[name]?.accentColor ?? 'var(--color-text-tertiary)';
+}
 
-const PUP_ACCENT: Record<string, string> = {
-  // by display name
-  'Alpha':          '#1D9E75',
-  'Dev Pup':        '#378ADD',
-  'Writer Pup':     '#BA7517',
-  'Research Pup':   '#7F77DD',
-  'Ops Pup':        '#888780',
-  'Life Admin Pup': '#DB3491',
-  // by key
-  alpha:      '#1D9E75',
-  dev:        '#378ADD',
-  writer:     '#BA7517',
-  research:   '#7F77DD',
-  ops:        '#888780',
-  life_admin: '#DB3491',
-};
-
-function pupAccent(name: string, customPupColors: Record<string, string> = {}): string {
-  return customPupColors[name] ?? PUP_ACCENT[name] ?? '#1D9E75';
+function pupDisplayName(name: string, pupMetaByKey: PupMetaByKey = {}): string {
+  return pupMetaByKey[name]?.displayName ?? name;
 }
 
 // ─── Relative time ────────────────────────────────────────────────────────────
@@ -99,6 +85,61 @@ function statusDisplayLabel(value: string | null | undefined, lang: Lang): strin
     default:
       return (value ?? '').trim();
   }
+}
+
+function reviewTypeLabel(msgType: string, lang: Lang): string {
+  switch (msgType) {
+    case 'review_request':
+      return t('pack_review_request', lang);
+    case 'review_comment':
+      return t('pack_review_comment', lang);
+    case 'review_decision':
+      return t('pack_review_changes', lang);
+    case 'review_resume':
+      return t('pack_review_resume', lang);
+    default:
+      return msgType;
+  }
+}
+
+function reviewActionLabel(action: string | null | undefined, lang: Lang): string {
+  switch ((action ?? '').toLowerCase()) {
+    case 'rerun_upstream':
+      return t('pack_review_action_rerun_upstream', lang);
+    case 'clarify_requirements':
+      return t('pack_review_action_clarify_requirements', lang);
+    case 'continue_with_risk':
+      return t('pack_review_action_continue_with_risk', lang);
+    default:
+      return action ?? '';
+  }
+}
+
+function compactReviewText(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
+}
+
+function reviewMetaSummary(
+  msg: ChannelMessage,
+  payload: { target_pup?: string | null; suggested_action?: string | null },
+  lang: Lang,
+  pupMetaByKey: PupMetaByKey,
+): string {
+  const parts: string[] = [];
+  if (payload.target_pup) {
+    parts.push(`${t('pack_review_target', lang)} ${pupDisplayName(payload.target_pup, pupMetaByKey)}`);
+  }
+  if (payload.suggested_action) {
+    parts.push(`${t('pack_review_suggestion', lang)} ${reviewActionLabel(payload.suggested_action, lang)}`);
+  }
+  if (msg.reply_to) {
+    parts.push(`${t('pack_review_reply_to', lang)} ${msg.reply_to.slice(0, 8)}`);
+  }
+  return parts.join(' · ');
+}
+
+function isReviewMessage(msg: ChannelMessage): boolean {
+  return msg.msg_type.startsWith('review_');
 }
 
 function latestStatusForSender(sender: string, statusMessages: ChannelMessage[]): ChannelMessage | undefined {
@@ -187,7 +228,7 @@ function layoutPlanDag(steps: PlanStepView[], lang: Lang) {
   sortedDepths.forEach((depth) => {
     const bucket = columns.get(depth) ?? [];
     bucket.sort((a, b) => {
-      const stateOrder: Record<PlanStepState, number> = { running: 0, waiting: 1, failed: 2, done: 3 };
+      const stateOrder: Record<PlanStepState, number> = { running: 0, in_review: 1, waiting: 2, failed: 3, done: 4 };
       return stateOrder[a.state] - stateOrder[b.state] || a.pup.localeCompare(b.pup);
     });
   });
@@ -292,9 +333,9 @@ interface TextMessageProps {
   msg: ChannelMessage;
 }
 
-const TextMessage: React.FC<TextMessageProps & { customPupColors?: Record<string, string> }> = ({ msg, customPupColors = {} }) => {
+const TextMessage: React.FC<TextMessageProps & { pupMetaByKey?: PupMetaByKey }> = ({ msg, pupMetaByKey = {} }) => {
   const { lang } = useLang();
-  const accent = pupAccent(msg.sender, customPupColors);
+  const accent = pupAccent(msg.sender, pupMetaByKey);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -304,7 +345,7 @@ const TextMessage: React.FC<TextMessageProps & { customPupColors?: Record<string
           background: `${accent}1a`,
           color: accent,
         }}>
-          {msg.sender}
+          {pupDisplayName(msg.sender, pupMetaByKey)}
         </span>
         <span style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>
           {relativeTime(msg.timestamp, lang)}
@@ -347,13 +388,168 @@ const StatusMessage: React.FC<StatusMessageProps> = ({ msg }) => {
   );
 };
 
+const ActivityMessage: React.FC<{ msg: ChannelMessage }> = ({ msg }) => {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{
+        fontSize: '11px',
+        fontWeight: 700,
+        color: 'var(--color-text-tertiary)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.08em',
+      }}>
+        Activity
+      </div>
+      <div style={{
+        fontSize: '12px',
+        lineHeight: 1.6,
+        color: 'var(--color-text-secondary)',
+        whiteSpace: 'pre-wrap',
+        fontFamily: 'var(--font-mono, monospace)',
+      }}>
+        {msg.content}
+      </div>
+    </div>
+  );
+};
+
+const ReviewMessage: React.FC<{ msg: ChannelMessage; pupMetaByKey?: PupMetaByKey }> = ({ msg, pupMetaByKey = {} }) => {
+  const { lang } = useLang();
+  const [expanded, setExpanded] = React.useState(false);
+  const payload = (msg.event_payload ?? {}) as {
+    target_pup?: string | null;
+    blocking?: boolean;
+    suggested_action?: string | null;
+  };
+  const compactText = compactReviewText(msg.content);
+  const metaSummary = reviewMetaSummary(msg, payload, lang, pupMetaByKey);
+  const isPrimaryRequest = msg.msg_type === 'review_request';
+  const canExpand = compactText.length > 140 || msg.content.includes('\n');
+  if (!isPrimaryRequest) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+        <span style={{
+          fontSize: '11px',
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: '999px',
+          background: 'rgba(186,117,23,0.12)',
+          color: '#BA7517',
+          flexShrink: 0,
+        }}>
+          {reviewTypeLabel(msg.msg_type, lang)}
+        </span>
+        {typeof payload.blocking === 'boolean' && (
+          <span style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            color: payload.blocking ? '#BA7517' : 'var(--color-text-tertiary)',
+            flexShrink: 0,
+          }}>
+            {payload.blocking ? t('pack_review_blocking', lang) : t('pack_review_soft', lang)}
+          </span>
+        )}
+        <span style={{
+          fontSize: '12px',
+          lineHeight: 1.5,
+          color: 'var(--color-text-secondary)',
+          minWidth: 0,
+          display: '-webkit-box',
+          WebkitLineClamp: 1,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}>
+          {[metaSummary, compactText].filter(Boolean).join(' · ') || '—'}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            padding: '2px 8px',
+            borderRadius: '999px',
+            background: 'rgba(186,117,23,0.12)',
+            color: '#BA7517',
+          }}>
+            {reviewTypeLabel(msg.msg_type, lang)}
+          </span>
+          {typeof payload.blocking === 'boolean' && (
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '2px 7px',
+              borderRadius: '999px',
+              background: payload.blocking ? 'rgba(186,117,23,0.10)' : 'var(--color-background-secondary)',
+              color: payload.blocking ? '#BA7517' : 'var(--color-text-tertiary)',
+            }}>
+              {payload.blocking ? t('pack_review_blocking', lang) : t('pack_review_soft', lang)}
+            </span>
+          )}
+        </div>
+        {canExpand && (
+          <button
+            onClick={() => setExpanded((value) => !value)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              padding: 0,
+              fontSize: '11px',
+              fontWeight: 600,
+              color: 'var(--color-text-tertiary)',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            {expanded ? t('pack_review_collapse', lang) : t('pack_review_expand', lang)}
+          </button>
+        )}
+      </div>
+      {metaSummary && (
+        <div style={{
+          fontSize: '11px',
+          color: 'var(--color-text-tertiary)',
+          lineHeight: 1.45,
+          display: '-webkit-box',
+          WebkitLineClamp: 1,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}>
+          {metaSummary}
+        </div>
+      )}
+      {expanded ? (
+        <div style={{ fontSize: '13px', lineHeight: 1.55, color: 'var(--color-text-primary)' }}>
+          <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+        </div>
+      ) : (
+        <span style={{
+          fontSize: '12px',
+          lineHeight: 1.55,
+          color: 'var(--color-text-secondary)',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}>
+          {compactText || '—'}
+        </span>
+      )}
+    </div>
+  );
+};
+
 interface ArtifactMessageProps {
   msg: ChannelMessage;
 }
 
-const ArtifactMessage: React.FC<ArtifactMessageProps & { customPupColors?: Record<string, string> }> = ({ msg, customPupColors = {} }) => {
+const ArtifactMessage: React.FC<ArtifactMessageProps & { pupMetaByKey?: PupMetaByKey }> = ({ msg, pupMetaByKey = {} }) => {
   const { lang } = useLang();
-  const accent = pupAccent(msg.sender, customPupColors);
+  const accent = pupAccent(msg.sender, pupMetaByKey);
   const lines = msg.content.split('\n').slice(0, 2);
 
   return (
@@ -365,7 +561,7 @@ const ArtifactMessage: React.FC<ArtifactMessageProps & { customPupColors?: Recor
           background: `${accent}1a`,
           color: accent,
         }}>
-          {msg.sender}
+          {pupDisplayName(msg.sender, pupMetaByKey)}
         </span>
         <span style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>
           {relativeTime(msg.timestamp, lang)}
@@ -407,6 +603,7 @@ interface PackChannelProps {
   error?: string | null;
   loading?: boolean;
   plan?: DelegationPlan | null;
+  workflow?: ChannelWorkflowState | null;
   isCompleted?: boolean;
   detailMode?: boolean;
   onSelectChannel?: (id: string) => void;
@@ -414,7 +611,10 @@ interface PackChannelProps {
   onOpenFinalReply?: () => void;
   onClearCompleted?: () => void;
   onClearStale?: () => void;
-  customPupColors?: Record<string, string>;
+  onContinueChannel?: (channelId: string, comment?: string) => void;
+  onRequestChannelChanges?: (channelId: string, comment: string, replyTo?: string | null) => void;
+  onSubmitReviewComment?: (channelId: string, comment: string, replyTo?: string | null) => void;
+  pupMetaByKey?: PupMetaByKey;
 }
 
 export const PackChannel: React.FC<PackChannelProps> = ({
@@ -424,6 +624,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   error = null,
   loading = false,
   plan = null,
+  workflow = null,
   isCompleted = false,
   detailMode = false,
   onSelectChannel,
@@ -431,15 +632,22 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   onOpenFinalReply,
   onClearCompleted,
   onClearStale,
-  customPupColors = {},
+  onContinueChannel,
+  onRequestChannelChanges,
+  onSubmitReviewComment,
+  pupMetaByKey = {},
 }) => {
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const timelineRef = React.useRef<HTMLDivElement>(null);
   const [autoFollow, setAutoFollow] = React.useState(true);
+  const [reviewNote, setReviewNote] = React.useState('');
+  const [reviewTargetId, setReviewTargetId] = React.useState<string>('');
+  const [reviewBusy, setReviewBusy] = React.useState(false);
   const { lang } = useLang();
 
   const activeChannel = channels.find((c) => c.id === activeChannelId) ?? null;
   const activePlan = plan && plan.channel_id === activeChannelId ? plan : null;
+  const activeWorkflow = workflow && workflow.channel_id === activeChannelId ? workflow : null;
   const activeMessages = messages
     .filter((msg) => msg.channel_id === activeChannelId)
     .filter((msg) => {
@@ -448,19 +656,26 @@ export const PackChannel: React.FC<PackChannelProps> = ({
     });
   const artifactMessages = activeMessages.filter((msg) => msg.msg_type === 'artifact');
   const statusMessages = activeMessages.filter((msg) => msg.msg_type === 'status');
+  const reviewMessages = activeMessages.filter((msg) => isReviewMessage(msg));
   const sortedChannels = [...channels].sort((a, b) => {
-    if (a.status === 'active' && b.status !== 'active') return -1;
-    if (a.status !== 'active' && b.status === 'active') return 1;
+    const isLive = (status: string) => status === 'active' || status === 'awaiting_review';
+    if (isLive(a.status) && !isLive(b.status)) return -1;
+    if (!isLive(a.status) && isLive(b.status)) return 1;
     return b.updated_at - a.updated_at;
   });
-  const activeChannels = sortedChannels.filter((channel) => channel.status === 'active');
+  const activeChannels = sortedChannels.filter((channel) => channel.status === 'active' || channel.status === 'awaiting_review');
   const completedToday = sortedChannels.filter((channel) => {
     if (!channel.completed_at) return false;
     const today = new Date();
     const d = new Date((channel.completed_at ?? 0) < 1_000_000_000_000 ? (channel.completed_at ?? 0) * 1000 : (channel.completed_at ?? 0));
     return d.toDateString() === today.toDateString();
   }).length;
-  const historyChannels = sortedChannels.filter((channel) => channel.status !== 'active');
+  const historyChannels = sortedChannels.filter((channel) => channel.status !== 'active' && channel.status !== 'awaiting_review');
+  const reviewableMessages = activeMessages
+    .filter((msg) => msg.msg_type === 'text' && (activeChannel?.members ?? []).includes(msg.sender))
+    .slice()
+    .reverse()
+    .slice(0, 12);
   const memberStates = (activeChannel?.members ?? []).map((member) => ({
     member,
     ...inferMemberState(member, statusMessages, isCompleted, lang),
@@ -469,7 +684,10 @@ export const PackChannel: React.FC<PackChannelProps> = ({
     const related = latestStatusForSender(subtask.pup, statusMessages);
     const rawStatus = (related?.status_val ?? '').toLowerCase();
     const latestText = related ? statusDisplayLabel(related.status_val ?? related.content, lang) : '';
-    const state: PlanStepState = rawStatus === 'done' || rawStatus === 'completed'
+    const inReview = activeWorkflow?.status === 'awaiting_review' && rawStatus === 'done';
+    const state: PlanStepState = inReview
+      ? 'in_review'
+      : rawStatus === 'done' || rawStatus === 'completed'
       ? 'done'
       : rawStatus === 'failed' || rawStatus === 'blocked'
         ? 'failed'
@@ -481,12 +699,23 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   const totalSubtasks = planStates.length;
   const completedSubtasks = planStates.filter((subtask) => subtask.state === 'done').length;
   const runningSubtasks = planStates.filter((subtask) => subtask.state === 'running').length;
+  const reviewSubtasks = planStates.filter((subtask) => subtask.state === 'in_review').length;
   const failedSubtasks = planStates.filter((subtask) => subtask.state === 'failed').length;
   const progressRatio = totalSubtasks > 0 ? Math.min(1, completedSubtasks / totalSubtasks) : 0;
-  const currentStage = extractCurrentStage(statusMessages, isCompleted, lang);
+  const currentStage = activeWorkflow?.status === 'awaiting_review'
+    ? t('pack_review_waiting', lang)
+    : extractCurrentStage(statusMessages, isCompleted, lang);
   const completedHeaderMode = isCompleted || activeChannel?.status === 'completed';
   const detailStats = [
-    { label: t('pack_detail_status', lang), value: activeChannel?.status === 'active' ? t('pack_badge_running', lang) : t('pack_selected_completed', lang) },
+    {
+      label: t('pack_detail_status', lang),
+      value:
+        activeChannel?.status === 'awaiting_review'
+          ? t('pack_review_waiting', lang)
+          : activeChannel?.status === 'active'
+            ? t('pack_badge_running', lang)
+            : t('pack_selected_completed', lang),
+    },
     { label: t('pack_detail_progress', lang), value: totalSubtasks > 0 ? `${completedSubtasks}/${totalSubtasks}` : '—', meter: progressRatio },
     { label: t('pack_detail_members', lang), value: `${activeChannel?.members?.length ?? 0}` },
     { label: t('pack_detail_stage', lang), value: currentStage },
@@ -496,7 +725,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
     { label: t('pack_detail_members', lang), value: `${activeChannel?.members?.length ?? 0}` },
   ];
   const selectedSummary = activeChannel
-    ? activeChannel.status === 'active'
+    ? (activeChannel.status === 'active' || activeChannel.status === 'awaiting_review')
       ? currentStage
       : t('pack_selected_completed', lang)
     : t('pack_selected_none', lang);
@@ -513,17 +742,68 @@ export const PackChannel: React.FC<PackChannelProps> = ({
     setAutoFollow(isNearBottom(timelineRef.current));
   }, []);
 
+  const submitReviewAction = React.useCallback(async (
+    action: 'comment' | 'changes' | 'continue',
+  ) => {
+    if (!activeChannelId || !activeWorkflow || activeWorkflow.status !== 'awaiting_review') return;
+    const trimmed = reviewNote.trim();
+    if ((action === 'comment' || action === 'changes') && !trimmed) return;
+    try {
+      setReviewBusy(true);
+      if (action === 'comment') {
+        await onSubmitReviewComment?.(activeChannelId, trimmed, reviewTargetId || null);
+      } else if (action === 'changes') {
+        await onRequestChannelChanges?.(activeChannelId, trimmed, reviewTargetId || null);
+      } else {
+        await onContinueChannel?.(activeChannelId, trimmed || undefined);
+      }
+      setReviewNote('');
+      if (action !== 'comment') {
+        setReviewTargetId('');
+      }
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [
+    activeChannelId,
+    activeWorkflow,
+    onContinueChannel,
+    onRequestChannelChanges,
+    onSubmitReviewComment,
+    reviewNote,
+    reviewTargetId,
+  ]);
+
   const StatusBadge: React.FC<{ status: Channel['status'] }> = ({ status }) => (
     <span style={{
       fontSize: '11px', fontWeight: 600,
       padding: '3px 9px', borderRadius: '999px',
-      background: status === 'active' ? 'rgba(29,158,117,0.12)' : 'var(--color-background-secondary)',
-      color: status === 'active' ? '#1D9E75' : 'var(--color-text-tertiary)',
-      border: status === 'active' ? '0.5px solid rgba(29,158,117,0.3)' : '0.5px solid var(--color-border-tertiary)',
+      background:
+        status === 'awaiting_review'
+          ? 'rgba(186,117,23,0.12)'
+          : status === 'active'
+            ? 'rgba(29,158,117,0.12)'
+            : 'var(--color-background-secondary)',
+      color:
+        status === 'awaiting_review'
+          ? '#BA7517'
+          : status === 'active'
+            ? '#1D9E75'
+            : 'var(--color-text-tertiary)',
+      border:
+        status === 'awaiting_review'
+          ? '0.5px solid rgba(186,117,23,0.3)'
+          : status === 'active'
+            ? '0.5px solid rgba(29,158,117,0.3)'
+            : '0.5px solid var(--color-border-tertiary)',
       letterSpacing: '0.04em',
       textTransform: 'uppercase',
     }}>
-      {status === 'active' ? t('pack_badge_running', lang) : t('pack_badge_complete', lang)}
+      {status === 'awaiting_review'
+        ? t('pack_review_waiting', lang)
+        : status === 'active'
+          ? t('pack_badge_running', lang)
+          : t('pack_badge_complete', lang)}
     </span>
   );
 
@@ -537,8 +817,8 @@ export const PackChannel: React.FC<PackChannelProps> = ({
               width: '9px',
               height: '9px',
               borderRadius: '50%',
-              background: pupAccent(key, customPupColors),
-              boxShadow: `0 0 0 2px color-mix(in srgb, ${pupAccent(key, customPupColors)} 12%, transparent)`,
+              background: pupAccent(key, pupMetaByKey),
+              boxShadow: `0 0 0 2px color-mix(in srgb, ${pupAccent(key, pupMetaByKey)} 12%, transparent)`,
             }}
           />
         ))}
@@ -550,9 +830,12 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   );
 
   const EventCard: React.FC<{ msg: ChannelMessage }> = ({ msg }) => {
-    const accent = pupAccent(msg.sender, customPupColors);
+    const accent = pupAccent(msg.sender, pupMetaByKey);
     const isStatus = msg.msg_type === 'status';
     const isArtifact = msg.msg_type === 'artifact';
+    const isReview = isReviewMessage(msg);
+    const isReviewRequest = msg.msg_type === 'review_request';
+    const isActivity = msg.msg_type === 'activity';
     return (
       <div style={{
         display: 'grid',
@@ -573,17 +856,23 @@ export const PackChannel: React.FC<PackChannelProps> = ({
               boxShadow: `0 0 0 4px color-mix(in srgb, ${accent} 16%, transparent)`,
             }} />
             <span style={{ fontSize: '11px', color: 'var(--color-text-secondary)', fontWeight: 600 }}>
-              {msg.sender}
+              {pupDisplayName(msg.sender, pupMetaByKey)}
             </span>
           </div>
         </div>
         <div style={{
           position: 'relative',
-          borderRadius: isStatus ? '18px' : '22px',
-          padding: isArtifact ? '16px' : isStatus ? '14px 16px' : '16px 18px',
+          borderRadius: isStatus ? '18px' : isReview && !isReviewRequest ? '16px' : '22px',
+          padding: isArtifact ? '16px' : isStatus ? '14px 16px' : isReview && !isReviewRequest ? '10px 14px' : '16px 18px',
           border: '0.5px solid var(--color-border-tertiary)',
           background: isStatus
             ? 'color-mix(in srgb, var(--color-background-primary) 68%, var(--color-background-secondary) 32%)'
+            : isReview
+              ? isReviewRequest
+                ? 'linear-gradient(180deg, color-mix(in srgb, var(--color-background-primary) 92%, rgba(186,117,23,0.08) 8%), var(--color-background-primary))'
+                : 'color-mix(in srgb, var(--color-background-primary) 82%, rgba(186,117,23,0.05) 18%)'
+              : isActivity
+                ? 'linear-gradient(180deg, color-mix(in srgb, var(--color-background-primary) 95%, rgba(127,119,221,0.06) 5%), var(--color-background-primary))'
             : isArtifact
               ? 'linear-gradient(180deg, color-mix(in srgb, var(--color-background-primary) 92%, rgba(186,117,23,0.05) 8%), var(--color-background-primary))'
               : 'linear-gradient(180deg, color-mix(in srgb, var(--color-background-primary) 94%, rgba(29,158,117,0.04) 6%), var(--color-background-primary))',
@@ -593,12 +882,14 @@ export const PackChannel: React.FC<PackChannelProps> = ({
             position: 'absolute',
             inset: '0 auto 0 0',
             width: '3px',
-            background: isStatus ? 'var(--color-border-secondary)' : accent,
+            background: isStatus ? 'var(--color-border-secondary)' : isReview ? '#BA7517' : isActivity ? '#7F77DD' : accent,
             opacity: isStatus ? 0.55 : 0.95,
           }} />
           {isStatus ? <StatusMessage msg={msg} /> : null}
-          {isArtifact ? <ArtifactMessage msg={msg} customPupColors={customPupColors} /> : null}
-          {!isStatus && !isArtifact ? <TextMessage msg={msg} customPupColors={customPupColors} /> : null}
+          {isReview ? <ReviewMessage msg={msg} pupMetaByKey={pupMetaByKey} /> : null}
+          {isActivity ? <ActivityMessage msg={msg} /> : null}
+          {isArtifact ? <ArtifactMessage msg={msg} pupMetaByKey={pupMetaByKey} /> : null}
+          {!isStatus && !isArtifact && !isReview && !isActivity ? <TextMessage msg={msg} pupMetaByKey={pupMetaByKey} /> : null}
         </div>
       </div>
     );
@@ -781,6 +1072,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
               </div>
               {activeChannels.map((channel) => {
                 const isRunning = channel.status === 'active';
+                const isAwaitingReview = channel.status === 'awaiting_review';
                 return (
                   <button
                     key={channel.id}
@@ -820,13 +1112,13 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                           fontWeight: 700,
                           letterSpacing: '0.08em',
                           textTransform: 'uppercase',
-                          color: isRunning ? '#1D9E75' : 'var(--color-text-tertiary)',
+                          color: isAwaitingReview ? '#BA7517' : isRunning ? '#1D9E75' : 'var(--color-text-tertiary)',
                           flexShrink: 0,
                           padding: '4px 8px',
                           borderRadius: '999px',
-                          background: isRunning ? 'rgba(29,158,117,0.10)' : 'var(--color-background-secondary)',
+                          background: isAwaitingReview ? 'rgba(186,117,23,0.10)' : isRunning ? 'rgba(29,158,117,0.10)' : 'var(--color-background-secondary)',
                         }}>
-                        {t('pack_badge_running', lang)}
+                        {isAwaitingReview ? t('pack_review_waiting', lang) : t('pack_badge_running', lang)}
                         </span>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
@@ -876,7 +1168,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
               </div>
             </div>
             {historyChannels.map((channel) => {
-              const isRunning = channel.status === 'active';
+              const isRunning = channel.status === 'active' || channel.status === 'awaiting_review';
               return (
                 <button
                   key={channel.id}
@@ -1100,6 +1392,134 @@ export const PackChannel: React.FC<PackChannelProps> = ({
               </div>
             </div>
 
+            {activeWorkflow?.status === 'awaiting_review' && (
+              <div style={{ padding: '0 20px 16px' }}>
+                <div style={{
+                  maxWidth: '960px',
+                  borderRadius: '20px',
+                  border: '0.5px solid rgba(186,117,23,0.28)',
+                  background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-background-primary) 88%, rgba(186,117,23,0.10) 12%), var(--color-background-primary))',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#BA7517', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '6px' }}>
+                        {t('pack_review_waiting', lang)}
+                      </div>
+                      <div style={{ fontSize: '14px', color: 'var(--color-text-primary)', lineHeight: 1.6 }}>
+                        {t('pack_review_waiting_desc', lang)}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                      {t('ctx_review_round', lang)} {activeWorkflow.review_round || 0}
+                      {typeof activeWorkflow.current_layer === 'number' ? ` · ${t('ctx_review_layer', lang)} ${activeWorkflow.current_layer + 1}` : ''}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <select
+                      value={reviewTargetId}
+                      onChange={(event) => setReviewTargetId(event.target.value)}
+                      style={{
+                        minWidth: '196px',
+                        padding: '6px 10px',
+                        borderRadius: '10px',
+                        border: '0.5px solid var(--color-border-tertiary)',
+                        background: 'var(--color-background-primary)',
+                        color: 'var(--color-text-primary)',
+                        fontSize: '13px',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      <option value="">{t('pack_review_target_all', lang)}</option>
+                      {reviewableMessages.map((msg) => (
+                        <option key={msg.id} value={msg.id}>
+                          {pupDisplayName(msg.sender, pupMetaByKey)}: {msg.content.slice(0, 48)}
+                        </option>
+                      ))}
+                    </select>
+                    <textarea
+                      value={reviewNote}
+                      onChange={(event) => setReviewNote(event.target.value)}
+                      placeholder={t('pack_review_note_placeholder', lang)}
+                      rows={2}
+                      style={{
+                        flex: '1 1 360px',
+                        minHeight: '50px',
+                        padding: '7px 10px',
+                        borderRadius: '12px',
+                        border: '0.5px solid var(--color-border-tertiary)',
+                        background: 'var(--color-background-primary)',
+                        color: 'var(--color-text-primary)',
+                        fontSize: '13px',
+                        lineHeight: 1.45,
+                        resize: 'vertical',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
+                      {t('pack_review_controls_hint', lang)}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => void submitReviewAction('comment')}
+                        disabled={reviewBusy || !reviewNote.trim()}
+                        style={{
+                          padding: '9px 14px',
+                          borderRadius: '999px',
+                          border: '0.5px solid var(--color-border-tertiary)',
+                          background: 'var(--color-background-primary)',
+                          color: 'var(--color-text-secondary)',
+                          cursor: reviewBusy ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t('pack_review_comment_btn', lang)}
+                      </button>
+                      <button
+                        onClick={() => void submitReviewAction('changes')}
+                        disabled={reviewBusy || !reviewNote.trim()}
+                        style={{
+                          padding: '9px 14px',
+                          borderRadius: '999px',
+                          border: 'none',
+                          background: '#BA7517',
+                          color: '#fff',
+                          cursor: reviewBusy ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {t('pack_review_request_changes_btn', lang)}
+                      </button>
+                      <button
+                        onClick={() => void submitReviewAction('continue')}
+                        disabled={reviewBusy}
+                        style={{
+                          padding: '9px 14px',
+                          borderRadius: '999px',
+                          border: 'none',
+                          background: '#1D9E75',
+                          color: '#fff',
+                          cursor: reviewBusy ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {t('pack_review_continue_btn', lang)}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div
               ref={timelineRef}
               onScroll={handleTimelineScroll}
@@ -1120,7 +1540,8 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         {[
                           { label: t('pack_dag_running', lang), value: runningSubtasks, color: '#1D9E75' },
-                          { label: t('pack_dag_pending', lang), value: Math.max(0, totalSubtasks - completedSubtasks - runningSubtasks - failedSubtasks), color: 'var(--color-text-tertiary)' },
+                          { label: t('pack_dag_review', lang), value: reviewSubtasks, color: '#BA7517' },
+                          { label: t('pack_dag_pending', lang), value: Math.max(0, totalSubtasks - completedSubtasks - runningSubtasks - reviewSubtasks - failedSubtasks), color: 'var(--color-text-tertiary)' },
                           { label: t('pack_dag_done', lang), value: completedSubtasks, color: '#BA7517' },
                           { label: t('pack_dag_issues', lang), value: failedSubtasks, color: '#C65A5A' },
                         ].map((item) => (
@@ -1202,6 +1623,8 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                             const path = `M ${edge.fromX} ${edge.fromY} C ${edge.fromX + controlOffset} ${edge.fromY}, ${edge.toX - controlOffset} ${edge.toY}, ${edge.toX} ${edge.toY}`;
                             const edgeColor = edge.colorState === 'failed'
                               ? '#C65A5A'
+                              : edge.colorState === 'in_review'
+                                ? '#BA7517'
                               : edge.colorState === 'done'
                                 ? '#BA7517'
                                 : edge.colorState === 'running'
@@ -1249,11 +1672,13 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                         {dagLayout.nodes.map((node) => {
                           const tone = node.state === 'done'
                             ? { color: '#BA7517', background: 'rgba(186,117,23,0.12)' }
-                            : node.state === 'failed'
-                              ? { color: '#C65A5A', background: 'rgba(198,90,90,0.12)' }
-                              : node.state === 'running'
-                                ? { color: '#1D9E75', background: 'rgba(29,158,117,0.12)' }
-                                : { color: 'var(--color-text-tertiary)', background: 'var(--color-background-secondary)' };
+                            : node.state === 'in_review'
+                              ? { color: '#BA7517', background: 'rgba(186,117,23,0.16)' }
+                              : node.state === 'failed'
+                                ? { color: '#C65A5A', background: 'rgba(198,90,90,0.12)' }
+                                : node.state === 'running'
+                                  ? { color: '#1D9E75', background: 'rgba(29,158,117,0.12)' }
+                                  : { color: 'var(--color-text-tertiary)', background: 'var(--color-background-secondary)' };
                           return (
                             <div
                               key={node.id}
@@ -1264,9 +1689,17 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                                 width: `${dagLayout.nodeWidth}px`,
                                 minHeight: `${dagLayout.nodeHeight}px`,
                                 borderRadius: '14px',
-                                border: `0.5px solid ${node.state === 'running' ? 'rgba(29,158,117,0.28)' : 'var(--color-border-tertiary)'}`,
+                                border: `0.5px solid ${node.state === 'running'
+                                  ? 'rgba(29,158,117,0.28)'
+                                  : node.state === 'in_review'
+                                    ? 'rgba(186,117,23,0.32)'
+                                    : 'var(--color-border-tertiary)'}`,
                                 background: 'color-mix(in srgb, var(--color-background-primary) 96%, rgba(255,255,255,0.03) 4%)',
-                                boxShadow: node.state === 'running' ? '0 10px 18px rgba(29,158,117,0.08)' : 'none',
+                                boxShadow: node.state === 'running'
+                                  ? '0 10px 18px rgba(29,158,117,0.08)'
+                                  : node.state === 'in_review'
+                                    ? '0 10px 18px rgba(186,117,23,0.10)'
+                                    : 'none',
                                 padding: '10px 10px 9px',
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -1275,8 +1708,8 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                                <span style={{ fontSize: '12px', fontWeight: 700, color: pupAccent(node.pup, customPupColors) }}>
-                                  {node.pup}
+                                <span style={{ fontSize: '12px', fontWeight: 700, color: pupAccent(node.pup, pupMetaByKey) }}>
+                                  {pupDisplayName(node.pup, pupMetaByKey)}
                                 </span>
                                 <span style={{
                                   fontSize: '10px',
@@ -1288,7 +1721,15 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                                   textTransform: 'uppercase',
                                   letterSpacing: '0.06em',
                                 }}>
-                                  {node.state}
+                                  {node.state === 'in_review'
+                                    ? t('pack_dag_review', lang)
+                                    : node.state === 'done'
+                                      ? t('pack_dag_done', lang)
+                                      : node.state === 'failed'
+                                        ? t('pack_dag_issues', lang)
+                                        : node.state === 'running'
+                                          ? t('pack_dag_running', lang)
+                                          : t('pack_dag_pending', lang)}
                                 </span>
                               </div>
                               <div style={{
@@ -1398,9 +1839,12 @@ export const PackChannel: React.FC<PackChannelProps> = ({
 
       <ContextInspector
         plan={activePlan}
+        workflow={activeWorkflow}
         members={memberStates}
         artifacts={artifactMessages}
-        getPupAccent={(name) => pupAccent(name, customPupColors)}
+        reviews={reviewMessages}
+        getPupAccent={(name) => pupAccent(name, pupMetaByKey)}
+        getPupLabel={(name) => pupDisplayName(name, pupMetaByKey)}
         formatRelativeTime={(timestamp) => relativeTime(timestamp, lang)}
       />
     </div>
