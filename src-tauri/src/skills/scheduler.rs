@@ -95,7 +95,9 @@ async fn run_job(
     );
 
     let run_id = Uuid::new_v4().to_string();
-    let _ = memory.record_skill_run(&run_id, &job.name, "scheduled").await;
+    let _ = memory
+        .record_skill_run(&run_id, &job.name, "scheduled")
+        .await;
 
     let result = match job.mode {
         JobMode::Single | JobMode::Sequential => run_sequential(&job, executor).await,
@@ -125,7 +127,10 @@ async fn run_job(
 
 /// Run steps serially; a step with an empty `input` inherits the previous
 /// step's output (pipeline behaviour).
-async fn run_sequential(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyhow::Result<String> {
+async fn run_sequential(
+    job: &ScheduledJob,
+    executor: &Arc<SkillExecutor>,
+) -> anyhow::Result<String> {
     let mut prev_output = String::new();
     for step in &job.steps {
         if executor.registry.get(&step.skill).await.is_none() {
@@ -160,7 +165,9 @@ async fn run_parallel(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyh
             let job_name = job.name.clone();
             async move {
                 if executor.registry.get(&skill).await.is_none() {
-                    warn!("[scheduler] skill '{skill}' not found, skipping step in job '{job_name}'");
+                    warn!(
+                        "[scheduler] skill '{skill}' not found, skipping step in job '{job_name}'"
+                    );
                     return format!("[{skill}] skipped: skill not found");
                 }
                 executor
@@ -216,7 +223,10 @@ async fn tick_alpha_heartbeat(
                           patterns and extract behavioral rules for your owner."
                     .to_string(),
             },
-            LlmMessage { role: "user".to_string(), content: prompt },
+            LlmMessage {
+                role: "user".to_string(),
+                content: prompt,
+            },
         ])
         .await
     {
@@ -240,7 +250,9 @@ async fn tick_alpha_heartbeat(
     }
 
     let run_id = Uuid::new_v4().to_string();
-    let _ = memory.record_skill_run(&run_id, "alpha_heartbeat", "heartbeat").await;
+    let _ = memory
+        .record_skill_run(&run_id, "alpha_heartbeat", "heartbeat")
+        .await;
     let response_preview: String = response.chars().take(1000).collect();
     let _ = memory
         .complete_skill_run(&run_id, "completed", &response_preview)

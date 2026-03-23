@@ -7,8 +7,10 @@ use sqlx::{
     Pool, Row, Sqlite,
 };
 
+use crate::bridge::types::{
+    BridgeConnectionState, BridgeConnectionStatus, InboundMessage, OutboundMessage,
+};
 use crate::channel::types::{ChannelMessageRecord, ChannelRecord, DelegationPlan};
-use crate::bridge::types::{BridgeConnectionState, BridgeConnectionStatus, InboundMessage, OutboundMessage};
 use crate::llm::client::LlmClient;
 
 #[derive(Clone)]
@@ -432,10 +434,9 @@ impl MemorySystem {
     }
 
     pub async fn active_channel_count(&self) -> Result<i64> {
-        let row =
-            sqlx::query("SELECT COUNT(*) as cnt FROM pack_channels WHERE status='active'")
-                .fetch_one(&self.pool)
-                .await?;
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pack_channels WHERE status='active'")
+            .fetch_one(&self.pool)
+            .await?;
         Ok(row.get::<i64, _>("cnt"))
     }
 
@@ -682,7 +683,11 @@ impl MemorySystem {
         Ok(())
     }
 
-    pub async fn record_external_outbound(&self, id: &str, message: &OutboundMessage) -> Result<()> {
+    pub async fn record_external_outbound(
+        &self,
+        id: &str,
+        message: &OutboundMessage,
+    ) -> Result<()> {
         sqlx::query(
             r#"
       INSERT INTO external_messages

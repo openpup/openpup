@@ -79,14 +79,7 @@ impl ChannelManager {
 
         self.memory
             .post_channel_message(
-                &msg_id,
-                channel_id,
-                sender,
-                content,
-                "text",
-                None,
-                None,
-                mentions,
+                &msg_id, channel_id, sender, content, "text", None, None, mentions,
             )
             .await?;
 

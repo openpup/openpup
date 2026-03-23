@@ -4,15 +4,19 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-use super::types::{BridgeConnectionState, BridgeStatusEvent, InboundMessage, OutboundMessage, Platform, TelegramConfig};
+use super::types::{
+    BridgeConnectionState, BridgeStatusEvent, InboundMessage, OutboundMessage, Platform,
+    TelegramConfig,
+};
 
 const TELEGRAM_API: &str = "https://api.telegram.org/bot";
 
+#[derive(Clone)]
 pub struct TelegramBridge {
-    config:     TelegramConfig,
-    client:     Client,
+    config: TelegramConfig,
+    client: Client,
     inbound_tx: mpsc::Sender<InboundMessage>,
-    status_tx:  Option<mpsc::Sender<BridgeStatusEvent>>,
+    status_tx: Option<mpsc::Sender<BridgeStatusEvent>>,
 }
 
 impl TelegramBridge {
@@ -23,7 +27,12 @@ impl TelegramBridge {
     ) -> Self {
         let client = {
             let mut builder = Client::builder();
-            if let Some(proxy_url) = config.proxy_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            if let Some(proxy_url) = config
+                .proxy_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
                 match reqwest::Proxy::all(proxy_url) {
                     Ok(proxy) => {
                         builder = builder.proxy(proxy);
@@ -38,7 +47,12 @@ impl TelegramBridge {
                 Client::new()
             })
         };
-        Self { config, client, inbound_tx, status_tx }
+        Self {
+            config,
+            client,
+            inbound_tx,
+            status_tx,
+        }
     }
 
     pub async fn start_polling(self) -> Result<()> {
@@ -61,14 +75,16 @@ impl TelegramBridge {
                         offset = update["update_id"].as_i64().unwrap_or(0) + 1;
                         if let Some(message) = update.get("message") {
                             let text = message["text"].as_str().unwrap_or("").to_string();
-                            if text.is_empty() { continue; }
+                            if text.is_empty() {
+                                continue;
+                            }
                             let inbound = InboundMessage {
-                                platform:   Platform::Telegram,
-                                chat_id:    message["chat"]["id"].to_string(),
-                                user_id:    message["from"]["id"].to_string(),
+                                platform: Platform::Telegram,
+                                chat_id: message["chat"]["id"].to_string(),
+                                user_id: message["from"]["id"].to_string(),
                                 text,
                                 message_id: message["message_id"].to_string(),
-                                timestamp:  chrono::Utc::now().timestamp(),
+                                timestamp: chrono::Utc::now().timestamp(),
                             };
                             let _ = self.inbound_tx.send(inbound).await;
                         }
@@ -108,10 +124,17 @@ impl TelegramBridge {
         if let Some(ref reply_id) = msg.reply_to_id {
             body["reply_to_message_id"] = json!(reply_id.parse::<i64>().unwrap_or(0));
         }
-        debug!("[telegram] send to {}: {} chars", msg.chat_id, msg.text.len());
+        debug!(
+            "[telegram] send to {}: {} chars",
+            msg.chat_id,
+            msg.text.len()
+        );
         let response = self.client.post(&url).json(&body).send().await?;
         let status = response.status();
-        let payload = response.json::<Value>().await.unwrap_or_else(|_| json!({ "ok": false }));
+        let payload = response
+            .json::<Value>()
+            .await
+            .unwrap_or_else(|_| json!({ "ok": false }));
         if !status.is_success() {
             return Err(anyhow!("telegram send HTTP {status}: {payload}"));
         }
@@ -123,12 +146,18 @@ impl TelegramBridge {
 
     async fn get_updates(&self, offset: i64) -> Result<Vec<Value>> {
         let url = format!("{}{}/getUpdates", TELEGRAM_API, self.config.bot_token);
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
-            .query(&[("offset", &offset.to_string()), ("timeout", &"30".to_string())])
+            .query(&[
+                ("offset", &offset.to_string()),
+                ("timeout", &"30".to_string()),
+            ])
             .timeout(std::time::Duration::from_secs(45))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["result"].as_array().cloned().unwrap_or_default())
     }
 }

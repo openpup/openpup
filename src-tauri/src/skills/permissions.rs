@@ -185,7 +185,10 @@ impl PermissionChecker {
             .await?;
 
         let reply = timeout(Duration::from_secs(300), bridge_ctx.wait_for_reply()).await?;
-        Ok(matches!(reply.as_deref(), Some("yes") | Some("YES") | Some("Yes")))
+        Ok(matches!(
+            reply.as_deref(),
+            Some("yes") | Some("YES") | Some("Yes")
+        ))
     }
 
     // ── Internal ────────────────────────────────────────────────────────────────

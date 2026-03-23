@@ -77,178 +77,185 @@ fn main() {
 
     let rt = Runtime::new().expect("failed to create tokio runtime");
 
-    let (app_state, permission_checker, scheduler, channel_manager, alpha_for_bridge) = rt.block_on(async {
-        let home_dir = dirs::home_dir().expect("cannot determine home directory");
-        let workspace_root = home_dir.join(".openpup");
-        let db_path = workspace_root.join("database.db");
+    let (alpha, file_layer, permission_checker, scheduler, channel_manager, alpha_for_bridge) = rt
+        .block_on(async {
+            let home_dir = dirs::home_dir().expect("cannot determine home directory");
+            let workspace_root = home_dir.join(".openpup");
+            let db_path = workspace_root.join("database.db");
 
-        let file_layer = Arc::new(FileLayer::new(&workspace_root));
-        file_layer
-            .ensure_workspace_initialized()
-            .expect("ensure workspace");
+            let file_layer = Arc::new(FileLayer::new(&workspace_root));
+            file_layer
+                .ensure_workspace_initialized()
+                .expect("ensure workspace");
 
-        if let Some(parent) = db_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                panic!("failed to create db directory {:?}: {e}", parent);
+            if let Some(parent) = db_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    panic!("failed to create db directory {:?}: {e}", parent);
+                }
             }
-        }
 
-        let db_path_str = db_path
-            .to_str()
-            .unwrap_or_else(|| panic!("invalid db path: {:?}", db_path));
+            let db_path_str = db_path
+                .to_str()
+                .unwrap_or_else(|| panic!("invalid db path: {:?}", db_path));
 
-        info!("db_path: {db_path_str}");
-        let llm_client = Arc::new(LlmClient::new_from_env());
+            info!("db_path: {db_path_str}");
+            let llm_client = Arc::new(LlmClient::new_from_env());
 
-        // Load unified config.toml
-        {
-            let cfg = crate::config::load_with_env();
-            let provider = if cfg.llm.provider == "ollama" {
-                crate::llm::client::Provider::Ollama
-            } else {
-                crate::llm::client::Provider::OpenAI
-            };
-            let api_key = if cfg.llm.api_key.is_empty() {
-                None
-            } else {
-                Some(cfg.llm.api_key)
-            };
-            let api_base = if cfg.llm.api_base.is_empty() {
-                None
-            } else {
-                Some(cfg.llm.api_base)
-            };
-            let mini = if cfg.llm.mini_model.is_empty() {
-                None
-            } else {
-                Some(cfg.llm.mini_model)
-            };
-            let embed = if cfg.llm.embed_model.is_empty() {
-                None
-            } else {
-                Some(cfg.llm.embed_model)
-            };
-            llm_client.reconfigure(provider, cfg.llm.model, mini, embed, api_key, api_base);
-        }
-
-        let memory = Arc::new(
-            MemorySystem::new(db_path_str, llm_client.clone())
-                .await
-                .expect("init memory system"),
-        );
-
-        // MCP — load persisted server config
-        let mcp_config_path = workspace_root.join("mcp_servers.json");
-        let mcp_orchestrator = Arc::new(MCPOrchestrator::load(mcp_config_path));
-
-        // Optional env-var bootstrap for first-run
-        if let Ok(base_url) = std::env::var("OPENPUP_MCP_SERVER_URL") {
-            let token =
-                std::env::var("OPENPUP_MCP_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
-            let _ = mcp_orchestrator
-                .add_server(McpServerEntry {
-                    name: "env".to_string(),
-                    base_url,
-                    token,
-                    description: "Server from OPENPUP_MCP_SERVER_URL".to_string(),
-                    enabled: true,
-                })
-                .await;
-        }
-
-        // Skills registry — load persisted + built-ins
-        let skills_state_dir = workspace_root.join("skills_state");
-        let skills_state_path = skills_state_dir.join("installed_skills.json");
-        let skill_registry = SkillRegistry::new(skills_state_path);
-
-        // Register built-in skills (always available, user can disable but not uninstall)
-        skill_registry
-            .register_builtin(include_str!("../../skills/daily_summary.toml"))
-            .await;
-        skill_registry
-            .register_builtin(include_str!("../../skills/weekly_summary.toml"))
-            .await;
-        skill_registry
-            .register_builtin(include_str!("../../skills/task_manager.toml"))
-            .await;
-
-        // Load user-configured skill search paths from config.toml
-        let cfg = crate::config::load_with_env();
-        for search_path in &cfg.skills.search_paths {
-            let expanded_path = crate::config::expand_tilde(search_path);
-            if let Err(e) = skill_registry
-                .register_from_dir(&expanded_path, "local")
-                .await
+            // Load unified config.toml
             {
-                warn!(
-                    "failed to load skills from {}: {e}",
-                    expanded_path.display()
-                );
+                let cfg = crate::config::load_with_env();
+                let provider = if cfg.llm.provider == "ollama" {
+                    crate::llm::client::Provider::Ollama
+                } else {
+                    crate::llm::client::Provider::OpenAI
+                };
+                let api_key = if cfg.llm.api_key.is_empty() {
+                    None
+                } else {
+                    Some(cfg.llm.api_key)
+                };
+                let api_base = if cfg.llm.api_base.is_empty() {
+                    None
+                } else {
+                    Some(cfg.llm.api_base)
+                };
+                let mini = if cfg.llm.mini_model.is_empty() {
+                    None
+                } else {
+                    Some(cfg.llm.mini_model)
+                };
+                let embed = if cfg.llm.embed_model.is_empty() {
+                    None
+                } else {
+                    Some(cfg.llm.embed_model)
+                };
+                llm_client.reconfigure(provider, cfg.llm.model, mini, embed, api_key, api_base);
             }
-            skill_registry.add_scan_root(expanded_path, "local").await;
-        }
 
-        // Single shared PermissionChecker — all clones share the same Arc-wrapped state
-        let permission_checker = PermissionChecker::new();
-        permission_checker.set_persist_path(
-            workspace_root
-                .join("skills_state")
-                .join("trusted_skills.json"),
-        );
+            let memory = Arc::new(
+                MemorySystem::new(db_path_str, llm_client.clone())
+                    .await
+                    .expect("init memory system"),
+            );
 
-        // ToolRegistry — primitive tool execution surface for skills
-        let tool_registry = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
+            // MCP — load persisted server config
+            let mcp_config_path = workspace_root.join("mcp_servers.json");
+            let mcp_orchestrator = Arc::new(MCPOrchestrator::load(mcp_config_path));
 
-        // SkillExecutor — shares the same PermissionChecker clone
-        let skill_executor = Arc::new(SkillExecutor {
-            registry: skill_registry,
-            permissions: permission_checker.clone(),
-            mcp: mcp_orchestrator.clone(),
-            llm: llm_client.clone(),
-            tools: tool_registry,
+            // Optional env-var bootstrap for first-run
+            if let Ok(base_url) = std::env::var("OPENPUP_MCP_SERVER_URL") {
+                let token =
+                    std::env::var("OPENPUP_MCP_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
+                let _ = mcp_orchestrator
+                    .add_server(McpServerEntry {
+                        name: "env".to_string(),
+                        base_url,
+                        token,
+                        description: "Server from OPENPUP_MCP_SERVER_URL".to_string(),
+                        enabled: true,
+                    })
+                    .await;
+            }
+
+            // Skills registry — load persisted + built-ins
+            let skills_state_dir = workspace_root.join("skills_state");
+            let skills_state_path = skills_state_dir.join("installed_skills.json");
+            let skill_registry = SkillRegistry::new(skills_state_path);
+
+            // Register built-in skills (always available, user can disable but not uninstall)
+            skill_registry
+                .register_builtin(include_str!("../../skills/daily_summary.toml"))
+                .await;
+            skill_registry
+                .register_builtin(include_str!("../../skills/weekly_summary.toml"))
+                .await;
+            skill_registry
+                .register_builtin(include_str!("../../skills/task_manager.toml"))
+                .await;
+
+            // Load user-configured skill search paths from config.toml
+            let cfg = crate::config::load_with_env();
+            for search_path in &cfg.skills.search_paths {
+                let expanded_path = crate::config::expand_tilde(search_path);
+                if let Err(e) = skill_registry
+                    .register_from_dir(&expanded_path, "local")
+                    .await
+                {
+                    warn!(
+                        "failed to load skills from {}: {e}",
+                        expanded_path.display()
+                    );
+                }
+                skill_registry.add_scan_root(expanded_path, "local").await;
+            }
+
+            // Single shared PermissionChecker — all clones share the same Arc-wrapped state
+            let permission_checker = PermissionChecker::new();
+            permission_checker.set_persist_path(
+                workspace_root
+                    .join("skills_state")
+                    .join("trusted_skills.json"),
+            );
+
+            // ToolRegistry — primitive tool execution surface for skills
+            let tool_registry = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
+
+            // SkillExecutor — shares the same PermissionChecker clone
+            let skill_executor = Arc::new(SkillExecutor {
+                registry: skill_registry,
+                permissions: permission_checker.clone(),
+                mcp: mcp_orchestrator.clone(),
+                llm: llm_client.clone(),
+                tools: tool_registry,
+            });
+
+            let pup_config_path = workspace_root.join("pups_config.json");
+            let channel_manager = Arc::new(ChannelManager::new(memory.clone()));
+            let alpha = Arc::new(AlphaPup::new(
+                memory.clone(),
+                llm_client.clone(),
+                mcp_orchestrator.clone(),
+                file_layer.clone(),
+                skill_executor.clone(),
+                Some(pup_config_path),
+                channel_manager.clone(),
+            ));
+
+            // Register built-in specialist pups
+            alpha.register_pup(Arc::new(DevPup::new())).await;
+            alpha.register_pup(Arc::new(WriterPup::new())).await;
+            alpha.register_pup(Arc::new(OpsPup::new())).await;
+            alpha.register_pup(Arc::new(LifeAdminPup::new())).await;
+            alpha.register_pup(Arc::new(ResearchPup::new())).await;
+
+            // Load dynamic plugins from ~/.openpup/plugins
+            for pup in load_dynamic_pups() {
+                alpha.register_pup(pup).await;
+            }
+
+            // Seed the message counter from DB so memory extraction survives restarts
+            alpha.init_msg_count().await;
+
+            // Scheduler — owns clones of executor/memory/permissions/file_layer
+            let jobs_path = workspace_root.join("scheduled_jobs.json");
+            let scheduler = SkillScheduler {
+                executor: skill_executor,
+                memory: memory.clone(),
+                permissions: permission_checker.clone(),
+                file_layer: file_layer.clone(),
+                jobs_path,
+            };
+
+            let alpha_for_bridge = alpha.clone();
+            (
+                alpha,
+                file_layer,
+                permission_checker,
+                scheduler,
+                channel_manager,
+                alpha_for_bridge,
+            )
         });
-
-        let pup_config_path = workspace_root.join("pups_config.json");
-        let channel_manager = Arc::new(ChannelManager::new(memory.clone()));
-        let alpha = Arc::new(AlphaPup::new(
-            memory.clone(),
-            llm_client.clone(),
-            mcp_orchestrator.clone(),
-            file_layer.clone(),
-            skill_executor.clone(),
-            Some(pup_config_path),
-            channel_manager.clone(),
-        ));
-
-        // Register built-in specialist pups
-        alpha.register_pup(Arc::new(DevPup::new())).await;
-        alpha.register_pup(Arc::new(WriterPup::new())).await;
-        alpha.register_pup(Arc::new(OpsPup::new())).await;
-        alpha.register_pup(Arc::new(LifeAdminPup::new())).await;
-        alpha.register_pup(Arc::new(ResearchPup::new())).await;
-
-        // Load dynamic plugins from ~/.openpup/plugins
-        for pup in load_dynamic_pups() {
-            alpha.register_pup(pup).await;
-        }
-
-        // Seed the message counter from DB so memory extraction survives restarts
-        alpha.init_msg_count().await;
-
-        // Scheduler — owns clones of executor/memory/permissions/file_layer
-        let jobs_path = workspace_root.join("scheduled_jobs.json");
-        let scheduler = SkillScheduler {
-            executor: skill_executor,
-            memory: memory.clone(),
-            permissions: permission_checker.clone(),
-            file_layer: file_layer.clone(),
-            jobs_path,
-        };
-
-        let alpha_for_bridge = alpha.clone();
-        let app_state = AppState { alpha, file_layer };
-        (app_state, permission_checker, scheduler, channel_manager, alpha_for_bridge)
-    });
 
     let checker_for_setup = permission_checker.clone();
     // Scheduler is moved into setup closure where AppHandle is available
@@ -256,8 +263,18 @@ fn main() {
     let channel_manager_for_setup = channel_manager;
 
     // Bridge manager — started in setup closure (only if configured)
+    let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
     let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
-    let bridge_manager = Arc::new(bridge::BridgeManager::new(bridge_cfg, alpha_for_bridge));
+    let bridge_manager = Arc::new(bridge::BridgeManager::new(
+        bridge_cfg,
+        alpha_for_bridge,
+        weixin_service,
+    ));
+    let app_state = AppState {
+        alpha,
+        file_layer,
+        bridge_manager: bridge_manager.clone(),
+    };
 
     tauri::Builder::default()
         .manage(app_state)
@@ -298,6 +315,11 @@ fn main() {
             commands::get_bridge_config,
             commands::save_bridge_config,
             commands::get_bridge_status,
+            commands::start_weixin_qr_login,
+            commands::wait_weixin_qr_login,
+            commands::cancel_weixin_qr_login,
+            commands::list_weixin_accounts,
+            commands::activate_weixin_account,
             // Pup management
             commands::list_pups,
             commands::update_pup,

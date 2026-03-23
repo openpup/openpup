@@ -205,7 +205,9 @@ impl AlphaPup {
         }
 
         if self.configured_pup(key).await.is_some() {
-            Err(anyhow!("Pup '{key}' is configured but unavailable at runtime."))
+            Err(anyhow!(
+                "Pup '{key}' is configured but unavailable at runtime."
+            ))
         } else {
             Err(anyhow!("Pup '{key}' not found."))
         }
@@ -275,7 +277,11 @@ impl AlphaPup {
                     let reply_clone = reply.clone();
                     tauri::async_runtime::spawn(async move {
                         let _ = self_clone
-                            .post_process_conversation_turn(&pup_key_clone, &msg_clone, &reply_clone)
+                            .post_process_conversation_turn(
+                                &pup_key_clone,
+                                &msg_clone,
+                                &reply_clone,
+                            )
                             .await;
                     });
                 }
@@ -345,9 +351,7 @@ impl AlphaPup {
                 .filter(|s| !s.is_empty())
                 .collect();
             if required_pups.len() >= 2 {
-                let output = self
-                    .run_dag(msg, required_pups, app_handle)
-                    .await?;
+                let output = self.run_dag(msg, required_pups, app_handle).await?;
                 return Ok((output, pup_key));
             }
         }
@@ -600,7 +604,7 @@ impl AlphaPup {
     /// Maximum MCP tools to inject per call — prevents context bloat and
     /// hitting provider tool-count limits. When the user has more MCP tools
     /// than this, `tools_for_task` keeps only the most relevant ones.
-    const MAX_MCP_TOOLS: usize =100;
+    const MAX_MCP_TOOLS: usize = 100;
 
     /// Build tool schemas for all currently enabled installed skills.
     /// Reads from the live in-memory registry — no disk I/O, safe to call each iteration.
@@ -1053,10 +1057,7 @@ impl AlphaPup {
         let timeout_handle = tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                let timed_out = monitor_cm
-                    .monitor
-                    .check_timeouts(&monitor_channel_id)
-                    .await;
+                let timed_out = monitor_cm.monitor.check_timeouts(&monitor_channel_id).await;
                 for (pup_id, _kind) in timed_out {
                     debug!(
                         "[alpha] run_dag: pup '{pup_id}' timed out in channel {monitor_channel_id}"
@@ -1131,9 +1132,8 @@ impl AlphaPup {
                     let hb_cm = cm_clone.clone();
                     let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
                     let _hb_handle = tauri::async_runtime::spawn(async move {
-                        let mut interval = tokio::time::interval(
-                            crate::channel::heartbeat::HEARTBEAT_INTERVAL,
-                        );
+                        let mut interval =
+                            tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
                         interval.tick().await; // skip first immediate tick
                         loop {
                             tokio::select! {
@@ -1177,9 +1177,7 @@ impl AlphaPup {
                     cm_clone.monitor.unregister(&ch_id, &pup_key).await;
 
                     // Post result text and done status
-                    let _ = cm_clone
-                        .post_text(&ch_id, &pup_key, &result, &[])
-                        .await;
+                    let _ = cm_clone.post_text(&ch_id, &pup_key, &result, &[]).await;
                     let status = if result.starts_with("Error:") {
                         "failed"
                     } else {
@@ -1255,7 +1253,9 @@ impl AlphaPup {
         let layers = match build_execution_layers(&plan.subtasks) {
             Ok(layers) => layers,
             Err(e) => {
-                debug!("[alpha] run_dag_bridge: DAG build error ({e}), falling back to single layer");
+                debug!(
+                    "[alpha] run_dag_bridge: DAG build error ({e}), falling back to single layer"
+                );
                 vec![plan.subtasks.clone()]
             }
         };
@@ -1294,10 +1294,7 @@ impl AlphaPup {
         let timeout_handle = tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                let timed_out = monitor_cm
-                    .monitor
-                    .check_timeouts(&monitor_channel_id)
-                    .await;
+                let timed_out = monitor_cm.monitor.check_timeouts(&monitor_channel_id).await;
                 for (pup_id, _kind) in timed_out {
                     let _ = monitor_cm
                         .post_status(&monitor_channel_id, &pup_id, "failed")
@@ -1370,9 +1367,8 @@ impl AlphaPup {
                     let hb_cm = cm_clone.clone();
                     let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
                     let _hb_handle = tauri::async_runtime::spawn(async move {
-                        let mut interval = tokio::time::interval(
-                            crate::channel::heartbeat::HEARTBEAT_INTERVAL,
-                        );
+                        let mut interval =
+                            tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
                         interval.tick().await;
                         loop {
                             tokio::select! {
@@ -1403,9 +1399,7 @@ impl AlphaPup {
                     let _ = hb_stop_tx.send(());
                     cm_clone.monitor.unregister(&ch_id, &pup_key).await;
 
-                    let _ = cm_clone
-                        .post_text(&ch_id, &pup_key, &result, &[])
-                        .await;
+                    let _ = cm_clone.post_text(&ch_id, &pup_key, &result, &[]).await;
                     let status = if result.starts_with("Error:") {
                         "failed"
                     } else {
@@ -1485,7 +1479,9 @@ impl AlphaPup {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.get_owner_summary(&owner_md).await;
         let classify_history = self.build_classify_history().await;
-        let pup_key = self.classify_intent(&msg, &owner_summary, &classify_history).await;
+        let pup_key = self
+            .classify_intent(&msg, &owner_summary, &classify_history)
+            .await;
 
         if let Some(pups_str) = pup_key.strip_prefix("channel:") {
             let pups: Vec<String> = pups_str
@@ -1504,9 +1500,12 @@ impl AlphaPup {
                             .join("、")
                     ),
                 );
-                let reply = self.run_dag_bridge(&msg, pups, progress_hook.clone()).await?;
+                let reply = self
+                    .run_dag_bridge(&msg, pups, progress_hook.clone())
+                    .await?;
                 if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
-                    self.post_process_conversation_turn("alpha", &msg, &reply).await?;
+                    self.post_process_conversation_turn("alpha", &msg, &reply)
+                        .await?;
                 }
                 return Ok(reply);
             }
@@ -1514,22 +1513,36 @@ impl AlphaPup {
 
         // Single pup path
         if self.resolve_pup(&pup_key).await.is_ok() {
-            let reply = self.run_pup_for_channel(&pup_key, &msg, &owner_summary).await?;
+            let reply = self
+                .run_pup_for_channel(&pup_key, &msg, &owner_summary)
+                .await?;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
-                self.post_process_conversation_turn(&pup_key, &msg, &reply).await?;
+                self.post_process_conversation_turn(&pup_key, &msg, &reply)
+                    .await?;
             }
             return Ok(reply);
         }
 
         // Alpha fallback — use non-streaming chat
         let pup_history = self.build_history("alpha").await;
-        let relevant_memories = self.memory.search_long_term(&msg, 5).await.unwrap_or_default();
+        let relevant_memories = self
+            .memory
+            .search_long_term(&msg, 5)
+            .await
+            .unwrap_or_default();
         let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
         let reply = self
-            .alpha_reply_bridge(&msg, &owner_summary, &pup_history, &relevant_memories, &pending_tasks)
+            .alpha_reply_bridge(
+                &msg,
+                &owner_summary,
+                &pup_history,
+                &relevant_memories,
+                &pending_tasks,
+            )
             .await?;
         if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
-            self.post_process_conversation_turn("alpha", &msg, &reply).await?;
+            self.post_process_conversation_turn("alpha", &msg, &reply)
+                .await?;
         }
         Ok(reply)
     }
@@ -1586,7 +1599,12 @@ impl AlphaPup {
             .await
     }
 
-    async fn post_process_conversation_turn(&self, pup_key: &str, msg: &str, reply: &str) -> Result<()> {
+    async fn post_process_conversation_turn(
+        &self,
+        pup_key: &str,
+        msg: &str,
+        reply: &str,
+    ) -> Result<()> {
         self.memory.add_conversation(pup_key, "user", msg).await?;
         self.memory
             .add_conversation(pup_key, "assistant", reply)

@@ -40,7 +40,9 @@ impl HeartbeatMonitor {
     /// Register a pup as active in a channel.
     pub async fn register(&self, channel_id: &str, pup_id: &str) {
         let mut guard = self.state.write().await;
-        let channel_map = guard.entry(channel_id.to_string()).or_insert_with(HashMap::new);
+        let channel_map = guard
+            .entry(channel_id.to_string())
+            .or_insert_with(HashMap::new);
         let now = Instant::now();
         channel_map.insert(
             pup_id.to_string(),

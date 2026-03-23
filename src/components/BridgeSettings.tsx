@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
 import { formatMonthDayTime } from '../utils/locale';
 
-type PlatformKey = 'telegram' | 'discord' | 'slack';
+type PlatformKey = 'telegram' | 'discord' | 'slack' | 'weixin';
 type PlatformStatus = 'unconfigured' | 'connecting' | 'connected' | 'error';
 
 interface TelegramConfig {
@@ -28,10 +28,21 @@ interface SlackConfig {
   proxy_url?: string | null;
 }
 
+interface WeixinConfig {
+  base_url: string;
+  access_token: string;
+  owner_user_id: string;
+  allowed_users: string[];
+  proxy_url?: string | null;
+  account_id?: string | null;
+  route_tag?: string | null;
+}
+
 interface BridgeConfig {
   telegram?: TelegramConfig | null;
   discord?: DiscordConfig | null;
   slack?: SlackConfig | null;
+  weixin?: WeixinConfig | null;
 }
 
 interface BridgeConnectionStatus {
@@ -40,6 +51,31 @@ interface BridgeConnectionStatus {
   connected: boolean;
   last_seen?: number | null;
   error_msg?: string | null;
+}
+
+interface StoredWeixinAccount {
+  account_id: string;
+  base_url?: string | null;
+  user_id?: string | null;
+  configured: boolean;
+  saved_at?: string | null;
+}
+
+interface WeixinQrStartResult {
+  session_key: string;
+  qrcode_url?: string | null;
+  message: string;
+}
+
+interface WeixinQrWaitResult {
+  connected: boolean;
+  status: string;
+  session_key: string;
+  qrcode_url?: string | null;
+  account_id?: string | null;
+  base_url?: string | null;
+  user_id?: string | null;
+  message: string;
 }
 
 interface FormState {
@@ -56,6 +92,13 @@ interface FormState {
   slackOwnerUserId: string;
   slackAllowedChannels: string;
   slackProxyUrl: string;
+  weixinBaseUrl: string;
+  weixinAccessToken: string;
+  weixinOwnerUserId: string;
+  weixinAllowedUsers: string;
+  weixinProxyUrl: string;
+  weixinAccountId: string;
+  weixinRouteTag: string;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -84,6 +127,8 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: '0.05em',
 };
 
+const DEFAULT_WEIXIN_BASE_URL = 'https://ilinkai.weixin.qq.com';
+
 function listToText(values: string[] | undefined): string {
   return (values ?? []).join(', ');
 }
@@ -100,6 +145,14 @@ function normalizeOptional(value: string): string | null {
 function formatTime(ts: number | null | undefined, lang: 'zh' | 'en'): string {
   if (!ts) return t('bridge_no_activity', lang);
   return formatMonthDayTime(ts, lang);
+}
+
+function formatWeixinAccountTitle(account: StoredWeixinAccount, activeAccountId: string, lang: 'zh' | 'en'): string {
+  const primary = account.user_id?.trim() || account.account_id;
+  if (account.account_id === activeAccountId && account.user_id?.trim()) {
+    return `${primary} · ${lang === 'zh' ? '当前账号' : 'Current'}`;
+  }
+  return primary;
 }
 
 function statusMeta(status: BridgeConnectionStatus | undefined, lang: 'zh' | 'en') {
@@ -140,8 +193,9 @@ const BridgeField: React.FC<{
   value: string;
   placeholder: string;
   type?: string;
+  readOnly?: boolean;
   onChange: (value: string) => void;
-}> = ({ label, value, placeholder, type = 'text', onChange }) => (
+}> = ({ label, value, placeholder, type = 'text', readOnly = false, onChange }) => (
   <label style={{ display: 'grid', gap: 6 }}>
     <span style={labelStyle}>{label}</span>
     <input
@@ -149,6 +203,7 @@ const BridgeField: React.FC<{
       style={inputStyle}
       placeholder={placeholder}
       value={value}
+      readOnly={readOnly}
       onChange={(e) => onChange(e.target.value)}
     />
   </label>
@@ -192,8 +247,23 @@ export const BridgeSettings: React.FC = () => {
     slackOwnerUserId: '',
     slackAllowedChannels: '',
     slackProxyUrl: '',
+    weixinBaseUrl: DEFAULT_WEIXIN_BASE_URL,
+    weixinAccessToken: '',
+    weixinOwnerUserId: '',
+    weixinAllowedUsers: '',
+    weixinProxyUrl: '',
+    weixinAccountId: '',
+    weixinRouteTag: '',
   });
   const [statuses, setStatuses] = useState<BridgeConnectionStatus[]>([]);
+  const [weixinAccounts, setWeixinAccounts] = useState<StoredWeixinAccount[]>([]);
+  const [weixinLoginSessionKey, setWeixinLoginSessionKey] = useState('');
+  const [weixinQrUrl, setWeixinQrUrl] = useState('');
+  const [weixinQrStatus, setWeixinQrStatus] = useState('');
+  const [weixinQrBusy, setWeixinQrBusy] = useState(false);
+  const [weixinWaitBusy, setWeixinWaitBusy] = useState(false);
+  const [weixinActivateBusy, setWeixinActivateBusy] = useState<string | null>(null);
+  const [weixinAdvancedOpen, setWeixinAdvancedOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -201,9 +271,10 @@ export const BridgeSettings: React.FC = () => {
 
   const loadAll = async () => {
     try {
-      const [cfg, statusList] = await Promise.all([
+      const [cfg, statusList, accountList] = await Promise.all([
         invoke<BridgeConfig>('get_bridge_config'),
         invoke<BridgeConnectionStatus[]>('get_bridge_status'),
+        invoke<StoredWeixinAccount[]>('list_weixin_accounts'),
       ]);
       setForm({
         telegramBotToken: cfg.telegram?.bot_token ?? '',
@@ -219,8 +290,16 @@ export const BridgeSettings: React.FC = () => {
         slackOwnerUserId: cfg.slack?.owner_user_id ?? '',
         slackAllowedChannels: listToText(cfg.slack?.allowed_channels),
         slackProxyUrl: cfg.slack?.proxy_url ?? '',
+        weixinBaseUrl: cfg.weixin?.base_url ?? DEFAULT_WEIXIN_BASE_URL,
+        weixinAccessToken: cfg.weixin?.access_token ?? '',
+        weixinOwnerUserId: cfg.weixin?.owner_user_id ?? '',
+        weixinAllowedUsers: listToText(cfg.weixin?.allowed_users),
+        weixinProxyUrl: cfg.weixin?.proxy_url ?? '',
+        weixinAccountId: cfg.weixin?.account_id ?? '',
+        weixinRouteTag: cfg.weixin?.route_tag ?? '',
       });
       setStatuses(statusList);
+      setWeixinAccounts(accountList);
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -239,6 +318,106 @@ export const BridgeSettings: React.FC = () => {
     }
   };
 
+  const startWeixinQrLogin = async () => {
+    if (!form.weixinBaseUrl.trim()) {
+      setError(t('bridge_weixin_base_required', lang));
+      return;
+    }
+    setWeixinQrBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await invoke<WeixinQrStartResult>('start_weixin_qr_login', {
+        baseUrl: form.weixinBaseUrl.trim(),
+        proxyUrl: normalizeOptional(form.weixinProxyUrl),
+        routeTag: normalizeOptional(form.weixinRouteTag),
+        accountId: normalizeOptional(form.weixinAccountId),
+      });
+      setWeixinLoginSessionKey(result.session_key);
+      setWeixinQrUrl(result.qrcode_url ?? '');
+      setWeixinQrStatus('wait');
+      setMessage(result.message);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setWeixinQrBusy(false);
+    }
+  };
+
+  const pollWeixinQrLogin = async () => {
+    if (!weixinLoginSessionKey || weixinWaitBusy) return;
+    setWeixinWaitBusy(true);
+    try {
+      const result = await invoke<WeixinQrWaitResult>('wait_weixin_qr_login', {
+        baseUrl: form.weixinBaseUrl.trim(),
+        proxyUrl: normalizeOptional(form.weixinProxyUrl),
+        routeTag: normalizeOptional(form.weixinRouteTag),
+        sessionKey: weixinLoginSessionKey,
+        timeoutMs: 35_000,
+      });
+      setWeixinQrStatus(result.status);
+      if (result.qrcode_url) {
+        setWeixinQrUrl(result.qrcode_url);
+      }
+      if (result.connected) {
+        setWeixinLoginSessionKey('');
+        setWeixinQrUrl('');
+        setMessage(result.message);
+        await loadAll();
+        return;
+      }
+      if (result.account_id) {
+        setForm((prev) => ({ ...prev, weixinAccountId: result.account_id ?? prev.weixinAccountId }));
+      }
+      if (result.base_url) {
+        setForm((prev) => ({ ...prev, weixinBaseUrl: result.base_url ?? prev.weixinBaseUrl }));
+      }
+      if (result.user_id) {
+        setForm((prev) => {
+          const allowed = textToList(prev.weixinAllowedUsers);
+          if (!allowed.includes(result.user_id!)) allowed.push(result.user_id!);
+          return {
+            ...prev,
+            weixinOwnerUserId: result.user_id ?? prev.weixinOwnerUserId,
+            weixinAllowedUsers: allowed.join(', '),
+          };
+        });
+      }
+      setMessage(result.message);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setWeixinWaitBusy(false);
+    }
+  };
+
+  const cancelWeixinQrLogin = async () => {
+    if (!weixinLoginSessionKey) return;
+    try {
+      await invoke('cancel_weixin_qr_login', { sessionKey: weixinLoginSessionKey });
+      setWeixinLoginSessionKey('');
+      setWeixinQrUrl('');
+      setWeixinQrStatus('');
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const activateWeixinAccount = async (accountId: string) => {
+    setWeixinActivateBusy(accountId);
+    setError(null);
+    try {
+      await invoke<BridgeConfig>('activate_weixin_account', { accountId });
+      await loadAll();
+      await refreshStatus();
+      setMessage(t('bridge_weixin_account_activated', lang));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setWeixinActivateBusy(null);
+    }
+  };
+
   useEffect(() => {
     void loadAll();
     const timer = window.setInterval(() => {
@@ -247,9 +426,21 @@ export const BridgeSettings: React.FC = () => {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!weixinLoginSessionKey) return;
+    const timer = window.setInterval(() => {
+      void pollWeixinQrLogin();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [weixinLoginSessionKey, weixinWaitBusy, form.weixinBaseUrl, form.weixinProxyUrl, form.weixinRouteTag]);
+
   const statusMap = useMemo(
     () => Object.fromEntries(statuses.map((item) => [item.platform, item])) as Partial<Record<PlatformKey, BridgeConnectionStatus>>,
     [statuses],
+  );
+  const activeWeixinAccount = useMemo(
+    () => weixinAccounts.find((account) => account.account_id === form.weixinAccountId.trim()) ?? null,
+    [weixinAccounts, form.weixinAccountId],
   );
 
   const save = async () => {
@@ -278,6 +469,15 @@ export const BridgeSettings: React.FC = () => {
             allowed_channels: textToList(form.slackAllowedChannels),
             proxy_url: normalizeOptional(form.slackProxyUrl),
           } : null,
+          weixin: form.weixinBaseUrl.trim() && form.weixinAccessToken.trim() ? {
+            base_url: form.weixinBaseUrl.trim(),
+            access_token: form.weixinAccessToken.trim(),
+            owner_user_id: form.weixinOwnerUserId.trim(),
+            allowed_users: textToList(form.weixinAllowedUsers),
+            proxy_url: normalizeOptional(form.weixinProxyUrl),
+            account_id: normalizeOptional(form.weixinAccountId),
+            route_tag: normalizeOptional(form.weixinRouteTag),
+          } : null,
         },
       });
       setMessage(t('bridge_saved', lang));
@@ -295,6 +495,7 @@ export const BridgeSettings: React.FC = () => {
     description: string,
     proxyValue: string,
     fields: React.ReactNode,
+    showProxy = true,
   ) => {
     const status = statusMap[platform];
     const meta = statusMeta(status, lang);
@@ -311,12 +512,14 @@ export const BridgeSettings: React.FC = () => {
         <div style={{ display: 'grid', gap: 12 }}>
           {fields}
 
-          <BridgeField
-            label="Proxy"
-            value={proxyValue}
-            placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
-            onChange={(value) => setForm((prev) => ({ ...prev, [`${platform}ProxyUrl`]: value } as FormState))}
-          />
+          {showProxy && (
+            <BridgeField
+              label="Proxy"
+              value={proxyValue}
+              placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+              onChange={(value) => setForm((prev) => ({ ...prev, [`${platform}ProxyUrl`]: value } as FormState))}
+            />
+          )}
 
           <div
             style={{
@@ -333,7 +536,7 @@ export const BridgeSettings: React.FC = () => {
                 ? status.error_msg
                 : status?.connected
                   ? `${t('bridge_recent_activity', lang)} ${formatTime(status.last_seen, lang)}`
-                  : proxyValue.trim()
+                  : showProxy && proxyValue.trim()
                     ? t('bridge_proxy_waiting', lang)
                     : t('bridge_direct_mode', lang)}
             </div>
@@ -370,8 +573,8 @@ export const BridgeSettings: React.FC = () => {
         </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
-        {(['telegram', 'discord', 'slack'] as PlatformKey[]).map((platform) => {
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {(['telegram', 'discord', 'slack', 'weixin'] as PlatformKey[]).map((platform) => {
           const status = statusMap[platform];
           return (
             <div key={platform} style={{ ...cardStyle, padding: 14 }}>
@@ -474,6 +677,227 @@ export const BridgeSettings: React.FC = () => {
               onChange={(value) => setForm((prev) => ({ ...prev, slackAllowedChannels: value }))}
             />
           </>,
+        )}
+
+        {renderBridgeCard(
+          'weixin',
+          'Weixin',
+          t('bridge_weixin_desc', lang),
+          form.weixinProxyUrl,
+          <>
+            <BridgeField
+              label={lang === 'zh' ? '微信账号' : 'Weixin Account'}
+              value={activeWeixinAccount?.user_id || form.weixinOwnerUserId || ''}
+              placeholder={lang === 'zh' ? '扫码后自动绑定' : 'Bound automatically after scan'}
+              readOnly
+              onChange={() => {}}
+            />
+            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: -4 }}>
+              {activeWeixinAccount
+                ? [activeWeixinAccount.base_url, lang === 'zh' ? '已绑定' : 'Linked'].filter(Boolean).join(' · ')
+                : (lang === 'zh' ? '直接扫码登录，默认只允许扫码者本人使用。' : 'Scan to sign in. By default only the scanning user is allowed.')}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: 10,
+                padding: '12px',
+                borderRadius: 12,
+                border: '0.5px solid var(--color-border-secondary)',
+                background: 'var(--color-background-secondary)',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                {t('bridge_weixin_qr_title', lang)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                {lang === 'zh'
+                  ? '填写网关地址后直接扫码登录即可。访问令牌、内部账号标识等细节会自动处理，不需要手动填写。'
+                  : 'Enter the gateway URL and scan to sign in. Tokens and internal account identifiers are handled automatically.'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => void startWeixinQrLogin()}
+                  disabled={weixinQrBusy || !form.weixinBaseUrl.trim()}
+                  style={{
+                    padding: '7px 12px',
+                    borderRadius: 10,
+                    border: 'none',
+                    background: 'var(--color-text-primary)',
+                    color: 'var(--color-background-primary)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: weixinQrBusy ? 'not-allowed' : 'pointer',
+                    opacity: weixinQrBusy ? 0.65 : 1,
+                  }}
+                >
+                  {weixinQrBusy
+                    ? t('bridge_weixin_qr_starting', lang)
+                    : (activeWeixinAccount ? (lang === 'zh' ? '重新扫码登录' : 'Scan Again') : t('bridge_weixin_qr_start', lang))}
+                </button>
+                {weixinLoginSessionKey && (
+                  <button
+                    onClick={() => void cancelWeixinQrLogin()}
+                    style={{
+                      padding: '7px 12px',
+                      borderRadius: 10,
+                      border: '0.5px solid var(--color-border-secondary)',
+                      background: 'var(--color-background-primary)',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t('bridge_weixin_qr_cancel', lang)}
+                  </button>
+                )}
+              </div>
+              {weixinLoginSessionKey && (
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                  {t('bridge_weixin_qr_status', lang)}: {weixinQrStatus || 'wait'}
+                </div>
+              )}
+              {weixinQrUrl && (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <img
+                    src={weixinQrUrl}
+                    alt="Weixin QR"
+                    style={{ width: 180, height: 180, objectFit: 'contain', borderRadius: 12, background: 'white', padding: 10 }}
+                  />
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <button
+                onClick={() => setWeixinAdvancedOpen((prev) => !prev)}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  border: '0.5px solid var(--color-border-secondary)',
+                  background: 'var(--color-background-primary)',
+                  color: 'var(--color-text-secondary)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  justifySelf: 'start',
+                }}
+              >
+                {weixinAdvancedOpen
+                  ? (lang === 'zh' ? '收起高级设置' : 'Hide Advanced Settings')
+                  : (lang === 'zh' ? '高级设置' : 'Advanced Settings')}
+              </button>
+              {weixinAdvancedOpen && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 12,
+                    padding: '12px',
+                    borderRadius: 12,
+                    border: '0.5px solid var(--color-border-secondary)',
+                    background: 'var(--color-background-secondary)',
+                  }}
+                >
+                  <BridgeField
+                    label={lang === 'zh' ? '网关地址' : 'Gateway URL'}
+                    value={form.weixinBaseUrl}
+                    placeholder={DEFAULT_WEIXIN_BASE_URL}
+                    onChange={(value) => setForm((prev) => ({ ...prev, weixinBaseUrl: value || DEFAULT_WEIXIN_BASE_URL }))}
+                  />
+                  <BridgeField
+                    label="Proxy"
+                    value={form.weixinProxyUrl}
+                    placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+                    onChange={(value) => setForm((prev) => ({ ...prev, weixinProxyUrl: value }))}
+                  />
+                  <BridgeField
+                    label={lang === 'zh' ? 'Owner 用户 ID' : 'Owner User ID'}
+                    value={form.weixinOwnerUserId}
+                    placeholder="Weixin owner user id"
+                    onChange={(value) => setForm((prev) => ({ ...prev, weixinOwnerUserId: value }))}
+                  />
+                  <BridgeField
+                    label={lang === 'zh' ? '允许用户' : 'Allowed Users'}
+                    value={form.weixinAllowedUsers}
+                    placeholder="user_id_1, user_id_2"
+                    onChange={(value) => setForm((prev) => ({ ...prev, weixinAllowedUsers: value }))}
+                  />
+                </div>
+              )}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: 10,
+                padding: '12px',
+                borderRadius: 12,
+                border: '0.5px solid var(--color-border-secondary)',
+                background: 'var(--color-background-secondary)',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                {t('bridge_weixin_saved_accounts', lang)}
+              </div>
+              {weixinAccounts.length === 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                  {t('bridge_weixin_no_accounts', lang)}
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {weixinAccounts.map((account) => (
+                    <div
+                      key={account.account_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        background: 'var(--color-background-primary)',
+                        border: '0.5px solid var(--color-border-secondary)',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                          {formatWeixinAccountTitle(account, form.weixinAccountId.trim(), lang)}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                          {[
+                            account.user_id && account.user_id !== account.account_id ? account.account_id : null,
+                            account.base_url,
+                            account.account_id === form.weixinAccountId.trim()
+                              ? (lang === 'zh' ? '当前生效' : 'Active')
+                              : null,
+                          ].filter(Boolean).join(' · ') || t('bridge_no_activity', lang)}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => void activateWeixinAccount(account.account_id)}
+                        disabled={weixinActivateBusy === account.account_id}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 999,
+                          border: '0.5px solid var(--color-border-secondary)',
+                          background: 'var(--color-background-primary)',
+                          color: 'var(--color-text-secondary)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: weixinActivateBusy === account.account_id ? 'not-allowed' : 'pointer',
+                          opacity: weixinActivateBusy === account.account_id ? 0.65 : 1,
+                        }}
+                      >
+                        {weixinActivateBusy === account.account_id
+                          ? t('bridge_weixin_activating', lang)
+                          : t('bridge_weixin_activate', lang)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>,
+          false,
         )}
       </div>
 

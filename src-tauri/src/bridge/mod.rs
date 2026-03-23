@@ -1,18 +1,21 @@
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::RwLock;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::agents::alpha::AlphaPup;
 use crate::bridge::types::{
-    BridgeConfig, BridgeConnectionState, BridgeContext, BridgeStatusEvent, InboundMessage, OutboundMessage,
-    OutboundType, Platform,
+    BridgeConfig, BridgeConnectionState, BridgeContext, BridgeStatusEvent, InboundMessage,
+    OutboundMessage, OutboundType, Platform,
 };
 
 use self::auth::OwnerAuth;
 use self::telegram::TelegramBridge;
+use self::weixin::{WeixinBridge, WeixinService};
 
 pub mod auth;
 pub mod discord;
@@ -20,10 +23,13 @@ pub mod formatter;
 pub mod slack;
 pub mod telegram;
 pub mod types;
+pub mod weixin;
 
 pub struct BridgeManager {
-    config: BridgeConfig,
+    config: RwLock<BridgeConfig>,
     alpha: Arc<AlphaPup>,
+    tasks: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
+    weixin_service: Arc<WeixinService>,
 }
 
 fn is_stop_request(text: &str) -> bool {
@@ -33,17 +39,95 @@ fn is_stop_request(text: &str) -> bool {
     )
 }
 
+fn is_enabled_config(config: &BridgeConfig) -> bool {
+    config.telegram.is_some()
+        || config.discord.is_some()
+        || config.slack.is_some()
+        || config.weixin.is_some()
+}
+
 impl BridgeManager {
-    pub fn new(config: BridgeConfig, alpha: Arc<AlphaPup>) -> Self {
-        Self { config, alpha }
+    pub fn new(
+        config: BridgeConfig,
+        alpha: Arc<AlphaPup>,
+        weixin_service: Arc<WeixinService>,
+    ) -> Self {
+        Self {
+            config: RwLock::new(config),
+            alpha,
+            tasks: Mutex::new(Vec::new()),
+            weixin_service,
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.config.telegram.is_some() || self.config.discord.is_some() || self.config.slack.is_some()
+        is_enabled_config(&self.current_config())
+    }
+
+    pub fn current_config(&self) -> BridgeConfig {
+        self.config
+            .read()
+            .expect("bridge config lock poisoned")
+            .clone()
+    }
+
+    pub fn weixin_service(&self) -> Arc<WeixinService> {
+        self.weixin_service.clone()
     }
 
     pub fn start(self: Arc<Self>) {
-        if !self.is_enabled() {
+        tauri::async_runtime::spawn(async move {
+            let config = self.current_config();
+            self.apply_config_state(&config).await;
+            self.run_with_config(config).await;
+        });
+    }
+
+    pub async fn restart(self: &Arc<Self>, config: BridgeConfig) {
+        {
+            let mut guard = self.config.write().expect("bridge config lock poisoned");
+            *guard = config.clone();
+        }
+        self.stop_tasks().await;
+        self.apply_config_state(&config).await;
+        self.run_with_config(config).await;
+    }
+
+    async fn stop_tasks(&self) {
+        let mut tasks = self.tasks.lock().await;
+        for handle in tasks.drain(..) {
+            handle.abort();
+        }
+    }
+
+    async fn apply_config_state(&self, config: &BridgeConfig) {
+        for platform in [
+            Platform::Telegram,
+            Platform::Discord,
+            Platform::Slack,
+            Platform::Weixin,
+        ] {
+            let enabled = match platform {
+                Platform::Telegram => config.telegram.is_some(),
+                Platform::Discord => config.discord.is_some(),
+                Platform::Slack => config.slack.is_some(),
+                Platform::Weixin => config.weixin.is_some(),
+            };
+            let status = if enabled {
+                BridgeConnectionState::Connecting
+            } else {
+                BridgeConnectionState::Unconfigured
+            };
+            let _ = self
+                .alpha
+                .memory
+                .update_bridge_connection(platform.as_str(), &status, false, None, None)
+                .await;
+        }
+    }
+
+    async fn run_with_config(self: &Arc<Self>, config: BridgeConfig) {
+        if !is_enabled_config(&config) {
             return;
         }
         info!("[bridge] starting configured platform bridges");
@@ -51,38 +135,21 @@ impl BridgeManager {
         let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(128);
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<OutboundMessage>(256);
         let (status_tx, mut status_rx) = mpsc::channel::<BridgeStatusEvent>(32);
+        let mut outbound_routes: HashMap<Platform, mpsc::Sender<OutboundMessage>> = HashMap::new();
+        let mut handles: Vec<tauri::async_runtime::JoinHandle<()>> = Vec::new();
 
-        if let Some(tg_cfg) = self.config.telegram.clone() {
+        if let Some(tg_cfg) = config.telegram.clone() {
             let tx = inbound_tx.clone();
             let status_sender = status_tx.clone();
-            let bridge = TelegramBridge::new(tg_cfg.clone(), tx, Some(status_sender.clone()));
+            let bridge = TelegramBridge::new(tg_cfg, tx, Some(status_sender.clone()));
             let alpha = self.alpha.clone();
 
-            let tg_cfg_out = tg_cfg.clone();
             let (tg_out_tx, mut tg_out_rx) = mpsc::channel::<OutboundMessage>(64);
-            let tg_route_tx = tg_out_tx.clone();
-            let alpha_for_status = alpha.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = alpha_for_status
-                    .memory
-                    .update_bridge_connection(
-                        Platform::Telegram.as_str(),
-                        &BridgeConnectionState::Connecting,
-                        false,
-                        None,
-                        None,
-                    )
-                    .await;
-                while let Some(msg) = outbound_rx.recv().await {
-                    if msg.platform == Platform::Telegram {
-                        let _ = tg_route_tx.send(msg).await;
-                    }
-                }
-            });
+            outbound_routes.insert(Platform::Telegram, tg_out_tx);
 
             let alpha_for_sender = alpha.clone();
-            tauri::async_runtime::spawn(async move {
-                let sender = TelegramBridge::new(tg_cfg_out, mpsc::channel(1).0, None);
+            let sender = bridge.clone();
+            handles.push(tauri::async_runtime::spawn(async move {
                 while let Some(msg) = tg_out_rx.recv().await {
                     if let Err(e) = sender.send(&msg).await {
                         let _ = alpha_for_sender
@@ -113,18 +180,9 @@ impl BridgeManager {
                             .await;
                     }
                 }
-            });
+            }));
 
-            tauri::async_runtime::spawn(async move {
-                let _ = status_sender
-                    .send(BridgeStatusEvent {
-                        platform: Platform::Telegram,
-                        status: BridgeConnectionState::Connecting,
-                        connected: false,
-                        last_seen: None,
-                        error_msg: None,
-                    })
-                    .await;
+            handles.push(tauri::async_runtime::spawn(async move {
                 if let Err(e) = bridge.start_polling().await {
                     let _ = status_sender
                         .send(BridgeStatusEvent {
@@ -137,11 +195,79 @@ impl BridgeManager {
                         .await;
                     warn!("[telegram] polling stopped: {e}");
                 }
-            });
+            }));
         }
 
+        if let Some(wx_cfg) = config.weixin.clone() {
+            let tx = inbound_tx.clone();
+            let status_sender = status_tx.clone();
+            let bridge = WeixinBridge::new(wx_cfg, tx, Some(status_sender.clone()));
+            let alpha = self.alpha.clone();
+
+            let (wx_out_tx, mut wx_out_rx) = mpsc::channel::<OutboundMessage>(64);
+            outbound_routes.insert(Platform::Weixin, wx_out_tx);
+
+            let alpha_for_sender = alpha.clone();
+            let sender = bridge.clone();
+            handles.push(tauri::async_runtime::spawn(async move {
+                while let Some(msg) = wx_out_rx.recv().await {
+                    if let Err(e) = sender.send(&msg).await {
+                        let _ = alpha_for_sender
+                            .memory
+                            .update_bridge_connection(
+                                Platform::Weixin.as_str(),
+                                &BridgeConnectionState::Error,
+                                false,
+                                None,
+                                Some(&e.to_string()),
+                            )
+                            .await;
+                        warn!("[weixin] send error: {e}");
+                    } else {
+                        let _ = alpha_for_sender
+                            .memory
+                            .record_external_outbound(&Uuid::new_v4().to_string(), &msg)
+                            .await;
+                        let _ = alpha_for_sender
+                            .memory
+                            .update_bridge_connection(
+                                Platform::Weixin.as_str(),
+                                &BridgeConnectionState::Connected,
+                                true,
+                                Some(chrono::Utc::now().timestamp()),
+                                None,
+                            )
+                            .await;
+                    }
+                }
+            }));
+
+            handles.push(tauri::async_runtime::spawn(async move {
+                if let Err(e) = bridge.start_polling().await {
+                    let _ = status_sender
+                        .send(BridgeStatusEvent {
+                            platform: Platform::Weixin,
+                            status: BridgeConnectionState::Error,
+                            connected: false,
+                            last_seen: None,
+                            error_msg: Some(e.to_string()),
+                        })
+                        .await;
+                    warn!("[weixin] polling stopped: {e}");
+                }
+            }));
+        }
+
+        handles.push(tauri::async_runtime::spawn(async move {
+            while let Some(msg) = outbound_rx.recv().await {
+                if let Some(route_tx) = outbound_routes.get(&msg.platform) {
+                    let _ = route_tx.send(msg).await;
+                }
+            }
+        }));
+
         let status_alpha = self.alpha.clone();
-        tauri::async_runtime::spawn(async move {
+        handles.push(tauri::async_runtime::spawn(async move {
             while let Some(event) = status_rx.recv().await {
                 let _ = status_alpha
                     .memory
@@ -154,10 +280,10 @@ impl BridgeManager {
                     )
                     .await;
             }
-        });
+        }));
 
         let manager = self.clone();
-        tauri::async_runtime::spawn(async move {
+        handles.push(tauri::async_runtime::spawn(async move {
             while let Some(inbound) = inbound_rx.recv().await {
                 let _ = manager
                     .alpha
@@ -176,7 +302,7 @@ impl BridgeManager {
                     )
                     .await;
 
-                let auth = OwnerAuth::new(manager.config.clone());
+                let auth = OwnerAuth::new(manager.current_config());
                 if let Err(e) = auth.verify(&inbound) {
                     warn!("[bridge] rejected message: {e}");
                     continue;
@@ -301,6 +427,8 @@ impl BridgeManager {
                     let _ = bridge_ctx;
                 });
             }
-        });
+        }));
+
+        self.tasks.lock().await.extend(handles);
     }
 }
