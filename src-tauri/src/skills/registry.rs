@@ -429,17 +429,14 @@ impl SkillRegistry {
     async fn load_one(&self, path: &Path) -> Result<()> {
         let text = fs::read_to_string(path)?;
         let manifest: SkillManifest = toml::from_str(&text)?;
-        self.skills
-            .write()
-            .await
-            .insert(
-                manifest.metadata.name.clone(),
-                RegisteredSkill {
-                    metadata: manifest.metadata,
-                    permissions: manifest.permissions,
-                    source: SkillSource::TomlFile(path.to_path_buf()),
-                },
-            );
+        self.skills.write().await.insert(
+            manifest.metadata.name.clone(),
+            RegisteredSkill {
+                metadata: manifest.metadata,
+                permissions: manifest.permissions,
+                source: SkillSource::TomlFile(path.to_path_buf()),
+            },
+        );
         Ok(())
     }
 
@@ -541,16 +538,16 @@ impl SkillRegistry {
         match &skill.source {
             SkillSource::BuiltinToml(text) => {
                 let manifest: SkillManifest = toml::from_str(text)?;
-                manifest
-                    .prompt
-                    .ok_or_else(|| anyhow!("skill '{}' has no [prompt] section", skill.metadata.name))
+                manifest.prompt.ok_or_else(|| {
+                    anyhow!("skill '{}' has no [prompt] section", skill.metadata.name)
+                })
             }
             SkillSource::TomlFile(path) => {
                 let text = fs::read_to_string(path)?;
                 let manifest: SkillManifest = toml::from_str(&text)?;
-                manifest
-                    .prompt
-                    .ok_or_else(|| anyhow!("skill '{}' has no [prompt] section", skill.metadata.name))
+                manifest.prompt.ok_or_else(|| {
+                    anyhow!("skill '{}' has no [prompt] section", skill.metadata.name)
+                })
             }
             SkillSource::SkillHubDir(dir) => {
                 let md_text = fs::read_to_string(dir.join("SKILL.md"))?;

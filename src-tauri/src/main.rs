@@ -366,6 +366,8 @@ fn main() {
             commands::clear_pup_history,
             commands::compress_pup_context,
             commands::get_context_stats,
+            commands::get_token_usage,
+            commands::reset_token_usage,
         ])
         .setup(move |app| {
             let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use tracing::debug;
+use tracing::{debug, Level};
 
 use crate::agents::custom_pup::CustomPup;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
@@ -611,23 +611,6 @@ impl AlphaPup {
             ));
         }
 
-        // Inject installed skills so Alpha knows what capabilities are available
-        let skill_list = self
-            .skill_executor
-            .registry
-            .enabled_skills_for_tools()
-            .await;
-        if !skill_list.is_empty() {
-            let lines: String = skill_list
-                .iter()
-                .map(|(name, desc, _)| format!("- skill__{name}: {desc}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            system_content.push_str(&format!(
-                "\n\n## 已安装技能\n{lines}\n\n可通过工具调用 skill__<name> 直接执行，也可告知用户已具备该能力。"
-            ));
-        }
-
         // Build messages as JSON values for the unified tool-call loop
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({ "role": "system", "content": system_content })];
@@ -686,7 +669,7 @@ impl AlphaPup {
     /// Maximum MCP tools to inject per call — prevents context bloat and
     /// hitting provider tool-count limits. When the user has more MCP tools
     /// than this, `tools_for_task` keeps only the most relevant ones.
-    const MAX_MCP_TOOLS: usize = 100;
+    const MAX_MCP_TOOLS: usize = 30;
 
     /// Build tool schemas for all currently enabled installed skills.
     /// Reads from the live in-memory registry — no disk I/O, safe to call each iteration.
@@ -826,7 +809,29 @@ impl AlphaPup {
 
             // Rebuild skill tools each iteration so newly installed skills are visible immediately.
             let mut iter_tools = available_tools.clone();
-            iter_tools.extend(self.build_skill_tools().await);
+            let skill_tools = self.build_skill_tools().await;
+            let skill_tool_count = skill_tools.len();
+            iter_tools.extend(skill_tools);
+
+            let msg_chars = msgs
+                .iter()
+                .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+                .sum::<usize>();
+            let tool_chars = iter_tools
+                .iter()
+                .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
+                .sum::<usize>();
+            let tool_count = iter_tools.len();
+            let non_skill_tool_count = tool_count.saturating_sub(skill_tool_count);
+            debug!(
+                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} (base={} skill={}) tool_chars={}",
+                    msgs.len(),
+                    msg_chars,
+                    tool_count,
+                    non_skill_tool_count,
+                    skill_tool_count,
+                    tool_chars
+                );
 
             let response = match self
                 .llm_client

@@ -1235,6 +1235,23 @@ pub async fn get_context_stats(
     })
 }
 
+// ─── Token usage ─────────────────────────────────────────────────────────────
+
+/// Return cumulative session token usage from the LLM client.
+#[tauri::command]
+pub async fn get_token_usage(
+    state: State<'_, AppState>,
+) -> Result<crate::llm::client::TokenUsage, String> {
+    Ok(state.alpha.llm_client.usage.snapshot())
+}
+
+/// Reset the cumulative session token counters.
+#[tauri::command]
+pub async fn reset_token_usage(state: State<'_, AppState>) -> Result<(), String> {
+    state.alpha.llm_client.usage.reset();
+    Ok(())
+}
+
 // ─── Scheduled jobs ───────────────────────────────────────────────────────────
 
 /// Return all scheduled jobs from ~/.openpup/scheduled_jobs.json.

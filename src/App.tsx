@@ -48,6 +48,12 @@ interface ActivityStep {
   label: string;
 }
 
+interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 const ACTIVITY_ICON: Record<string, string> = {
   routing:    '→',
   skill:      '⚡',
@@ -305,6 +311,8 @@ const AppInner: React.FC = () => {
   }, [completionEventCount]);
   // Context stats
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
+  // Token usage monitoring
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   // Settings state
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -362,6 +370,16 @@ const AppInner: React.FC = () => {
         if (done) {
           loadMemoryChips();
           setMessages([{ id: 'welcome', role: 'assistant', content: t('chat_welcome', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
+          // Load initial context stats + token usage
+          void invoke<ContextStats>('get_context_stats', { pup_key: 'alpha' })
+            .then((stats) => setContextStats(stats))
+            .catch((e) => {
+              console.warn('get_context_stats failed on init:', e);
+              setContextStats(null);
+            });
+          void invoke<TokenUsage>('get_token_usage')
+            .then((usage) => setTokenUsage(usage))
+            .catch(() => {});
         }
       })
       .catch(() => setOnboardingDone(false));
@@ -405,6 +423,12 @@ const AppInner: React.FC = () => {
             .then((stats) => {
               setContextStats(stats);
             })
+            .catch((e) => {
+              console.warn('get_context_stats failed after stream_done:', e);
+            });
+          // Load token usage
+          void invoke<TokenUsage>('get_token_usage')
+            .then((usage) => setTokenUsage(usage))
             .catch(() => {});
         }
       }),
@@ -433,6 +457,16 @@ const AppInner: React.FC = () => {
       cleanupFns.forEach((f) => f());
     };
   }, []);
+
+  // Keep title-bar context stats in sync with current pup selection.
+  useEffect(() => {
+    if (!onboardingDone) return;
+    void invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey })
+      .then((stats) => setContextStats(stats))
+      .catch((e) => {
+        console.warn('get_context_stats failed on pup switch:', e);
+      });
+  }, [onboardingDone, selectedPupKey]);
 
   // New message added → smooth scroll
   useEffect(() => {
@@ -587,8 +621,81 @@ const AppInner: React.FC = () => {
   const getPupTagStyle = (pupKey: string) => pupTagStyle(pupKey);
   const pupMetaByKey = buildPupMetaByKey(pups);
 
+  const formatTokens = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
+    : String(n);
+
   return (
-    <div className="h-screen flex overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
+    <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
+
+      {/* ── macOS overlay titlebar region ── */}
+      <div
+        data-tauri-drag-region
+        style={{
+          height: '35px',
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingLeft: '78px',
+          paddingRight: '12px',
+          background: 'var(--color-background-secondary)',
+          borderBottom: '0.5px solid var(--color-border-tertiary)',
+          userSelect: 'none',
+        } as React.CSSProperties}
+      >
+        <span data-tauri-drag-region style={{
+          fontSize: '13px',
+          fontWeight: 500,
+          color: 'var(--color-text-secondary)',
+        }}>open<span style={{ color: '#1D9E75' }}>pup</span></span>
+        <div data-tauri-drag-region style={{ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--color-text-tertiary)' }}>
+          {/* Context stats + compress button */}
+          {contextStats && (
+            <div data-tauri-drag-region style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span data-tauri-drag-region>~{Math.round(contextStats.estimated_tokens / 1000)}k ctx</span>
+              {contextStats.compression_status.is_compressed && (
+                <span data-tauri-drag-region style={{ fontSize: '9px', opacity: 0.6 }}>{t('ctx_compressed', lang)}</span>
+              )}
+              {!contextStats.compression_status.is_compressed && contextStats.message_count > 10 && (
+                <button
+                  title={t('ctx_compress_tip', lang)}
+                  onClick={() => {
+                    void invoke('compress_pup_context', { pup_key: selectedPupKey })
+                      .then(() => invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey }))
+                      .then((stats) => setContextStats(stats))
+                      .catch(() => {});
+                  }}
+                  style={{
+                    background: 'none', border: 'none', padding: '0 2px', cursor: 'pointer',
+                    color: 'var(--color-text-tertiary)', fontSize: '10px', lineHeight: 1, opacity: 0.6,
+                  }}
+                >&#x2198;</button>
+              )}
+            </div>
+          )}
+          {/* Token usage — always visible */}
+          {tokenUsage && (
+            <div
+              data-tauri-drag-region
+              title={`${t('token_input', lang)}: ${tokenUsage.prompt_tokens.toLocaleString()}\n${t('token_output', lang)}: ${tokenUsage.completion_tokens.toLocaleString()}`}
+              style={{ display: 'flex', alignItems: 'center', gap: '7px' }}
+            >
+              <span data-tauri-drag-region style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                <svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1L7 5.5H1Z" fill="var(--color-text-success)" opacity="0.75" /></svg>
+                {formatTokens(tokenUsage.prompt_tokens)}
+              </span>
+              <span data-tauri-drag-region style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                <svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 7L1 2.5H7Z" fill="var(--color-text-warning)" opacity="0.75" /></svg>
+                {formatTokens(tokenUsage.completion_tokens)}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
 
       {/* ── Left Sidebar ── */}
       {sidebarCollapsed ? (
@@ -834,32 +941,22 @@ const AppInner: React.FC = () => {
           {/* ── Chat ── */}
           {activeNav === 'chat' && (
             <>
-              {/* Memory chips + Context Status */}
-              {(memoryChips.length > 0 || contextStats) && (
-                <div style={{ borderBottom: '0.5px solid var(--color-border-tertiary)', padding: '8px 14px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                    {memoryChips.slice(0, 5).map((chip, i) => (
-                      <span key={i} style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0, maxWidth: '180px',
-                        fontSize: "11px", padding: '3px 9px', borderRadius: '20px',
-                        background: 'var(--color-background-secondary)',
-                        border: '0.5px solid var(--color-border-tertiary)',
-                        color: 'var(--color-text-secondary)',
-                        overflow: 'hidden',
-                      }}>
-                        <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0 }} />
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.content}</span>
-                      </span>
-                    ))}
-                  </div>
-                  {contextStats && (
-                    <div style={{ flexShrink: 0, fontFamily: 'var(--font-mono)', fontSize: "11px", color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-                      ~{Math.round(contextStats.estimated_tokens / 1000)}k
-                      {contextStats.compression_status.is_compressed && (
-                        <span style={{ marginLeft: '4px' }} title="context compressed">{t('ctx_compressed', lang)}</span>
-                      )}
-                    </div>
-                  )}
+              {/* Memory chips */}
+              {memoryChips.length > 0 && (
+                <div style={{ borderBottom: '0.5px solid var(--color-border-tertiary)', padding: '8px 14px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                  {memoryChips.slice(0, 5).map((chip, i) => (
+                    <span key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0, maxWidth: '180px',
+                      fontSize: "11px", padding: '3px 9px', borderRadius: '20px',
+                      background: 'var(--color-background-secondary)',
+                      border: '0.5px solid var(--color-border-tertiary)',
+                      color: 'var(--color-text-secondary)',
+                      overflow: 'hidden',
+                    }}>
+                      <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.content}</span>
+                    </span>
+                  ))}
                 </div>
               )}
 
@@ -1146,6 +1243,7 @@ const AppInner: React.FC = () => {
           onApprove={(remember) => void handleApprove(remember)}
           onDeny={() => void handleDeny()} />
       )}
+      </div>{/* close flex-1 wrapper */}
     </div>
   );
 };

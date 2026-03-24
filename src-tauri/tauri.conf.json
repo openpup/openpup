@@ -20,7 +20,9 @@
         "height": 750,
         "minWidth": 860,
         "minHeight": 620,
-        "resizable": true
+        "resizable": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   }
