@@ -11,6 +11,8 @@ pub mod llm_client;
 pub mod mcp_orchestrator;
 #[path = "../../src-tauri/src/mcp/server.rs"]
 pub mod mcp_server;
+#[path = "../../src-tauri/src/bridge/mod.rs"]
+pub mod bridge;
 #[path = "../../src-tauri/src/memory/file_layer.rs"]
 pub mod memory_file_layer;
 #[path = "../../src-tauri/src/memory/system.rs"]
@@ -21,8 +23,12 @@ pub mod tools_primitive;
 pub mod skills_registry;
 #[path = "../../src-tauri/src/skills/executor.rs"]
 pub mod skills_executor;
+#[path = "../../src-tauri/src/skills/job_registry.rs"]
+pub mod skills_job_registry;
 #[path = "../../src-tauri/src/skills/permissions.rs"]
 pub mod skills_permissions;
+#[path = "../../src-tauri/src/skills/scheduler.rs"]
+pub mod skills_scheduler;
 #[path = "../../src-tauri/src/channel/dag.rs"]
 pub mod channel_dag;
 #[path = "../../src-tauri/src/channel/heartbeat.rs"]
@@ -31,10 +37,6 @@ pub mod channel_heartbeat;
 pub mod channel_manager;
 #[path = "../../src-tauri/src/channel/types.rs"]
 pub mod channel_types;
-#[path = "../../src-tauri/src/bridge/types.rs"]
-pub mod bridge_types;
-#[path = "../../src-tauri/src/bridge/formatter.rs"]
-pub mod bridge_formatter;
 #[path = "../../src-tauri/src/agents/specialist.rs"]
 pub mod agents_specialist;
 #[path = "../../src-tauri/src/agents/custom_pup.rs"]
@@ -55,11 +57,7 @@ pub mod agents_plugins;
 pub mod agents_alpha;
 
 pub mod headless;
-
-pub mod bridge {
-    pub use crate::bridge_formatter as formatter;
-    pub use crate::bridge_types as types;
-}
+pub mod ipc;
 
 pub mod channel {
     pub use crate::channel_dag as dag;
@@ -88,8 +86,10 @@ pub mod tools {
 
 pub mod skills {
     pub use crate::skills_executor as executor;
+    pub use crate::skills_job_registry as job_registry;
     pub use crate::skills_permissions as permissions;
     pub use crate::skills_registry as registry;
+    pub use crate::skills_scheduler as scheduler;
 }
 
 pub mod agents {

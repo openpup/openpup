@@ -16,7 +16,7 @@ use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
 use crate::skills::executor::SkillExecutor;
-use crate::skills::permissions::{PermissionChecker, PermissionUi};
+use crate::skills::permissions::{ExecutionMode, PermissionChecker, PermissionUi};
 use crate::skills::registry::SkillRegistry;
 use crate::tools::primitive::ToolRegistry;
 
@@ -123,6 +123,12 @@ impl HeadlessRuntime {
                 .join("skills_state")
                 .join("trusted_skills.json"),
         );
+            permissions
+                .set_mode(match cfg.app.execution_mode.to_lowercase().as_str() {
+                    "freerun" | "free_run" | "free-run" => ExecutionMode::FreeRun,
+                    _ => ExecutionMode::Leashed,
+                })
+                .await;
         if let Some(ui) = permission_ui {
             permissions.set_permission_ui(ui);
         }

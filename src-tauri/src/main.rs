@@ -372,9 +372,9 @@ fn main() {
                 app.handle().clone(),
             ));
             checker_for_setup.set_event_sink(event_sink.clone());
-            channel_manager_for_setup.set_event_sink(event_sink);
-            scheduler_for_setup.start(app.handle().clone());
-            bridge_manager.start();
+            channel_manager_for_setup.set_event_sink(event_sink.clone());
+            scheduler_for_setup.start(Some(event_sink));
+            bridge_manager.clone().start();
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -16,8 +16,6 @@ use crate::skills::permissions::{ExecutionMode, PermissionChecker};
 use crate::skills::registry::InstalledSkill;
 use crate::workspace::backup::{export_workspace_default, import_workspace_from_path};
 
-const DEFAULT_WEIXIN_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
-
 #[derive(Clone)]
 pub struct AppState {
     pub alpha: Arc<AlphaPup>,
@@ -694,7 +692,7 @@ pub async fn quick_set_model(state: State<'_, AppState>, model: String) -> Resul
 
 #[tauri::command]
 pub async fn get_bridge_config() -> Result<BridgeConfig, String> {
-    Ok(crate::config::load().bridge.unwrap_or_default())
+    Ok(crate::bridge::control::get_bridge_config())
 }
 
 #[tauri::command]
@@ -702,21 +700,16 @@ pub async fn save_bridge_config(
     state: State<'_, AppState>,
     config: BridgeConfig,
 ) -> Result<(), String> {
-    let mut cfg = crate::config::load();
-    cfg.bridge = Some(config.clone());
-    crate::config::save(&cfg).map_err(|e| e.to_string())?;
-    state.bridge_manager.restart(config).await;
-    Ok(())
+    crate::bridge::control::save_bridge_config(Some(&state.bridge_manager), config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_bridge_status(
     state: State<'_, AppState>,
 ) -> Result<Vec<BridgeConnectionStatus>, String> {
-    state
-        .alpha
-        .memory
-        .list_bridge_connections()
+    crate::bridge::control::get_bridge_status(&state.alpha.memory)
         .await
         .map_err(|e| e.to_string())
 }
@@ -731,22 +724,15 @@ pub async fn start_weixin_qr_login(
     bot_type: Option<String>,
     force: Option<bool>,
 ) -> Result<crate::bridge::weixin::WeixinQrStartResult, String> {
-    let base_url = if base_url.trim().is_empty() {
-        DEFAULT_WEIXIN_BASE_URL.to_string()
-    } else {
-        base_url
-    };
-    state
-        .bridge_manager
-        .weixin_service()
-        .start_qr_login(
-            &base_url,
-            proxy_url.as_deref(),
-            route_tag.as_deref(),
-            account_id.as_deref(),
-            bot_type.as_deref(),
-            force.unwrap_or(false),
-        )
+    crate::bridge::control::start_weixin_qr_login(
+        &state.bridge_manager.weixin_service(),
+        base_url,
+        proxy_url,
+        route_tag,
+        account_id,
+        bot_type,
+        force.unwrap_or(false),
+    )
         .await
         .map_err(|e| e.to_string())
 }
@@ -761,40 +747,18 @@ pub async fn wait_weixin_qr_login(
     bot_type: Option<String>,
     timeout_ms: Option<i64>,
 ) -> Result<crate::bridge::weixin::WeixinQrWaitResult, String> {
-    let base_url = if base_url.trim().is_empty() {
-        DEFAULT_WEIXIN_BASE_URL.to_string()
-    } else {
-        base_url
-    };
-    let service = state.bridge_manager.weixin_service();
-    let result = service
-        .wait_qr_login(
-            &base_url,
-            proxy_url.as_deref(),
-            route_tag.as_deref(),
-            &session_key,
-            bot_type.as_deref(),
-            timeout_ms,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if result.connected {
-        let mut cfg = crate::config::load();
-        let next_bridge = service
-            .apply_login_result(
-                cfg.bridge.unwrap_or_default(),
-                &result,
-                proxy_url.clone(),
-                route_tag.clone(),
-            )
-            .map_err(|e| e.to_string())?;
-        cfg.bridge = Some(next_bridge.clone());
-        crate::config::save(&cfg).map_err(|e| e.to_string())?;
-        state.bridge_manager.restart(next_bridge).await;
-    }
-
-    Ok(result)
+    crate::bridge::control::wait_weixin_qr_login(
+        &state.bridge_manager.weixin_service(),
+        Some(&state.bridge_manager),
+        base_url,
+        proxy_url,
+        route_tag,
+        session_key,
+        bot_type,
+        timeout_ms,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -802,11 +766,11 @@ pub async fn cancel_weixin_qr_login(
     state: State<'_, AppState>,
     session_key: String,
 ) -> Result<(), String> {
-    state
-        .bridge_manager
-        .weixin_service()
-        .cancel_qr_login(&session_key)
-        .await;
+    crate::bridge::control::cancel_weixin_qr_login(
+        &state.bridge_manager.weixin_service(),
+        &session_key,
+    )
+    .await;
     Ok(())
 }
 
@@ -814,7 +778,9 @@ pub async fn cancel_weixin_qr_login(
 pub async fn list_weixin_accounts(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::bridge::weixin::StoredWeixinAccount>, String> {
-    Ok(state.bridge_manager.weixin_service().list_accounts())
+    Ok(crate::bridge::control::list_weixin_accounts(
+        &state.bridge_manager.weixin_service(),
+    ))
 }
 
 #[tauri::command]
@@ -822,15 +788,13 @@ pub async fn activate_weixin_account(
     state: State<'_, AppState>,
     account_id: String,
 ) -> Result<BridgeConfig, String> {
-    let service = state.bridge_manager.weixin_service();
-    let mut cfg = crate::config::load();
-    let next_bridge = service
-        .activate_account(cfg.bridge.unwrap_or_default(), &account_id)
-        .map_err(|e| e.to_string())?;
-    cfg.bridge = Some(next_bridge.clone());
-    crate::config::save(&cfg).map_err(|e| e.to_string())?;
-    state.bridge_manager.restart(next_bridge.clone()).await;
-    Ok(next_bridge)
+    crate::bridge::control::activate_weixin_account(
+        &state.bridge_manager.weixin_service(),
+        Some(&state.bridge_manager),
+        &account_id,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ─── Conversation search ──────────────────────────────────────────────────────

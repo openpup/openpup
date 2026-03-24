@@ -2985,10 +2985,12 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "cron",
  "dirs 5.0.1",
  "futures-util",
  "libloading 0.8.9",
  "petgraph",
+ "qrcode",
  "rand 0.8.5",
  "reqwest 0.11.27",
  "rmcp",
@@ -3000,6 +3002,19 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "openpup-daemon"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "openpup-core",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -159,7 +159,7 @@ enabled = ["alpha", "dev", "writer", "ops", "research", "life_admin"]
 
 ## CLI 用法
 
-CLI 现在是 **headless OpenPup**：与桌面端共享同一份 `~/.openpup/` 工作区，读取同一套 `config.toml`、`database.db`、`mcp_servers.json` 与 `skills_state/`。这意味着在终端里使用 `chat`、`ask`、`skill`、`memory` 时，走的是和桌面端一致的核心运行管线，而不是单独的轻量实现。
+CLI 现在是 **headless OpenPup**：与桌面端共享同一份 `~/.openpup/` 工作区，读取同一套 `config.toml`、`database.db`、`mcp_servers.json` 与 `skills_state/`。在 v2 中，CLI 默认优先连接本地 `openpupd` daemon，把会话、bridge、Pack Channel 与 scheduler 交给常驻进程维持；只有显式传 `--local` 或 daemon 不可用时，才退回到当前进程内运行。
 
 ```bash
 # 对话
@@ -167,6 +167,7 @@ openpup chat                          # 与 Alpha Pup 对话
 openpup chat --pup dev                # 直接路由到 Dev Pup
 openpup ask "帮我总结今天的待办"       # 单次提问，适合脚本或快速调用
 openpup ask "检查这个报错" --pup dev  # 单次提问并强制路由到指定 Pup
+openpup --local status                # 显式绕过 daemon，走本地 fallback
 
 # 记忆管理
 openpup memory list                   # 浏览长期记忆
@@ -180,12 +181,36 @@ openpup skill run my_skill --input "上下文文本"
 
 # 状态概览
 openpup status
+
+# Daemon
+openpup daemon start                  # 启动本地 openpupd
+openpup daemon status                 # 查看 PID / socket / 健康状态
+openpup daemon logs                   # 查看 daemon 日志
+openpup daemon stop                   # 停止 daemon
+
+# Bridge
+openpup bridge status                 # 查看 bridge 连接状态
+openpup bridge config                 # 查看当前 bridge 配置
+openpup bridge reload                 # 按最新配置重载 bridge
+openpup bridge weixin qr-start        # 发起微信二维码登录
+openpup bridge weixin qr-wait <key>   # 轮询登录结果
+openpup bridge weixin accounts        # 查看已保存微信账号
+
+# Pack Channel
+openpup channel list --limit 20       # 查看最近频道
+openpup channel show <channel_id>     # 查看频道详情 / plan / 消息
+openpup channel watch <channel_id>    # 轮询观察频道进度
+openpup channel continue <id> "继续"  # 继续执行
+openpup channel request-changes <id> "请补充来源"
+openpup channel comment <id> "我建议改成表格"
 ```
 
 补充说明：
 
 - `openpup chat` 和 `openpup ask` 都会走 Alpha/多 Pup 路由，并共享桌面端已有对话上下文与长期记忆。
 - `openpup skill run` 走真实技能执行器，会读取与桌面端一致的技能注册信息和 MCP 配置。
+- `openpup daemon start` 后，Weixin / Telegram bridge、Pack Channel 控制面与 scheduler 会在后台持续运行，不依赖桌面端窗口存活。
+- `openpup bridge ...` 与 `openpup channel ...` 走 daemon 控制面；桌面端与无界面模式复用同一套 bridge 配置与频道数据。
 - 在 `leashed` 模式下，CLI 会在终端内提示权限确认；配置来源与桌面端保持一致。
 
 ---
