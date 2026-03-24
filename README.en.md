@@ -80,7 +80,7 @@ Core: 7 pre-built autonomous capability packages ("Hands") — lead generation, 
 - **Leashed / FreeRun modes** — confirm every action, or let pups act autonomously
 - **Permission system** — risk-tiered (high/medium/low) with optional trust for recurring actions
 - **Task tracker** — create and track tasks with lifecycle (pending → in_progress → done/failed)
-- **CLI** — full terminal REPL (`openpup chat`) using the same local database
+- **CLI** — a headless OpenPup runtime that shares the same config, memory, skills, MCP, and Alpha routing stack
 - **Workspace backup** — export/import your entire `~/.openpup/` as a tarball
 - **Plugin API** — write custom pups as native `.dylib`/`.so`/`.dll` plugins
 - **Themes** — GitHub-style dark and light modes
@@ -155,10 +155,15 @@ Full reference template: [`workspace/config.toml`](workspace/config.toml)
 
 ## CLI Usage
 
+The CLI is now a **headless OpenPup** runtime. It shares the same `~/.openpup/` workspace as the desktop app, reading the same `config.toml`, `database.db`, `mcp_servers.json`, and `skills_state/`. In v2, the CLI is daemon-first: it prefers talking to the local `openpupd` process so sessions, bridges, Pack Channels, and the scheduler can stay alive across commands. It only falls back to in-process execution when you pass `--local` or when the daemon is unavailable.
+
 ```bash
 # Chat
 openpup chat                          # chat with Alpha Pup
 openpup chat --pup dev                # route directly to Dev Pup
+openpup ask "summarize my open tasks" # one-shot prompt, good for scripts
+openpup ask "inspect this error" --pup dev
+openpup --local status                # bypass daemon and use local fallback
 
 # Memory
 openpup memory list                   # browse long-term memories
@@ -172,7 +177,37 @@ openpup skill run my_skill --input "context text"
 
 # Overview
 openpup status                        # memory count, active pups, config summary
+
+# Daemon
+openpup daemon start                  # start the local openpupd
+openpup daemon status                 # inspect PID / socket / health
+openpup daemon logs                   # print daemon logs
+openpup daemon stop                   # stop the daemon
+
+# Bridge
+openpup bridge status                 # inspect bridge connection state
+openpup bridge config                 # print current bridge config
+openpup bridge reload                 # restart bridges from latest config
+openpup bridge weixin qr-start        # begin Weixin QR login
+openpup bridge weixin qr-wait <key>   # poll login result
+openpup bridge weixin accounts        # list saved Weixin accounts
+
+# Pack Channel
+openpup channel list --limit 20       # list recent channels
+openpup channel show <channel_id>     # show details / plan / messages
+openpup channel watch <channel_id>    # watch channel progress
+openpup channel continue <id> "continue"
+openpup channel request-changes <id> "please add sources"
+openpup channel comment <id> "suggest using a table"
 ```
+
+Notes:
+
+- `openpup chat` and `openpup ask` go through the same Alpha / multi-pup routing pipeline and reuse existing desktop conversation context and long-term memory.
+- `openpup skill run` uses the real skill executor and reads the same skill registry and MCP configuration as the desktop app.
+- After `openpup daemon start`, the Weixin / Telegram bridges, Pack Channel control plane, and scheduler keep running in the background without depending on the desktop window.
+- `openpup bridge ...` and `openpup channel ...` talk to the daemon control plane, while sharing the same bridge config and channel data as the desktop app.
+- In `leashed` mode, the CLI asks for permission directly in the terminal, while keeping the same config source as the desktop app.
 
 ---
 

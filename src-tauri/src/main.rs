@@ -9,6 +9,8 @@ mod crypto;
 mod llm;
 mod mcp;
 mod memory;
+mod runtime;
+mod runtime_tauri;
 mod skills;
 mod tools;
 mod workspace;
@@ -40,7 +42,7 @@ use tools::primitive::ToolRegistry;
 fn init_logging(workspace_root: &std::path::Path) {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-    let log_dir = workspace_root.to_path_buf();
+    let log_dir = workspace_root.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
 
     // Non-blocking file appender — rotates daily, keeps ~7 files
@@ -364,12 +366,19 @@ fn main() {
             commands::clear_pup_history,
             commands::compress_pup_context,
             commands::get_context_stats,
+            commands::get_token_usage,
+            commands::reset_token_usage,
         ])
         .setup(move |app| {
-            checker_for_setup.init_handle(app.handle().clone());
-            channel_manager_for_setup.init_handle(app.handle().clone());
-            scheduler_for_setup.start(app.handle().clone());
-            bridge_manager.start();
+            let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
+                app.handle().clone(),
+            ));
+            checker_for_setup.set_event_sink(event_sink.clone());
+            channel_manager_for_setup.set_event_sink(event_sink.clone());
+            tauri::async_runtime::spawn(async move {
+                scheduler_for_setup.start(Some(event_sink));
+                bridge_manager.clone().start();
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -4,13 +4,13 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde_json::Value;
-use tauri::Emitter;
 use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::channel::heartbeat::HeartbeatMonitor;
 use crate::channel::types::{ChannelCompletedPayload, ChannelMessagePayload, ChannelWorkflowState};
 use crate::memory::system::MemorySystem;
+use crate::runtime::{emit_event, SharedEventSink};
 
 #[derive(Debug)]
 pub enum ReviewDecision {
@@ -36,8 +36,8 @@ struct PendingReview {
 #[derive(Clone)]
 pub struct ChannelManager {
     memory: Arc<MemorySystem>,
-    /// Lazily initialised after Tauri setup.
-    app_handle: Arc<OnceLock<tauri::AppHandle>>,
+    /// Optional event sink used by desktop runtimes.
+    event_sink: Arc<OnceLock<SharedEventSink>>,
     /// Broadcast senders keyed by channel_id. Removed when channel is completed.
     senders: Arc<RwLock<HashMap<String, broadcast::Sender<ChannelMessagePayload>>>>,
     review_sessions: Arc<Mutex<HashMap<String, PendingReview>>>,
@@ -48,16 +48,15 @@ impl ChannelManager {
     pub fn new(memory: Arc<MemorySystem>) -> Self {
         Self {
             memory,
-            app_handle: Arc::new(OnceLock::new()),
+            event_sink: Arc::new(OnceLock::new()),
             senders: Arc::new(RwLock::new(HashMap::new())),
             review_sessions: Arc::new(Mutex::new(HashMap::new())),
             monitor: Arc::new(HeartbeatMonitor::new()),
         }
     }
 
-    /// Initialise the AppHandle. Call this once from Tauri's `setup` closure.
-    pub fn init_handle(&self, handle: tauri::AppHandle) {
-        let _ = self.app_handle.set(handle);
+    pub fn set_event_sink(&self, sink: SharedEventSink) {
+        let _ = self.event_sink.set(sink);
     }
 
     /// Create a new channel, register a broadcast sender, and return the channel id.
@@ -150,8 +149,8 @@ impl ChannelManager {
         }
 
         // Emit Tauri event if handle is available
-        if let Some(app) = self.app_handle.get() {
-            let _ = app.emit("channel_message", payload);
+        if let Some(sink) = self.event_sink.get() {
+            emit_event(sink.as_ref(), "channel_message", payload);
         }
 
         Ok(msg_id)
@@ -219,9 +218,9 @@ impl ChannelManager {
             )
             .await?;
 
-        if let Some(app) = self.app_handle.get() {
+        if let Some(sink) = self.event_sink.get() {
             if let Some(state) = self.memory.get_channel_workflow_state(channel_id).await? {
-                let _ = app.emit("channel_workflow_updated", state);
+                emit_event(sink.as_ref(), "channel_workflow_updated", state);
             }
         }
 
@@ -363,8 +362,9 @@ impl ChannelManager {
         self.clear_review_session(channel_id).await;
         self.memory.complete_channel(channel_id).await?;
 
-        if let Some(app) = self.app_handle.get() {
-            let _ = app.emit(
+        if let Some(sink) = self.event_sink.get() {
+            emit_event(
+                sink.as_ref(),
                 "channel_completed",
                 ChannelCompletedPayload {
                     channel_id: channel_id.to_string(),

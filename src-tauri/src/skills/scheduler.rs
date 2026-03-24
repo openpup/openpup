@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use futures_util::future::join_all;
-use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use tracing::warn;
@@ -11,6 +10,7 @@ use tracing::warn;
 use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
+use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
 use crate::skills::job_registry::{is_due, JobMode, JobRegistry, ScheduledJob};
 use crate::skills::permissions::PermissionChecker;
@@ -29,13 +29,13 @@ impl SkillScheduler {
     ///
     /// Each due job is spawned as an independent Tokio task so a slow LLM call
     /// never blocks the scheduler loop or delays other jobs.
-    pub fn start(self, app_handle: AppHandle) {
+    pub fn start(self, events: Option<SharedEventSink>) {
         let executor = self.executor;
         let memory = self.memory;
         let file_layer = self.file_layer;
         let jobs_path = self.jobs_path;
 
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let mut last_heartbeat: Option<chrono::DateTime<Utc>> = None;
             let job_registry = JobRegistry::new(jobs_path);
 
@@ -53,9 +53,10 @@ impl SkillScheduler {
                     let executor = executor.clone();
                     let memory = memory.clone();
                     let file_layer = file_layer.clone();
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tick_alpha_heartbeat(&executor, &memory, &file_layer, &handle).await;
+                    let heartbeat_events = events.clone();
+                    tokio::spawn(async move {
+                        tick_alpha_heartbeat(&executor, &memory, &file_layer, heartbeat_events)
+                            .await;
                     });
                 }
 
@@ -66,9 +67,9 @@ impl SkillScheduler {
                     if is_due(&job.schedule, &now) {
                         let executor = executor.clone();
                         let memory = memory.clone();
-                        let handle = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_job(job, &executor, &memory, &handle).await;
+                        let job_events = events.clone();
+                        tokio::spawn(async move {
+                            run_job(job, &executor, &memory, job_events).await;
                         });
                     }
                 }
@@ -83,16 +84,19 @@ async fn run_job(
     job: ScheduledJob,
     executor: &Arc<SkillExecutor>,
     memory: &Arc<MemorySystem>,
-    app_handle: &AppHandle,
+    events: Option<SharedEventSink>,
 ) {
     if job.steps.is_empty() {
         return;
     }
 
-    let _ = app_handle.emit(
-        "scheduled_job_started",
-        serde_json::json!({ "id": job.id, "name": job.name }),
-    );
+    if let Some(sink) = events.as_ref() {
+        emit_event(
+            sink.as_ref(),
+            "scheduled_job_started",
+            serde_json::json!({ "id": job.id, "name": job.name }),
+        );
+    }
 
     let run_id = Uuid::new_v4().to_string();
     let _ = memory
@@ -114,15 +118,18 @@ async fn run_job(
         .complete_skill_run(&run_id, &status, &output_preview)
         .await;
 
-    let _ = app_handle.emit(
-        "scheduled_job_completed",
-        serde_json::json!({
-            "id": job.id,
-            "name": job.name,
-            "status": status,
-            "output": output,
-        }),
-    );
+    if let Some(sink) = events.as_ref() {
+        emit_event(
+            sink.as_ref(),
+            "scheduled_job_completed",
+            serde_json::json!({
+                "id": job.id,
+                "name": job.name,
+                "status": status,
+                "output": output,
+            }),
+        );
+    }
 }
 
 /// Run steps serially; a step with an empty `input` inherits the previous
@@ -187,7 +194,7 @@ async fn tick_alpha_heartbeat(
     executor: &Arc<SkillExecutor>,
     memory: &Arc<MemorySystem>,
     file_layer: &Arc<FileLayer>,
-    app_handle: &AppHandle,
+    events: Option<SharedEventSink>,
 ) {
     let owner_profile = file_layer.read_owner_profile().unwrap_or_default();
     let recent_convs = memory
@@ -257,5 +264,7 @@ async fn tick_alpha_heartbeat(
     let _ = memory
         .complete_skill_run(&run_id, "completed", &response_preview)
         .await;
-    let _ = app_handle.emit("heartbeat_completed", serde_json::json!({}));
+    if let Some(sink) = events.as_ref() {
+        emit_event(sink.as_ref(), "heartbeat_completed", serde_json::json!({}));
+    }
 }

@@ -18,6 +18,7 @@ use self::telegram::TelegramBridge;
 use self::weixin::{WeixinBridge, WeixinService};
 
 pub mod auth;
+pub mod control;
 pub mod discord;
 pub mod formatter;
 pub mod slack;
@@ -28,7 +29,7 @@ pub mod weixin;
 pub struct BridgeManager {
     config: RwLock<BridgeConfig>,
     alpha: Arc<AlphaPup>,
-    tasks: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     weixin_service: Arc<WeixinService>,
 }
 
@@ -76,7 +77,7 @@ impl BridgeManager {
     }
 
     pub fn start(self: Arc<Self>) {
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let config = self.current_config();
             self.apply_config_state(&config).await;
             self.run_with_config(config).await;
@@ -91,6 +92,16 @@ impl BridgeManager {
         self.stop_tasks().await;
         self.apply_config_state(&config).await;
         self.run_with_config(config).await;
+    }
+
+    pub async fn stop(self: &Arc<Self>) {
+        let config = BridgeConfig::default();
+        {
+            let mut guard = self.config.write().expect("bridge config lock poisoned");
+            *guard = config.clone();
+        }
+        self.stop_tasks().await;
+        self.apply_config_state(&config).await;
     }
 
     async fn stop_tasks(&self) {
@@ -136,7 +147,7 @@ impl BridgeManager {
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<OutboundMessage>(256);
         let (status_tx, mut status_rx) = mpsc::channel::<BridgeStatusEvent>(32);
         let mut outbound_routes: HashMap<Platform, mpsc::Sender<OutboundMessage>> = HashMap::new();
-        let mut handles: Vec<tauri::async_runtime::JoinHandle<()>> = Vec::new();
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
         if let Some(tg_cfg) = config.telegram.clone() {
             let tx = inbound_tx.clone();
@@ -149,7 +160,7 @@ impl BridgeManager {
 
             let alpha_for_sender = alpha.clone();
             let sender = bridge.clone();
-            handles.push(tauri::async_runtime::spawn(async move {
+            handles.push(tokio::spawn(async move {
                 while let Some(msg) = tg_out_rx.recv().await {
                     if let Err(e) = sender.send(&msg).await {
                         let _ = alpha_for_sender
@@ -182,7 +193,7 @@ impl BridgeManager {
                 }
             }));
 
-            handles.push(tauri::async_runtime::spawn(async move {
+            handles.push(tokio::spawn(async move {
                 if let Err(e) = bridge.start_polling().await {
                     let _ = status_sender
                         .send(BridgeStatusEvent {
@@ -209,7 +220,7 @@ impl BridgeManager {
 
             let alpha_for_sender = alpha.clone();
             let sender = bridge.clone();
-            handles.push(tauri::async_runtime::spawn(async move {
+            handles.push(tokio::spawn(async move {
                 while let Some(msg) = wx_out_rx.recv().await {
                     if let Err(e) = sender.send(&msg).await {
                         let _ = alpha_for_sender
@@ -242,7 +253,7 @@ impl BridgeManager {
                 }
             }));
 
-            handles.push(tauri::async_runtime::spawn(async move {
+            handles.push(tokio::spawn(async move {
                 if let Err(e) = bridge.start_polling().await {
                     let _ = status_sender
                         .send(BridgeStatusEvent {
@@ -258,7 +269,7 @@ impl BridgeManager {
             }));
         }
 
-        handles.push(tauri::async_runtime::spawn(async move {
+        handles.push(tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
                 if let Some(route_tx) = outbound_routes.get(&msg.platform) {
                     let _ = route_tx.send(msg).await;
@@ -267,7 +278,7 @@ impl BridgeManager {
         }));
 
         let status_alpha = self.alpha.clone();
-        handles.push(tauri::async_runtime::spawn(async move {
+        handles.push(tokio::spawn(async move {
             while let Some(event) = status_rx.recv().await {
                 let _ = status_alpha
                     .memory
@@ -283,7 +294,7 @@ impl BridgeManager {
         }));
 
         let manager = self.clone();
-        handles.push(tauri::async_runtime::spawn(async move {
+        handles.push(tokio::spawn(async move {
             while let Some(inbound) = inbound_rx.recv().await {
                 let _ = manager
                     .alpha
@@ -329,7 +340,7 @@ impl BridgeManager {
                     continue;
                 }
 
-                tauri::async_runtime::spawn(async move {
+                tokio::spawn(async move {
                     let _ = out_tx
                         .send(OutboundMessage {
                             platform: platform.clone(),
@@ -358,7 +369,7 @@ impl BridgeManager {
                                 let out_tx = out_tx.clone();
                                 let platform = platform.clone();
                                 let chat_id = chat_id.clone();
-                                tauri::async_runtime::spawn(async move {
+                                tokio::spawn(async move {
                                     let _ = out_tx
                                         .send(OutboundMessage {
                                             platform,
@@ -381,7 +392,7 @@ impl BridgeManager {
                             let out_tx = out_tx.clone();
                             let platform = platform.clone();
                             let chat_id = chat_id.clone();
-                            tauri::async_runtime::spawn(async move {
+                            tokio::spawn(async move {
                                 let _ = out_tx
                                     .send(OutboundMessage {
                                         platform,

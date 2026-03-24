@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Shared abort flag passed into `chat_stream`.
 pub type AbortFlag = Arc<AtomicBool>;
@@ -19,6 +19,48 @@ struct EmbedResponse {
 #[derive(Deserialize)]
 struct EmbedData {
     embedding: Vec<f32>,
+}
+
+// ── Token usage tracking ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// Thread-safe cumulative token counters.
+#[derive(Debug, Default)]
+pub struct CumulativeUsage {
+    pub prompt_tokens: AtomicU64,
+    pub completion_tokens: AtomicU64,
+    pub total_tokens: AtomicU64,
+}
+
+impl CumulativeUsage {
+    fn accumulate(&self, usage: &TokenUsage) {
+        self.prompt_tokens
+            .fetch_add(usage.prompt_tokens, Ordering::Relaxed);
+        self.completion_tokens
+            .fetch_add(usage.completion_tokens, Ordering::Relaxed);
+        self.total_tokens
+            .fetch_add(usage.total_tokens, Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: self.prompt_tokens.load(Ordering::Relaxed),
+            completion_tokens: self.completion_tokens.load(Ordering::Relaxed),
+            total_tokens: self.total_tokens.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn reset(&self) {
+        self.prompt_tokens.store(0, Ordering::Relaxed);
+        self.completion_tokens.store(0, Ordering::Relaxed);
+        self.total_tokens.store(0, Ordering::Relaxed);
+    }
 }
 
 // ── Public message type ─────────────────────────────────────────────────────
@@ -79,6 +121,8 @@ pub struct LlmClient {
     cache: Arc<Mutex<VecDeque<(String, String)>>>,
     /// Shared reqwest client — reuses connection pools across calls.
     http: reqwest::Client,
+    /// Cumulative token usage across all API calls in this session.
+    pub usage: Arc<CumulativeUsage>,
 }
 
 impl LlmClient {
@@ -130,6 +174,7 @@ impl LlmClient {
             })),
             cache: Arc::new(Mutex::new(VecDeque::new())),
             http: reqwest::Client::new(),
+            usage: Arc::new(CumulativeUsage::default()),
         }
     }
 
@@ -272,6 +317,11 @@ impl LlmClient {
             .unwrap_or("")
             .to_string();
 
+        // Track token usage from the response
+        if let Some(u) = parse_usage(&val) {
+            self.usage.accumulate(&u);
+        }
+
         debug!("[llm] chat done: {} chars", text.len());
         self.insert_cache(cache_key, text.clone());
         Ok(text)
@@ -301,6 +351,7 @@ impl LlmClient {
           "model": model,
           "messages": messages_json(&messages),
           "stream": true,
+          "stream_options": { "include_usage": true },
         });
 
         let mut req = self.http.post(&url).json(&body);
@@ -325,6 +376,7 @@ impl LlmClient {
         let mut buf = String::new();
         let mut full = String::new();
         let mut chunk_count: usize = 0;
+        let mut stream_usage: Option<TokenUsage> = None;
 
         'outer: loop {
             // Timeout so the abort flag is checked even while waiting for the next byte chunk.
@@ -374,6 +426,10 @@ impl LlmClient {
                                 debug!("[llm] SSE error payload: {err}");
                                 return Err(anyhow!("API error in stream: {err}"));
                             }
+                            // Capture usage from the final chunk (sent when stream_options.include_usage is true)
+                            if let Some(u) = parse_usage(&val) {
+                                stream_usage = Some(u);
+                            }
                             let delta = &val["choices"][0]["delta"];
                             // Standard content token
                             if let Some(tok) = delta["content"].as_str() {
@@ -396,6 +452,15 @@ impl LlmClient {
                     }
                 }
             }
+        }
+
+        // Accumulate token usage if the API provided it
+        if let Some(ref u) = stream_usage {
+            debug!(
+                "[llm] stream usage: prompt={} completion={} total={}",
+                u.prompt_tokens, u.completion_tokens, u.total_tokens
+            );
+            self.usage.accumulate(u);
         }
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
@@ -455,6 +520,12 @@ impl LlmClient {
         }
 
         let val: serde_json::Value = resp.json().await.map_err(|e| anyhow!("parse: {e}"))?;
+
+        // Track token usage
+        if let Some(u) = parse_usage(&val) {
+            self.usage.accumulate(&u);
+        }
+
         let message = val["choices"][0]["message"].clone();
 
         let content = message["content"]
@@ -595,4 +666,14 @@ fn messages_json(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
         .iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect()
+}
+
+/// Extract token usage from an OpenAI-compatible API response JSON.
+fn parse_usage(val: &serde_json::Value) -> Option<TokenUsage> {
+    let u = val.get("usage")?;
+    Some(TokenUsage {
+        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
+        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
+        total_tokens: u["total_tokens"].as_u64().unwrap_or(0),
+    })
 }

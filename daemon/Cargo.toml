@@ -1,0 +1,21 @@
+[package]
+name = "openpup-daemon"
+version = "0.1.5"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "openpupd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive", "color"] }
+openpup-core = { path = "../core" }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
