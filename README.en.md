@@ -80,7 +80,7 @@ Core: 7 pre-built autonomous capability packages ("Hands") — lead generation, 
 - **Leashed / FreeRun modes** — confirm every action, or let pups act autonomously
 - **Permission system** — risk-tiered (high/medium/low) with optional trust for recurring actions
 - **Task tracker** — create and track tasks with lifecycle (pending → in_progress → done/failed)
-- **CLI** — full terminal REPL (`openpup chat`) using the same local database
+- **CLI** — a headless OpenPup runtime that shares the same config, memory, skills, MCP, and Alpha routing stack
 - **Workspace backup** — export/import your entire `~/.openpup/` as a tarball
 - **Plugin API** — write custom pups as native `.dylib`/`.so`/`.dll` plugins
 - **Themes** — GitHub-style dark and light modes
@@ -155,10 +155,14 @@ Full reference template: [`workspace/config.toml`](workspace/config.toml)
 
 ## CLI Usage
 
+The CLI is now a **headless OpenPup** runtime. It shares the same `~/.openpup/` workspace as the desktop app, reading the same `config.toml`, `database.db`, `mcp_servers.json`, and `skills_state/`. In practice, `chat`, `ask`, `skill`, and `memory` commands now use the same core runtime as the desktop app instead of a separate lightweight implementation.
+
 ```bash
 # Chat
 openpup chat                          # chat with Alpha Pup
 openpup chat --pup dev                # route directly to Dev Pup
+openpup ask "summarize my open tasks" # one-shot prompt, good for scripts
+openpup ask "inspect this error" --pup dev
 
 # Memory
 openpup memory list                   # browse long-term memories
@@ -173,6 +177,12 @@ openpup skill run my_skill --input "context text"
 # Overview
 openpup status                        # memory count, active pups, config summary
 ```
+
+Notes:
+
+- `openpup chat` and `openpup ask` go through the same Alpha / multi-pup routing pipeline and reuse existing desktop conversation context and long-term memory.
+- `openpup skill run` uses the real skill executor and reads the same skill registry and MCP configuration as the desktop app.
+- In `leashed` mode, the CLI asks for permission directly in the terminal, while keeping the same config source as the desktop app.
 
 ---
 
