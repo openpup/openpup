@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -21,6 +20,7 @@ use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::{MemorySystem, TaskRecord};
+use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
 use crate::tools::primitive::ToolPermissions;
 
@@ -287,7 +287,7 @@ impl AlphaPup {
         &self,
         msg: String,
         forced_pup: Option<String>,
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
     ) {
         debug!(
             "[alpha] process_user_message_stream: msg_len={} forced_pup={forced_pup:?}",
@@ -295,7 +295,7 @@ impl AlphaPup {
         );
         self.abort_flag.store(false, Ordering::Relaxed);
 
-        let result = self.do_stream(&msg, forced_pup, app_handle).await;
+        let result = self.do_stream(&msg, forced_pup, events.clone()).await;
         match result {
             Ok((reply, pup_key)) => {
                 debug!(
@@ -309,7 +309,8 @@ impl AlphaPup {
                     "[alpha] emitting stream_done pup={} aborted={aborted}",
                     pup_display_name(&pup_key)
                 );
-                let _ = app_handle.emit(
+                emit_event(
+                    events.as_ref(),
                     "stream_done",
                     StreamDonePayload {
                         pup_key: pup_key.clone(),
@@ -329,7 +330,7 @@ impl AlphaPup {
                     let msg_clone = msg.clone();
                     let pup_key_clone = pup_key.clone();
                     let reply_clone = reply.clone();
-                    tauri::async_runtime::spawn(async move {
+                    tokio::spawn(async move {
                         let _ = self_clone
                             .post_process_conversation_turn(
                                 &pup_key_clone,
@@ -342,7 +343,7 @@ impl AlphaPup {
             }
             Err(e) => {
                 debug!("[alpha] do_stream error: {e}");
-                let _ = app_handle.emit("stream_error", e.to_string());
+                emit_event(events.as_ref(), "stream_error", e.to_string());
             }
         }
     }
@@ -351,7 +352,7 @@ impl AlphaPup {
         &self,
         msg: &str,
         forced_pup: Option<String>,
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
     ) -> Result<(String, String)> {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.get_owner_summary(&owner_md).await;
@@ -383,7 +384,8 @@ impl AlphaPup {
         debug!("[alpha] do_stream: pup_key={pup_key:?}");
 
         // Notify the UI which pup is handling this request (now that we know).
-        let _ = app_handle.emit(
+        emit_event(
+            events.as_ref(),
             "stream_activity",
             ActivityEvent {
                 kind: "routing".into(),
@@ -405,14 +407,14 @@ impl AlphaPup {
                 .filter(|s| !s.is_empty())
                 .collect();
             if required_pups.len() >= 2 {
-                let output = self.run_dag(msg, required_pups, app_handle).await?;
+                let output = self.run_dag(msg, required_pups, events.clone()).await?;
                 return Ok((output, pup_key));
             }
         }
 
         if let Some(skill_name) = pup_key.strip_prefix("skill:") {
-            let handle = app_handle.clone();
-            let handle2 = app_handle.clone();
+            let handle = events.clone();
+            let handle2 = events.clone();
             let run_id = Uuid::new_v4().to_string();
             let _ = self
                 .memory
@@ -424,10 +426,14 @@ impl AlphaPup {
                     skill_name,
                     msg,
                     Arc::new(move |tok: String, _is_reasoning: bool| {
-                        let _ = handle.emit("stream_token", tok);
+                        emit_event(handle.as_ref(), "stream_token", tok);
                     }),
                     Arc::new(move |kind: String, label: String| {
-                        let _ = handle2.emit("stream_activity", ActivityEvent { kind, label });
+                        emit_event(
+                            handle2.as_ref(),
+                            "stream_activity",
+                            ActivityEvent { kind, label },
+                        );
                     }),
                     self.abort_flag.clone(),
                 )
@@ -440,7 +446,8 @@ impl AlphaPup {
                 .memory
                 .complete_skill_run(&run_id, &status, &output)
                 .await;
-            let _ = app_handle.emit(
+            emit_event(
+                events.as_ref(),
                 "skill_run_completed",
                 serde_json::json!({
                     "skill_name": skill_name,
@@ -460,7 +467,7 @@ impl AlphaPup {
                     &pup_history,
                     &relevant_memories,
                     &pending_tasks,
-                    app_handle,
+                    events.clone(),
                 )
                 .await?;
             return Ok((reply, "alpha".to_string()));
@@ -512,8 +519,8 @@ impl AlphaPup {
             }
             msgs.push(serde_json::json!({ "role": "user", "content": task.intent }));
 
-            let handle = app_handle.clone();
-            let handle2 = app_handle.clone();
+            let handle = events.clone();
+            let handle2 = events.clone();
             let output = self
                 .run_agent_with_tools(
                     &pup_key,
@@ -521,10 +528,14 @@ impl AlphaPup {
                     &tool_perms,
                     None,
                     move |tok| {
-                        let _ = handle.emit("stream_token", tok);
+                        emit_event(handle.as_ref(), "stream_token", tok);
                     },
                     move |kind, label| {
-                        let _ = handle2.emit("stream_activity", ActivityEvent { kind, label });
+                        emit_event(
+                            handle2.as_ref(),
+                            "stream_activity",
+                            ActivityEvent { kind, label },
+                        );
                     },
                     &self.abort_flag,
                 )
@@ -547,7 +558,7 @@ impl AlphaPup {
                 &fallback_history,
                 &relevant_memories,
                 &pending_tasks,
-                app_handle,
+                events.clone(),
             )
             .await?;
         Ok((reply, "alpha".to_string()))
@@ -560,7 +571,7 @@ impl AlphaPup {
         history: &[LlmMessage],
         memories: &[String],
         pending_tasks: &[TaskRecord],
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
     ) -> Result<String> {
         let mut system_content = if owner_summary.contains("## Boundaries") {
             let summary = if owner_summary.chars().count() > 1000 {
@@ -633,9 +644,8 @@ impl AlphaPup {
             mcp: true,
         };
 
-        let handle = app_handle.clone();
-        let _handle2 = app_handle.clone();
-        let handle3 = app_handle.clone();
+        let handle = events.clone();
+        let handle3 = events.clone();
         self.run_agent_with_tools(
             "alpha",
             messages,
@@ -644,10 +654,14 @@ impl AlphaPup {
             move |tok| {
                 // Emit reasoning tokens separately if the LLM uses them.
                 // For now all tokens from the tool loop go to stream_token.
-                let _ = handle.emit("stream_token", tok);
+                emit_event(handle.as_ref(), "stream_token", tok);
             },
             move |kind, label| {
-                let _ = handle3.emit("stream_activity", ActivityEvent { kind, label });
+                emit_event(
+                    handle3.as_ref(),
+                    "stream_activity",
+                    ActivityEvent { kind, label },
+                );
             },
             &self.abort_flag,
         )
@@ -998,7 +1012,7 @@ impl AlphaPup {
         &self,
         msg: &str,
         required_pups: Vec<String>,
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
     ) -> Result<String> {
         let pup_list = required_pups
             .iter()
@@ -1006,7 +1020,8 @@ impl AlphaPup {
             .collect::<Vec<_>>()
             .join("、");
         debug!("[alpha] parallel_pack: pups={required_pups:?}");
-        let _ = app_handle.emit(
+        emit_event(
+            events.as_ref(),
             "stream_activity",
             ActivityEvent {
                 kind: "routing".into(),
@@ -1024,7 +1039,7 @@ impl AlphaPup {
             let msg_owned = msg.to_string();
             let pup_key_owned = pup_key.clone();
             let owner_ctx = owner_summary.clone();
-            let handle = tauri::async_runtime::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let result = self_clone
                     .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx)
                     .await
@@ -1048,7 +1063,8 @@ impl AlphaPup {
             }
         };
 
-        let _ = app_handle.emit(
+        emit_event(
+            events.as_ref(),
             "stream_activity",
             ActivityEvent {
                 kind: "routing".into(),
@@ -1163,7 +1179,7 @@ impl AlphaPup {
         layer: &[Subtask],
         dep_context: &HashMap<String, String>,
         owner_summary: &str,
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
         review_feedback: &HashMap<String, Vec<String>>,
         result_message_ids: &HashMap<String, String>,
     ) -> Vec<LayerExecutionResult> {
@@ -1188,8 +1204,8 @@ impl AlphaPup {
             let self_clone = self.clone();
             let owner_ctx = owner_summary.to_string();
             let ch_id = channel_id.to_string();
-            let app_clone = app_handle.clone();
-            let app_activity = app_handle.clone();
+            let app_clone = events.clone();
+            let app_activity = events.clone();
             let result_message_ids = result_message_ids.clone();
 
             let _ = self
@@ -1198,14 +1214,14 @@ impl AlphaPup {
                 .await;
 
             let cm_clone = self.channel_manager.clone();
-            let handle = tauri::async_runtime::spawn(async move {
+            let handle = tokio::spawn(async move {
                 cm_clone.monitor.register(&ch_id, &pup_key).await;
 
                 let hb_ch_id = ch_id.clone();
                 let hb_pup = pup_key.clone();
                 let hb_cm = cm_clone.clone();
                 let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
-                let _hb_handle = tauri::async_runtime::spawn(async move {
+                let _hb_handle = tokio::spawn(async move {
                     let mut interval =
                         tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
                     interval.tick().await;
@@ -1236,7 +1252,8 @@ impl AlphaPup {
                     full_msg.push_str(&feedback.join("\n"));
                 }
 
-                let _ = app_clone.emit(
+                emit_event(
+                    app_clone.as_ref(),
                     "stream_activity",
                     ActivityEvent {
                         kind: "routing".into(),
@@ -1268,12 +1285,15 @@ impl AlphaPup {
                                 let cm_emit = cm_activity.clone();
                                 let ch_emit = ch_activity.clone();
                                 let pup_emit = pup_activity.clone();
-                                tauri::async_runtime::spawn(async move {
+                                tokio::spawn(async move {
                                     let _ =
                                         cm_emit.post_activity(&ch_emit, &pup_emit, &entry).await;
                                 });
-                                let _ = app_activity
-                                    .emit("stream_activity", ActivityEvent { kind, label });
+                                emit_event(
+                                    app_activity.as_ref(),
+                                    "stream_activity",
+                                    ActivityEvent { kind, label },
+                                );
                             }
                         },
                     )
@@ -1401,7 +1421,7 @@ impl AlphaPup {
         &self,
         msg: &str,
         required_pups: Vec<String>,
-        app_handle: &tauri::AppHandle,
+        events: SharedEventSink,
     ) -> Result<String> {
         debug!("[alpha] run_dag: pups={required_pups:?}");
 
@@ -1413,7 +1433,7 @@ impl AlphaPup {
             Ok(l) => l,
             Err(e) => {
                 debug!("[alpha] run_dag: DAG build error ({e}), falling back to parallel pack");
-                return self.run_parallel_pack(msg, required_pups, app_handle).await;
+                return self.run_parallel_pack(msg, required_pups, events.clone()).await;
             }
         };
 
@@ -1428,7 +1448,7 @@ impl AlphaPup {
         self.memory.save_channel_plan(&plan).await?;
 
         // 4. Emit delegation_plan event
-        let _ = app_handle.emit("delegation_plan", &plan);
+        emit_event(events.as_ref(), "delegation_plan", &plan);
 
         // 5. Post Alpha briefing
         let briefing = format!(
@@ -1449,8 +1469,8 @@ impl AlphaPup {
         // 6. Spawn timeout monitor loop
         let monitor_channel_id = channel_id.clone();
         let monitor_cm = self.channel_manager.clone();
-        let monitor_app = app_handle.clone();
-        let timeout_handle = tauri::async_runtime::spawn(async move {
+        let monitor_app = events.clone();
+        let timeout_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 if let Ok(Some(state)) = monitor_cm.workflow_state(&monitor_channel_id).await {
@@ -1466,7 +1486,8 @@ impl AlphaPup {
                     let _ = monitor_cm
                         .post_status(&monitor_channel_id, &pup_id, "failed")
                         .await;
-                    let _ = monitor_app.emit(
+                    emit_event(
+                        monitor_app.as_ref(),
                         "stream_activity",
                         ActivityEvent {
                             kind: "routing".into(),
@@ -1527,7 +1548,7 @@ impl AlphaPup {
                         &rerun_layer,
                         &dep_context,
                         &owner_summary,
-                        app_handle,
+                        events.clone(),
                         &review_feedback,
                         &result_message_ids,
                     )
@@ -1657,7 +1678,7 @@ impl AlphaPup {
                                         &[target_subtask.clone()],
                                         &dep_context,
                                         &owner_summary,
-                                        app_handle,
+                                        events.clone(),
                                         &review_feedback,
                                         &result_message_ids,
                                     )
@@ -1718,7 +1739,8 @@ impl AlphaPup {
         timeout_handle.abort();
 
         // 9. Aggregate results
-        let _ = app_handle.emit(
+        emit_event(
+            events.as_ref(),
             "stream_activity",
             ActivityEvent {
                 kind: "routing".into(),
@@ -1789,7 +1811,7 @@ impl AlphaPup {
         let monitor_channel_id = channel_id.clone();
         let monitor_cm = self.channel_manager.clone();
         let timeout_progress = progress_hook.clone();
-        let timeout_handle = tauri::async_runtime::spawn(async move {
+        let timeout_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 let timed_out = monitor_cm.monitor.check_timeouts(&monitor_channel_id).await;
@@ -1857,14 +1879,14 @@ impl AlphaPup {
                     format!("{} 开始执行", pup_display_name(&pup_key)),
                 );
 
-                let handle = tauri::async_runtime::spawn(async move {
+                let handle = tokio::spawn(async move {
                     cm_clone.monitor.register(&ch_id, &pup_key).await;
 
                     let hb_ch_id = ch_id.clone();
                     let hb_pup = pup_key.clone();
                     let hb_cm = cm_clone.clone();
                     let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
-                    let _hb_handle = tauri::async_runtime::spawn(async move {
+                    let _hb_handle = tokio::spawn(async move {
                         let mut interval =
                             tokio::time::interval(crate::channel::heartbeat::HEARTBEAT_INTERVAL);
                         interval.tick().await;
@@ -2137,7 +2159,7 @@ impl AlphaPup {
                 let k = key.clone();
                 let m = msg.to_string();
                 let o = owner_summary.clone();
-                tauri::async_runtime::spawn(async move {
+                tokio::spawn(async move {
                     let result = s
                         .run_pup_for_channel(&k, &m, &o)
                         .await

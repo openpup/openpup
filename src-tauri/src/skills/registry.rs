@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::warn;
 
 // ── Skill manifest (TOML) ──────────────────────────────────────────────────────
 

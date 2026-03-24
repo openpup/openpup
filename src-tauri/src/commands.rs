@@ -54,9 +54,10 @@ pub async fn send_message(
     }
 
     let alpha = state.alpha.clone();
+    let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(app_handle));
     tauri::async_runtime::spawn(async move {
         alpha
-            .process_user_message_stream(input, forced_pup, &app_handle)
+            .process_user_message_stream(input, forced_pup, event_sink)
             .await;
     });
     Ok(())

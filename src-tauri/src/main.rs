@@ -9,6 +9,8 @@ mod crypto;
 mod llm;
 mod mcp;
 mod memory;
+mod runtime;
+mod runtime_tauri;
 mod skills;
 mod tools;
 mod workspace;
@@ -366,8 +368,11 @@ fn main() {
             commands::get_context_stats,
         ])
         .setup(move |app| {
-            checker_for_setup.init_handle(app.handle().clone());
-            channel_manager_for_setup.init_handle(app.handle().clone());
+            let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
+                app.handle().clone(),
+            ));
+            checker_for_setup.set_event_sink(event_sink.clone());
+            channel_manager_for_setup.set_event_sink(event_sink);
             scheduler_for_setup.start(app.handle().clone());
             bridge_manager.start();
             Ok(())

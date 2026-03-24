@@ -3,11 +3,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::Serialize;
-use tauri::Emitter;
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
+
+use crate::runtime::{emit_event, SharedEventSink};
 
 // ── Execution mode ─────────────────────────────────────────────────────────────
 
@@ -60,6 +62,11 @@ pub struct PermissionRequestPayload {
     pub details: PermissionDetails,
 }
 
+#[async_trait]
+pub trait PermissionUi: Send + Sync {
+    async fn request_permission(&self, payload: PermissionRequestPayload) -> Result<bool>;
+}
+
 // ── PermissionChecker ─────────────────────────────────────────────────────────
 
 /// All interior state is `Arc`-wrapped so `Clone` is cheap and correct.
@@ -69,8 +76,10 @@ pub struct PermissionRequestPayload {
 pub struct PermissionChecker {
     mode: Arc<RwLock<ExecutionMode>>,
     trusted_skills: Arc<RwLock<HashSet<String>>>,
-    /// Initialised once from `.setup()` via `init_handle()`.
-    app_handle: Arc<OnceLock<tauri::AppHandle>>,
+    /// Optional event sink for GUI-style permission requests.
+    event_sink: Arc<OnceLock<SharedEventSink>>,
+    /// Optional interactive permission UI for headless runtimes.
+    interactive_ui: Arc<Mutex<Option<Arc<dyn PermissionUi>>>>,
     /// In-flight requests awaiting user response.
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// Path to persist trusted skills JSON.
@@ -82,7 +91,8 @@ impl PermissionChecker {
         Self {
             mode: Arc::new(RwLock::new(ExecutionMode::Leashed)),
             trusted_skills: Arc::new(RwLock::new(HashSet::new())),
-            app_handle: Arc::new(OnceLock::new()),
+            event_sink: Arc::new(OnceLock::new()),
+            interactive_ui: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             trusted_skills_path: Arc::new(Mutex::new(None)),
         }
@@ -106,9 +116,14 @@ impl PermissionChecker {
         }
     }
 
-    /// Must be called once from Tauri's `setup()` closure.
-    pub fn init_handle(&self, handle: tauri::AppHandle) {
-        let _ = self.app_handle.set(handle);
+    pub fn set_event_sink(&self, sink: SharedEventSink) {
+        let _ = self.event_sink.set(sink);
+    }
+
+    pub fn set_permission_ui(&self, ui: Arc<dyn PermissionUi>) {
+        if let Ok(mut guard) = self.interactive_ui.lock() {
+            *guard = Some(ui);
+        }
     }
 
     // ── Public API ──────────────────────────────────────────────────────────────
@@ -194,16 +209,7 @@ impl PermissionChecker {
     // ── Internal ────────────────────────────────────────────────────────────────
 
     async fn request_user_confirmation(&self, skill_name: &str, action: &Action) -> Result<bool> {
-        let Some(handle) = self.app_handle.get() else {
-            // AppHandle not yet initialised — safe default: deny
-            return Ok(false);
-        };
-
         let request_id = Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel::<bool>();
-
-        self.pending.lock().unwrap().insert(request_id.clone(), tx);
-
         let payload = PermissionRequestPayload {
             request_id: request_id.clone(),
             skill_name: skill_name.to_string(),
@@ -222,8 +228,23 @@ impl PermissionChecker {
             },
         };
 
-        // Emit the event — the frontend will show the dialog
-        let _ = handle.emit("permission_request", &payload);
+        let interactive = self
+            .interactive_ui
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        if let Some(ui) = interactive {
+            return ui.request_permission(payload).await;
+        }
+
+        let Some(sink) = self.event_sink.get() else {
+            return Ok(false);
+        };
+
+        let (tx, rx) = oneshot::channel::<bool>();
+        self.pending.lock().unwrap().insert(request_id.clone(), tx);
+
+        emit_event(sink.as_ref(), "permission_request", payload);
 
         // Wait up to 5 minutes for the user to click Allow or Deny
         match timeout(Duration::from_secs(300), rx).await {

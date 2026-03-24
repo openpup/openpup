@@ -2965,18 +2965,41 @@ name = "openpup"
 version = "0.1.5"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "colored",
+ "openpup-core",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "openpup-core"
+version = "0.1.5"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
  "dirs 5.0.1",
  "futures-util",
+ "libloading 0.8.9",
+ "petgraph",
+ "rand 0.8.5",
  "reqwest 0.11.27",
- "rustyline",
+ "rmcp",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
  "toml 0.8.23",
+ "tracing",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
