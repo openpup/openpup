@@ -62,6 +62,9 @@ where
 pub async fn start_process() -> Result<()> {
     std::fs::create_dir_all(daemon_runtime_dir())?;
     let log_path = daemon_log_path();
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -79,9 +82,7 @@ pub async fn start_process() -> Result<()> {
         command.process_group(0);
     }
 
-    command
-        .spawn()
-        .context("failed to start daemon process")?;
+    command.spawn().context("failed to start daemon process")?;
 
     wait_until_ready(timeout).await
 }
@@ -183,6 +184,14 @@ fn daemon_start_command() -> (Command, Duration) {
     }
 
     let mut command = Command::new("cargo");
-    command.args(["run", "-p", "openpup-daemon", "--bin", "openpupd", "--", "serve"]);
+    command.args([
+        "run",
+        "-p",
+        "openpup-daemon",
+        "--bin",
+        "openpupd",
+        "--",
+        "serve",
+    ]);
     (command, Duration::from_secs(90))
 }

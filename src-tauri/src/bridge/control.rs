@@ -3,7 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::bridge::types::{BridgeConfig, BridgeConnectionStatus};
-use crate::bridge::weixin::{StoredWeixinAccount, WeixinQrStartResult, WeixinQrWaitResult, WeixinService};
+use crate::bridge::weixin::{
+    StoredWeixinAccount, WeixinQrStartResult, WeixinQrWaitResult, WeixinService,
+};
 use crate::bridge::BridgeManager;
 use crate::memory::system::MemorySystem;
 
@@ -112,7 +114,8 @@ pub async fn activate_weixin_account(
     account_id: &str,
 ) -> Result<BridgeConfig> {
     let mut cfg = crate::config::load();
-    let next_bridge = weixin_service.activate_account(cfg.bridge.unwrap_or_default(), account_id)?;
+    let next_bridge =
+        weixin_service.activate_account(cfg.bridge.unwrap_or_default(), account_id)?;
     cfg.bridge = Some(next_bridge.clone());
     crate::config::save(&cfg)?;
     if let Some(manager) = bridge_manager {

@@ -42,7 +42,7 @@ use tools::primitive::ToolRegistry;
 fn init_logging(workspace_root: &std::path::Path) {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-    let log_dir = workspace_root.to_path_buf();
+    let log_dir = workspace_root.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
 
     // Non-blocking file appender — rotates daily, keeps ~7 files
@@ -373,8 +373,10 @@ fn main() {
             ));
             checker_for_setup.set_event_sink(event_sink.clone());
             channel_manager_for_setup.set_event_sink(event_sink.clone());
-            scheduler_for_setup.start(Some(event_sink));
-            bridge_manager.clone().start();
+            tauri::async_runtime::spawn(async move {
+                scheduler_for_setup.start(Some(event_sink));
+                bridge_manager.clone().start();
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

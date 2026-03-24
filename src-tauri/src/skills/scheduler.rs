@@ -55,7 +55,8 @@ impl SkillScheduler {
                     let file_layer = file_layer.clone();
                     let heartbeat_events = events.clone();
                     tokio::spawn(async move {
-                        tick_alpha_heartbeat(&executor, &memory, &file_layer, heartbeat_events).await;
+                        tick_alpha_heartbeat(&executor, &memory, &file_layer, heartbeat_events)
+                            .await;
                     });
                 }
 

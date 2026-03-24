@@ -34,7 +34,8 @@ pub struct HeadlessRuntime {
 
 impl HeadlessRuntime {
     pub async fn new(permission_ui: Option<Arc<dyn PermissionUi>>) -> Result<Self> {
-        let home_dir = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
+        let home_dir =
+            dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
         let workspace_root = home_dir.join(".openpup");
         let db_path = workspace_root.join("database.db");
 
@@ -113,7 +114,9 @@ impl HeadlessRuntime {
         let cfg = crate::config::load_with_env();
         for search_path in &cfg.skills.search_paths {
             let expanded_path = crate::config::expand_tilde(search_path);
-            let _ = skill_registry.register_from_dir(&expanded_path, "local").await;
+            let _ = skill_registry
+                .register_from_dir(&expanded_path, "local")
+                .await;
             skill_registry.add_scan_root(expanded_path, "local").await;
         }
 
@@ -123,12 +126,12 @@ impl HeadlessRuntime {
                 .join("skills_state")
                 .join("trusted_skills.json"),
         );
-            permissions
-                .set_mode(match cfg.app.execution_mode.to_lowercase().as_str() {
-                    "freerun" | "free_run" | "free-run" => ExecutionMode::FreeRun,
-                    _ => ExecutionMode::Leashed,
-                })
-                .await;
+        permissions
+            .set_mode(match cfg.app.execution_mode.to_lowercase().as_str() {
+                "freerun" | "free_run" | "free-run" => ExecutionMode::FreeRun,
+                _ => ExecutionMode::Leashed,
+            })
+            .await;
         if let Some(ui) = permission_ui {
             permissions.set_permission_ui(ui);
         }

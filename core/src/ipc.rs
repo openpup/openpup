@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::bridge::types::{BridgeConfig, BridgeConnectionStatus};
 use crate::bridge::weixin::{StoredWeixinAccount, WeixinQrStartResult, WeixinQrWaitResult};
-use crate::channel::types::{ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan};
+use crate::channel::types::{
+    ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -99,9 +101,7 @@ pub struct ChannelDetails {
 pub enum DaemonResponse {
     Pong,
     Status(DaemonStatus),
-    AskCompleted {
-        content: String,
-    },
+    AskCompleted { content: String },
     BridgeConfig(BridgeConfig),
     BridgeSaved(BridgeConfig),
     BridgeStatus(Vec<BridgeConnectionStatus>),
@@ -112,32 +112,18 @@ pub enum DaemonResponse {
     ChannelList(Vec<ChannelRecord>),
     ChannelDetails(ChannelDetails),
     ChannelActionOk,
-    Ack {
-        message: String,
-    },
-    Error {
-        message: String,
-    },
+    Ack { message: String },
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
-    Response {
-        response: DaemonResponse,
-    },
-    Token {
-        token: String,
-    },
-    Activity {
-        label: String,
-    },
-    Done {
-        content: String,
-    },
-    Error {
-        message: String,
-    },
+    Response { response: DaemonResponse },
+    Token { token: String },
+    Activity { label: String },
+    Done { content: String },
+    Error { message: String },
 }
 
 pub fn daemon_runtime_dir() -> PathBuf {
@@ -156,5 +142,8 @@ pub fn daemon_pid_path() -> PathBuf {
 }
 
 pub fn daemon_log_path() -> PathBuf {
-    daemon_runtime_dir().join("openpupd.log")
+    daemon_runtime_dir().join("logs").join(format!(
+        "openpupd.log.{}",
+        chrono::Local::now().format("%Y-%m-%d")
+    ))
 }

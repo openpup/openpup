@@ -1433,7 +1433,9 @@ impl AlphaPup {
             Ok(l) => l,
             Err(e) => {
                 debug!("[alpha] run_dag: DAG build error ({e}), falling back to parallel pack");
-                return self.run_parallel_pack(msg, required_pups, events.clone()).await;
+                return self
+                    .run_parallel_pack(msg, required_pups, events.clone())
+                    .await;
             }
         };
 

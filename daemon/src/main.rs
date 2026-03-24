@@ -15,6 +15,7 @@ use openpup_core::skills::scheduler::SkillScheduler;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
+use tracing::{error, info};
 
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -34,6 +35,32 @@ enum Commands {
     Serve,
 }
 
+fn init_logging(log_path: &Path) {
+    let Some(log_dir) = log_path.parent() else {
+        return;
+    };
+    let Some(file_name) = log_path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+
+    let _ = std::fs::create_dir_all(log_dir);
+
+    let file_appender = tracing_appender::rolling::never(log_dir, file_name);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let filter = std::env::var("OPENPUP_LOG")
+        .unwrap_or_else(|_| "openpup_core=debug,openpup_daemon=debug,warn".to_string());
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(false)
+        .init();
+
+    std::mem::forget(guard);
+}
+
 #[derive(Clone)]
 struct DaemonState {
     runtime: HeadlessRuntime,
@@ -49,29 +76,27 @@ struct SocketEventSink {
 
 impl EventSink for SocketEventSink {
     fn emit_value(&self, event: &str, payload: Value) {
-        let daemon_event = match event {
-            "stream_token" => payload
-                .as_str()
-                .map(|token| DaemonEvent::Token { token: token.to_string() }),
-            "stream_activity" => payload
-                .get("label")
-                .and_then(Value::as_str)
-                .map(|label| DaemonEvent::Activity {
-                    label: label.to_string(),
+        let daemon_event =
+            match event {
+                "stream_token" => payload.as_str().map(|token| DaemonEvent::Token {
+                    token: token.to_string(),
                 }),
-            "stream_done" => payload
-                .get("content")
-                .and_then(Value::as_str)
-                .map(|content| DaemonEvent::Done {
-                    content: content.to_string(),
+                "stream_activity" => payload.get("label").and_then(Value::as_str).map(|label| {
+                    DaemonEvent::Activity {
+                        label: label.to_string(),
+                    }
                 }),
-            "stream_error" => payload
-                .as_str()
-                .map(|message| DaemonEvent::Error {
+                "stream_done" => payload
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| DaemonEvent::Done {
+                        content: content.to_string(),
+                    }),
+                "stream_error" => payload.as_str().map(|message| DaemonEvent::Error {
                     message: message.to_string(),
                 }),
-            _ => None,
-        };
+                _ => None,
+            };
 
         if let Some(event) = daemon_event {
             let _ = self.tx.send(event);
@@ -94,6 +119,10 @@ async fn serve() -> Result<()> {
 
     let socket_path = daemon_socket_path();
     let pid_path = daemon_pid_path();
+    let log_path = daemon_log_path();
+
+    init_logging(&log_path);
+    info!("daemon_log_path: {}", log_path.display());
 
     write_pid_file(&pid_path)?;
     let listener = bind_listener(&socket_path).await?;
@@ -122,7 +151,7 @@ async fn serve() -> Result<()> {
         bridge_manager,
         started_at: chrono::Utc::now().timestamp(),
         socket_path: socket_path.display().to_string(),
-        log_path: daemon_log_path().display().to_string(),
+        log_path: log_path.display().to_string(),
     });
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -142,14 +171,14 @@ async fn serve() -> Result<()> {
                 tokio::spawn(async move {
                     let (stream, _) = stream;
                     if let Err(error) = handle_stream(stream, state, shutdown_tx).await {
-                        eprintln!("[openpupd] connection error: {error}");
+                        error!("[openpupd] connection error: {error}");
                     }
                 });
                 #[cfg(not(unix))]
                 tokio::spawn(async move {
                     let (stream, _) = stream;
                     if let Err(error) = handle_stream(stream, state, shutdown_tx).await {
-                        eprintln!("[openpupd] connection error: {error}");
+                        error!("[openpupd] connection error: {error}");
                     }
                 });
             }
@@ -242,10 +271,7 @@ where
     Ok(())
 }
 
-async fn write_events<W>(
-    mut writer: W,
-    mut rx: mpsc::UnboundedReceiver<DaemonEvent>,
-) -> Result<()>
+async fn write_events<W>(mut writer: W, mut rx: mpsc::UnboundedReceiver<DaemonEvent>) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
@@ -404,13 +430,7 @@ async fn handle_request(
             state
                 .runtime
                 .channel_manager
-                .request_changes(
-                    &channel_id,
-                    &sender,
-                    &comment,
-                    reply_to.as_deref(),
-                    None,
-                )
+                .request_changes(&channel_id, &sender, &comment, reply_to.as_deref(), None)
                 .await?;
             respond(&tx, DaemonResponse::ChannelActionOk);
         }
@@ -497,9 +517,17 @@ async fn build_channel_details(state: &DaemonState, channel_id: &str) -> Result<
         .await?
         .into_iter()
         .find(|channel| channel.id == channel_id);
-    let workflow = state.runtime.memory.get_channel_workflow_state(channel_id).await?;
+    let workflow = state
+        .runtime
+        .memory
+        .get_channel_workflow_state(channel_id)
+        .await?;
     let plan = state.runtime.memory.get_channel_plan(channel_id).await?;
-    let messages = state.runtime.memory.get_channel_messages(channel_id).await?;
+    let messages = state
+        .runtime
+        .memory
+        .get_channel_messages(channel_id)
+        .await?;
     Ok(ChannelDetails {
         channel,
         workflow,
@@ -513,13 +541,7 @@ fn respond(tx: &mpsc::UnboundedSender<DaemonEvent>, response: DaemonResponse) {
 }
 
 fn normalize_forced_pup(pup: Option<String>) -> Option<String> {
-    pup.and_then(|value| {
-        if value == "alpha" {
-            None
-        } else {
-            Some(value)
-        }
-    })
+    pup.and_then(|value| if value == "alpha" { None } else { Some(value) })
 }
 
 fn write_pid_file(pid_path: &Path) -> Result<()> {
@@ -543,7 +565,9 @@ fn cleanup_runtime_files(socket_path: &Path, pid_path: &Path) {
 
 #[cfg(unix)]
 async fn termination_signal() {
-    if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+    if let Ok(mut signal) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
         let _ = signal.recv().await;
     }
 }

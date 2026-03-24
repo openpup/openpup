@@ -733,8 +733,8 @@ pub async fn start_weixin_qr_login(
         bot_type,
         force.unwrap_or(false),
     )
-        .await
-        .map_err(|e| e.to_string())
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -240,7 +240,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::Ask { input, pup } => {
-            let output = run_single_prompt_with_mode(&mut local_runtime, cli.local, input, pup).await?;
+            let output =
+                run_single_prompt_with_mode(&mut local_runtime, cli.local, input, pup).await?;
             if output.starts_with("⚠️ ") {
                 println!("{output}");
             }
@@ -461,7 +462,11 @@ async fn run_single_prompt_daemon(input: String, pup: Option<String>) -> Result<
     Ok(final_output)
 }
 
-async fn run_chat(local_runtime: &mut Option<HeadlessRuntime>, force_local: bool, pup: &str) -> Result<()> {
+async fn run_chat(
+    local_runtime: &mut Option<HeadlessRuntime>,
+    force_local: bool,
+    pup: &str,
+) -> Result<()> {
     let model_label = if !force_local && daemon_client::is_running().await {
         "daemon".to_string()
     } else {
@@ -478,12 +483,23 @@ async fn run_chat(local_runtime: &mut Option<HeadlessRuntime>, force_local: bool
             "daemon 模式".dimmed().to_string()
         } else {
             let runtime = ensure_local_runtime(local_runtime).await?;
-            format!("记忆 {} 条", runtime.memory.get_top_memories(5).await.unwrap_or_default().len())
-                .dimmed()
-                .to_string()
+            format!(
+                "记忆 {} 条",
+                runtime
+                    .memory
+                    .get_top_memories(5)
+                    .await
+                    .unwrap_or_default()
+                    .len()
+            )
+            .dimmed()
+            .to_string()
         },
     );
-    println!("{}", "输入消息，按 Enter 发送。Ctrl-C / Ctrl-D 退出。".dimmed());
+    println!(
+        "{}",
+        "输入消息，按 Enter 发送。Ctrl-C / Ctrl-D 退出。".dimmed()
+    );
     println!();
 
     let mut rl = DefaultEditor::new()?;
@@ -549,7 +565,11 @@ fn memory_type_icon(t: &str) -> &'static str {
     }
 }
 
-async fn memory_list(runtime: &HeadlessRuntime, filter_type: Option<&str>, limit: i64) -> Result<()> {
+async fn memory_list(
+    runtime: &HeadlessRuntime,
+    filter_type: Option<&str>,
+    limit: i64,
+) -> Result<()> {
     let mut memories = runtime
         .memory
         .list_long_term_memories(0, 100_000, None)
@@ -628,7 +648,12 @@ async fn skill_list(runtime: &HeadlessRuntime) -> Result<()> {
     Ok(())
 }
 
-async fn skill_run(runtime: &HeadlessRuntime, name: &str, input: Option<&str>, dry_run: bool) -> Result<()> {
+async fn skill_run(
+    runtime: &HeadlessRuntime,
+    name: &str,
+    input: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
     let manifest = runtime.skill_executor.registry.ensure_skill(name).await?;
 
     if dry_run {
@@ -763,8 +788,14 @@ async fn run_daemon_command(action: DaemonCommands) -> Result<()> {
             daemon_client::start_process().await?;
             println!("{}", "daemon 已启动".green());
             println!("socket: {}", daemon_client::socket_display().dimmed());
-            println!("pid: {}", daemon_client::pid_path().display().to_string().dimmed());
-            println!("log: {}", daemon_client::log_path().display().to_string().dimmed());
+            println!(
+                "pid: {}",
+                daemon_client::pid_path().display().to_string().dimmed()
+            );
+            println!(
+                "log: {}",
+                daemon_client::log_path().display().to_string().dimmed()
+            );
         }
         DaemonCommands::Stop => {
             daemon_client::stop_process().await?;
@@ -802,14 +833,46 @@ fn print_daemon_status(status: &DaemonStatus) {
     println!("{}", "🐾 openpupd 状态".bold());
     println!();
     println!("  {} {}", "PID:".dimmed(), status.pid.to_string().cyan());
-    println!("  {} {}", "启动时间:".dimmed(), status.started_at.to_string().cyan());
-    println!("  {} {}", "Bridge:".dimmed(), bool_label(status.bridge_enabled));
-    println!("  {} {}", "Scheduler:".dimmed(), bool_label(status.scheduler_enabled));
-    println!("  {} {}", "记忆:".dimmed(), status.memory_count.to_string().cyan());
-    println!("  {} {}", "任务:".dimmed(), status.active_task_count.to_string().cyan());
-    println!("  {} {}", "技能:".dimmed(), status.enabled_skill_count.to_string().cyan());
-    println!("  {} {}", "Pups:".dimmed(), status.enabled_pup_count.to_string().cyan());
-    println!("  {} {}", "工作区:".dimmed(), status.workspace_root.dimmed());
+    println!(
+        "  {} {}",
+        "启动时间:".dimmed(),
+        status.started_at.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "Bridge:".dimmed(),
+        bool_label(status.bridge_enabled)
+    );
+    println!(
+        "  {} {}",
+        "Scheduler:".dimmed(),
+        bool_label(status.scheduler_enabled)
+    );
+    println!(
+        "  {} {}",
+        "记忆:".dimmed(),
+        status.memory_count.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "任务:".dimmed(),
+        status.active_task_count.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "技能:".dimmed(),
+        status.enabled_skill_count.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "Pups:".dimmed(),
+        status.enabled_pup_count.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "工作区:".dimmed(),
+        status.workspace_root.dimmed()
+    );
     println!("  {} {}", "Socket:".dimmed(), status.socket_path.dimmed());
     println!("  {} {}", "日志:".dimmed(), status.log_path.dimmed());
     println!();
@@ -827,9 +890,7 @@ async fn ensure_daemon_running_for_command() -> Result<()> {
     if daemon_client::is_running().await {
         Ok(())
     } else {
-        Err(anyhow!(
-            "daemon 未运行，请先执行 `openpup daemon start`"
-        ))
+        Err(anyhow!("daemon 未运行，请先执行 `openpup daemon start`"))
     }
 }
 
@@ -964,14 +1025,8 @@ async fn run_weixin_command(action: WeixinCommands) -> Result<()> {
                     println!(
                         "{} {} {}",
                         account.account_id.white().bold(),
-                        account
-                            .user_id
-                            .unwrap_or_else(|| "-".to_string())
-                            .dimmed(),
-                        account
-                            .saved_at
-                            .unwrap_or_else(|| "-".to_string())
-                            .dimmed(),
+                        account.user_id.unwrap_or_else(|| "-".to_string()).dimmed(),
+                        account.saved_at.unwrap_or_else(|| "-".to_string()).dimmed(),
                     );
                 }
             }
@@ -1139,7 +1194,9 @@ fn print_channel_details(details: ChannelDetails) {
                 if task.depends_on.is_empty() {
                     "".dimmed().to_string()
                 } else {
-                    format!("(depends: {})", task.depends_on.join(", ")).dimmed().to_string()
+                    format!("(depends: {})", task.depends_on.join(", "))
+                        .dimmed()
+                        .to_string()
                 }
             );
         }
