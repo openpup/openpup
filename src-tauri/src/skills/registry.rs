@@ -308,7 +308,7 @@ impl SkillRegistry {
     /// optionally `_meta.json`) into a native `SkillManifest`.
     ///
     /// SKILL.md format:
-    /// ```
+    /// ```text
     /// ---
     /// name: my_skill
     /// description: What it does.

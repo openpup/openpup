@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.5...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.6...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,25 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.6](https://github.com/openpup/openpup/compare/v0.1.5...v0.1.6) — 2026-03-24
+
+### Added
+
+- **Daemon-first runtime mode** — added a shared headless runtime with a dedicated `openpupd` daemon flow so desktop-independent operation can run continuously.
+- **Token usage monitoring** — introduced token accounting and guardrails to improve observability and control of model context growth.
+
+### Changed
+
+- **Agent context loading strategy** — skill prompt payloads are now loaded lazily at execution time to reduce steady-state context pressure.
+- **Runtime bootstrap consistency** — startup and log packaging paths are unified across desktop and headless entry points.
+- **Release baseline** — workspace crate versions, Tauri bundle metadata, and npm package version are aligned to `0.1.6`.
+
+### Fixed
+
+- **Skill registry doctest parsing** — `SKILL.md` format example in `parse_skill_hub_dir` docs is now marked as text to avoid Rust doctest compilation failures.
 
 ---
 
