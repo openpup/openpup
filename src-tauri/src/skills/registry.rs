@@ -76,6 +76,20 @@ pub struct SkillManifest {
     pub prompt: Option<SkillPrompt>,
 }
 
+#[derive(Debug, Clone)]
+enum SkillSource {
+    BuiltinToml(String),
+    TomlFile(PathBuf),
+    SkillHubDir(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct RegisteredSkill {
+    metadata: SkillMetadata,
+    permissions: SkillPermissions,
+    source: SkillSource,
+}
+
 // ── Installed skill record ────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,7 +107,7 @@ pub struct InstalledSkill {
 
 #[derive(Clone)]
 pub struct SkillRegistry {
-    skills: Arc<RwLock<HashMap<String, SkillManifest>>>,
+    skills: Arc<RwLock<HashMap<String, RegisteredSkill>>>,
     installed: Arc<RwLock<HashMap<String, InstalledSkill>>>,
     persist_path: PathBuf,
     /// Directories to re-scan on refresh() — populated at startup.
@@ -123,7 +137,16 @@ impl SkillRegistry {
             }
         };
         let now = chrono::Utc::now().timestamp();
-        self.register_manifest(manifest, "builtin", now).await;
+        self.register_skill(
+            RegisteredSkill {
+                metadata: manifest.metadata,
+                permissions: manifest.permissions,
+                source: SkillSource::BuiltinToml(toml.to_string()),
+            },
+            "builtin",
+            now,
+        )
+        .await;
     }
 
     /// Register a directory as a scan root so `refresh()` can re-discover skills written there.
@@ -224,7 +247,16 @@ impl SkillRegistry {
                         continue;
                     }
                 };
-                self.register_manifest(manifest, source, now).await;
+                self.register_skill(
+                    RegisteredSkill {
+                        metadata: manifest.metadata,
+                        permissions: manifest.permissions,
+                        source: SkillSource::TomlFile(path.to_path_buf()),
+                    },
+                    source,
+                    now,
+                )
+                .await;
                 any = true;
                 continue;
             }
@@ -235,8 +267,8 @@ impl SkillRegistry {
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     match Self::parse_skill_hub_dir(path) {
-                        Ok(manifest) => {
-                            self.register_manifest(manifest, source, now).await;
+                        Ok(skill) => {
+                            self.register_skill(skill, source, now).await;
                             any = true;
                         }
                         Err(e) => warn!("parse SkillHub {}: {e}", path.display()),
@@ -251,12 +283,12 @@ impl SkillRegistry {
         Ok(())
     }
 
-    /// Register a parsed manifest into both `skills` and `installed` maps.
-    async fn register_manifest(&self, manifest: SkillManifest, source: &str, now: i64) {
-        let name = manifest.metadata.name.clone();
-        let description = manifest.metadata.description.clone();
-        let category = manifest.metadata.category.clone();
-        self.skills.write().await.insert(name.clone(), manifest);
+    /// Register a parsed skill into both `skills` and `installed` maps.
+    async fn register_skill(&self, skill: RegisteredSkill, source: &str, now: i64) {
+        let name = skill.metadata.name.clone();
+        let description = skill.metadata.description.clone();
+        let category = skill.metadata.category.clone();
+        self.skills.write().await.insert(name.clone(), skill);
         self.installed
             .write()
             .await
@@ -284,7 +316,7 @@ impl SkillRegistry {
     /// ---
     /// # Body used as system prompt
     /// ```
-    fn parse_skill_hub_dir(dir: &Path) -> Result<SkillManifest> {
+    fn parse_skill_hub_dir(dir: &Path) -> Result<RegisteredSkill> {
         // ── Parse SKILL.md ────────────────────────────────────────────────────
         let md_text = fs::read_to_string(dir.join("SKILL.md"))?;
         let md = md_text.trim();
@@ -376,7 +408,7 @@ impl SkillRegistry {
             .filter(|s| s.len() > 2)
             .collect();
 
-        Ok(SkillManifest {
+        Ok(RegisteredSkill {
             metadata: SkillMetadata {
                 name,
                 version,
@@ -390,9 +422,7 @@ impl SkillRegistry {
                 network,
                 ..Default::default()
             },
-            prompt: Some(SkillPrompt {
-                system: body.to_string(),
-            }),
+            source: SkillSource::SkillHubDir(dir.to_path_buf()),
         })
     }
 
@@ -402,22 +432,46 @@ impl SkillRegistry {
         self.skills
             .write()
             .await
-            .insert(manifest.metadata.name.clone(), manifest);
+            .insert(
+                manifest.metadata.name.clone(),
+                RegisteredSkill {
+                    metadata: manifest.metadata,
+                    permissions: manifest.permissions,
+                    source: SkillSource::TomlFile(path.to_path_buf()),
+                },
+            );
         Ok(())
     }
 
     pub async fn get(&self, name: &str) -> Option<SkillManifest> {
-        self.skills.read().await.get(name).cloned()
+        self.ensure_skill(name).await.ok()
     }
 
     pub async fn list(&self) -> Vec<SkillManifest> {
-        self.skills.read().await.values().cloned().collect()
+        let names: Vec<String> = self.skills.read().await.keys().cloned().collect();
+        let mut manifests = Vec::new();
+        for name in names {
+            if let Ok(manifest) = self.ensure_skill(&name).await {
+                manifests.push(manifest);
+            }
+        }
+        manifests
     }
 
     pub async fn ensure_skill(&self, name: &str) -> Result<SkillManifest> {
-        self.get(name)
+        let skill = self
+            .skills
+            .read()
             .await
-            .ok_or_else(|| anyhow!("skill not found: {name}"))
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow!("skill not found: {name}"))?;
+        let prompt = self.load_prompt(&skill)?;
+        Ok(SkillManifest {
+            metadata: skill.metadata,
+            permissions: skill.permissions,
+            prompt: Some(prompt),
+        })
     }
 
     pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
@@ -479,6 +533,37 @@ impl SkillRegistry {
                     self.persist_path.parent().unwrap_or_else(|| Path::new(".")),
                 );
                 let _ = fs::write(&self.persist_path, text);
+            }
+        }
+    }
+
+    fn load_prompt(&self, skill: &RegisteredSkill) -> Result<SkillPrompt> {
+        match &skill.source {
+            SkillSource::BuiltinToml(text) => {
+                let manifest: SkillManifest = toml::from_str(text)?;
+                manifest
+                    .prompt
+                    .ok_or_else(|| anyhow!("skill '{}' has no [prompt] section", skill.metadata.name))
+            }
+            SkillSource::TomlFile(path) => {
+                let text = fs::read_to_string(path)?;
+                let manifest: SkillManifest = toml::from_str(&text)?;
+                manifest
+                    .prompt
+                    .ok_or_else(|| anyhow!("skill '{}' has no [prompt] section", skill.metadata.name))
+            }
+            SkillSource::SkillHubDir(dir) => {
+                let md_text = fs::read_to_string(dir.join("SKILL.md"))?;
+                let md = md_text.trim();
+                let md = md
+                    .strip_prefix("---")
+                    .ok_or_else(|| anyhow!("missing opening ---"))?;
+                let (_frontmatter, body) = md
+                    .split_once("\n---")
+                    .ok_or_else(|| anyhow!("missing closing ---"))?;
+                Ok(SkillPrompt {
+                    system: body.trim().to_string(),
+                })
             }
         }
     }
