@@ -300,6 +300,7 @@ const AppInner: React.FC = () => {
     continueChannel,
     requestChannelChanges,
     submitChannelReviewComment,
+    abortChannel,
   } = usePackChannel();
 
   useEffect(() => {
@@ -1265,6 +1266,7 @@ const AppInner: React.FC = () => {
                 onContinueChannel={(channelId, comment) => void continueChannel(channelId, comment)}
                 onRequestChannelChanges={(channelId, comment, replyTo) => void requestChannelChanges(channelId, comment, replyTo)}
                 onSubmitReviewComment={(channelId, comment, replyTo) => void submitChannelReviewComment(channelId, comment, replyTo)}
+                onAbortChannel={(channelId, comment) => void abortChannel(channelId, comment)}
                 pupMetaByKey={pupMetaByKey}
               />
             </div>

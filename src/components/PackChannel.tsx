@@ -614,6 +614,7 @@ interface PackChannelProps {
   onContinueChannel?: (channelId: string, comment?: string) => void;
   onRequestChannelChanges?: (channelId: string, comment: string, replyTo?: string | null) => void;
   onSubmitReviewComment?: (channelId: string, comment: string, replyTo?: string | null) => void;
+  onAbortChannel?: (channelId: string, comment?: string) => void;
   pupMetaByKey?: PupMetaByKey;
 }
 
@@ -635,6 +636,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   onContinueChannel,
   onRequestChannelChanges,
   onSubmitReviewComment,
+  onAbortChannel,
   pupMetaByKey = {},
 }) => {
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -743,7 +745,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   }, []);
 
   const submitReviewAction = React.useCallback(async (
-    action: 'comment' | 'changes' | 'continue',
+    action: 'comment' | 'changes' | 'continue' | 'abort',
   ) => {
     if (!activeChannelId || !activeWorkflow || activeWorkflow.status !== 'awaiting_review') return;
     const trimmed = reviewNote.trim();
@@ -754,6 +756,8 @@ export const PackChannel: React.FC<PackChannelProps> = ({
         await onSubmitReviewComment?.(activeChannelId, trimmed, reviewTargetId || null);
       } else if (action === 'changes') {
         await onRequestChannelChanges?.(activeChannelId, trimmed, reviewTargetId || null);
+      } else if (action === 'abort') {
+        await onAbortChannel?.(activeChannelId, trimmed || undefined);
       } else {
         await onContinueChannel?.(activeChannelId, trimmed || undefined);
       }
@@ -767,6 +771,7 @@ export const PackChannel: React.FC<PackChannelProps> = ({
   }, [
     activeChannelId,
     activeWorkflow,
+    onAbortChannel,
     onContinueChannel,
     onRequestChannelChanges,
     onSubmitReviewComment,
@@ -1462,8 +1467,26 @@ export const PackChannel: React.FC<PackChannelProps> = ({
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
-                      {t('pack_review_controls_hint', lang)}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <button
+                        onClick={() => void submitReviewAction('abort')}
+                        disabled={reviewBusy}
+                        style={{
+                          padding: '9px 14px',
+                          borderRadius: '999px',
+                          border: '0.5px solid var(--color-border-tertiary)',
+                          background: 'var(--color-background-primary)',
+                          color: '#E24B4A',
+                          cursor: reviewBusy ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t('pack_review_abort_btn', lang)}
+                      </button>
+                      <span style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
+                        {t('pack_review_controls_hint', lang)}
+                      </span>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                       <button

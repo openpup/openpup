@@ -1823,6 +1823,27 @@ impl AlphaPup {
                             )
                             .await;
                     }
+                    Ok(ReviewDecision::Abort { comment }) => {
+                        timeout_handle.abort();
+                        let _ = self
+                            .channel_manager
+                            .update_workflow_state(
+                                &channel_id,
+                                "completed",
+                                Some(layer_idx as i64),
+                                review_round,
+                                false,
+                                Some("aborted"),
+                            )
+                            .await;
+                        let _ = self.channel_manager.complete(&channel_id).await;
+                        let abort_msg = if comment.is_empty() {
+                            "Channel aborted by owner.".to_string()
+                        } else {
+                            format!("Channel aborted by owner: {comment}")
+                        };
+                        return Ok(abort_msg);
+                    }
                     Err(_) => {
                         timeout_handle.abort();
                         let _ = self.channel_manager.clear_review_session(&channel_id).await;

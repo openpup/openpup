@@ -20,6 +20,8 @@ pub enum ReviewDecision {
         comment: String,
         reply_to: Option<String>,
     },
+    /// Owner explicitly terminated the channel — stop all execution immediately.
+    Abort { comment: String },
 }
 
 struct PendingReview {
@@ -345,6 +347,35 @@ impl ChannelManager {
 
     pub async fn workflow_state(&self, channel_id: &str) -> Result<Option<ChannelWorkflowState>> {
         self.memory.get_channel_workflow_state(channel_id).await
+    }
+
+    /// Abort a channel during review — terminates execution immediately.
+    pub async fn abort_channel(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        comment: &str,
+    ) -> Result<()> {
+        self.post_message(
+            channel_id,
+            sender,
+            comment,
+            "review_abort",
+            Some("blocked"),
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await?;
+
+        let mut sessions = self.review_sessions.lock().await;
+        if let Some(pending) = sessions.remove(channel_id) {
+            let _ = pending.responder.send(ReviewDecision::Abort {
+                comment: comment.to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub async fn clear_review_session(&self, channel_id: &str) {

@@ -26,6 +26,7 @@ interface UsePackChannelResult {
   continueChannel: (channelId: string, comment?: string) => Promise<void>;
   requestChannelChanges: (channelId: string, comment: string, replyTo?: string | null) => Promise<void>;
   submitChannelReviewComment: (channelId: string, comment: string, replyTo?: string | null) => Promise<void>;
+  abortChannel: (channelId: string, comment?: string) => Promise<void>;
 }
 
 export function usePackChannel(): UsePackChannelResult {
@@ -145,6 +146,10 @@ export function usePackChannel(): UsePackChannelResult {
     await invoke('submit_channel_review_comment', { channelId, comment, replyTo: replyTo ?? null });
   }, []);
 
+  const abortChannel = useCallback(async (channelId: string, comment?: string) => {
+    await invoke('abort_channel', { channelId, comment: comment ?? null });
+  }, []);
+
   useEffect(() => {
     activeChannelIdRef.current = activeChannelId;
   }, [activeChannelId]);
@@ -254,5 +259,6 @@ export function usePackChannel(): UsePackChannelResult {
     continueChannel,
     requestChannelChanges,
     submitChannelReviewComment,
+    abortChannel,
   };
 }

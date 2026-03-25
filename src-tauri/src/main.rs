@@ -361,6 +361,7 @@ fn main() {
             commands::submit_channel_review_comment,
             commands::request_channel_changes,
             commands::continue_channel,
+            commands::abort_channel,
             commands::get_active_channel_count,
             commands::clear_completed_channels,
             commands::clear_stale_channels,

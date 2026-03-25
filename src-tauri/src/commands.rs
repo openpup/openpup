@@ -1065,6 +1065,29 @@ pub async fn request_channel_changes(
         .map_err(|e| e.to_string())
 }
 
+/// Abort a Pack Channel during review — terminates execution immediately.
+#[tauri::command]
+pub async fn abort_channel(
+    state: State<'_, AppState>,
+    channel_id: String,
+    comment: Option<String>,
+    sender: Option<String>,
+) -> Result<(), String> {
+    state
+        .alpha
+        .channel_manager
+        .abort_channel(
+            &channel_id,
+            sender.as_deref().unwrap_or("you"),
+            comment
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("terminated by owner"),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Explicitly continue a paused Pack Channel.
 #[tauri::command]
 pub async fn continue_channel(
