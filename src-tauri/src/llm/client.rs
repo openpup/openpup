@@ -647,10 +647,25 @@ impl LlmClient {
             req = req.bearer_auth(k);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| anyhow!("chat_with_tools_stream request: {e}"))?;
+        // Race the HTTP request against the abort flag so users can cancel
+        // even during slow TTFB (before the SSE stream opens).
+        let abort_clone = abort.clone();
+        let resp = tokio::select! {
+            result = req.send() => {
+                result.map_err(|e| anyhow!("chat_with_tools_stream request: {e}"))?
+            }
+            _ = async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if abort_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+            } => {
+                debug!("[llm] chat_with_tools_stream aborted during connect");
+                return Ok(None);
+            }
+        };
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
