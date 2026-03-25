@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { Onboarding } from './components/Onboarding';
 import { SkillClaw } from './components/SkillClaw';
@@ -243,8 +244,18 @@ function memoryTypeIcon(type: string): string {
 }
 
 // Inner app that uses lang context
+/** Detect the host platform once — used for titlebar layout. */
+const detectPlatform = (): 'macos' | 'windows' | 'linux' => {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('macintosh') || ua.includes('mac os')) return 'macos';
+  if (ua.includes('windows')) return 'windows';
+  return 'linux';
+};
+
 const AppInner: React.FC = () => {
   const { lang, setLang } = useLang();
+  const platform = useMemo(detectPlatform, []);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [theme, setTheme] = React.useState<'dark' | 'light'>(() => {
     const saved = localStorage.getItem('openpup_theme');
     return (saved === 'light' ? 'light' : 'dark');
@@ -354,6 +365,17 @@ const AppInner: React.FC = () => {
     localStorage.setItem('openpup_theme', theme);
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Track window maximized state for Linux custom titlebar button icon
+  useEffect(() => {
+    if (platform !== 'linux') return;
+    const win = getCurrentWindow();
+    win.isMaximized().then(setIsMaximized).catch(() => {});
+    const unlisten = win.onResized(() => {
+      win.isMaximized().then(setIsMaximized).catch(() => {});
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, [platform]);
 
   // Apply theme on first render
   React.useEffect(() => {
@@ -630,7 +652,7 @@ const AppInner: React.FC = () => {
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
 
-      {/* ── macOS overlay titlebar region ── */}
+      {/* ── Custom overlay titlebar — adapts to macOS / Windows / Linux ── */}
       <div
         data-tauri-drag-region
         style={{
@@ -639,8 +661,11 @@ const AppInner: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          paddingLeft: '78px',
-          paddingRight: '12px',
+          // macOS: reserve left space for traffic-light buttons
+          // Windows: reserve right space for native overlay controls (~138px)
+          // Linux: no native controls — custom buttons rendered on the right
+          paddingLeft: platform === 'macos' ? '78px' : '12px',
+          paddingRight: platform === 'windows' ? '140px' : (platform === 'linux' ? '0px' : '12px'),
           background: 'var(--color-background-secondary)',
           borderBottom: '0.5px solid var(--color-border-tertiary)',
           userSelect: 'none',
@@ -710,6 +735,62 @@ const AppInner: React.FC = () => {
             </div>
           )}
         </div>
+        {/* ── Linux window control buttons (macOS has traffic lights, Windows has native overlay controls) ── */}
+        {platform === 'linux' && (
+          <div style={{ display: 'flex', alignItems: 'stretch', height: '100%', marginLeft: '8px', flexShrink: 0 }}>
+            <button
+              aria-label="Minimize"
+              onClick={() => { void getCurrentWindow().minimize(); }}
+              style={{
+                background: 'none', border: 'none', width: '46px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--color-text-tertiary)',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-background-tertiary, rgba(128,128,128,0.15))'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+            >
+              <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor" /></svg>
+            </button>
+            <button
+              aria-label={isMaximized ? 'Restore' : 'Maximize'}
+              onClick={() => { void getCurrentWindow().toggleMaximize(); }}
+              style={{
+                background: 'none', border: 'none', width: '46px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--color-text-tertiary)',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-background-tertiary, rgba(128,128,128,0.15))'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+            >
+              {isMaximized ? (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                  <rect x="2" y="3" width="6" height="6" rx="0.5" />
+                  <polyline points="3,3 3,1.5 8.5,1.5 8.5,7 7,7" />
+                </svg>
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                  <rect x="1" y="1" width="8" height="8" rx="0.5" />
+                </svg>
+              )}
+            </button>
+            <button
+              aria-label="Close"
+              onClick={() => { void getCurrentWindow().close(); }}
+              style={{
+                background: 'none', border: 'none', width: '46px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--color-text-tertiary)',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#e81123'; e.currentTarget.style.color = '#fff'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--color-text-tertiary)'; }}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2">
+                <line x1="1" y1="1" x2="9" y2="9" />
+                <line x1="9" y1="1" x2="1" y2="9" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 flex overflow-hidden">
