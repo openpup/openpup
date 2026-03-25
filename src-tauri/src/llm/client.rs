@@ -609,6 +609,227 @@ impl LlmClient {
         }
     }
 
+    // ── Streaming tool-call API ────────────────────────────────────────────────
+
+    /// Streaming variant of `chat_with_tools`.  Text tokens are emitted
+    /// incrementally via `on_token` while tool-call fragments are accumulated
+    /// internally.  Returns the same `ChatWithToolsResponse` as the
+    /// non-streaming version once the stream finishes.
+    pub async fn chat_with_tools_stream(
+        &self,
+        messages: Vec<serde_json::Value>,
+        tools: Vec<serde_json::Value>,
+        on_token: impl Fn(&str) + Send,
+        abort: &AbortFlag,
+    ) -> anyhow::Result<Option<ChatWithToolsResponse>> {
+        let (api_key, api_base, model) = {
+            let g = self.config.read().unwrap();
+            (g.api_key.clone(), g.api_base.clone(), g.model.clone())
+        };
+
+        let url = chat_url(&api_base);
+        debug!(
+            "[llm] chat_with_tools_stream: model={model:?} tools={}",
+            tools.len()
+        );
+
+        let body = serde_json::json!({
+          "model": model,
+          "messages": messages,
+          "tools": tools,
+          "tool_choice": "auto",
+          "stream": true,
+          "stream_options": { "include_usage": true },
+        });
+
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(k) = &api_key {
+            req = req.bearer_auth(k);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| anyhow!("chat_with_tools_stream request: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            debug!("[llm] chat_with_tools_stream error {status}: {body}");
+            return Err(anyhow!("API error {status}: {body}"));
+        }
+
+        debug!("[llm] chat_with_tools_stream opened, reading SSE…");
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut full_content = String::new();
+        let mut chunk_count: usize = 0;
+        let mut stream_usage: Option<TokenUsage> = None;
+
+        // Accumulate tool calls: Vec of (id, function_name, arguments_buffer)
+        let mut tool_call_acc: Vec<(String, String, String)> = Vec::new();
+
+        'outer: loop {
+            let next =
+                tokio::time::timeout(std::time::Duration::from_millis(200), byte_stream.next())
+                    .await;
+
+            if abort.load(Ordering::Relaxed) {
+                debug!(
+                    "[llm] chat_with_tools_stream aborted after {chunk_count} chunks",
+                );
+                return Ok(None);
+            }
+
+            match next {
+                Err(_timeout) => continue,
+                Ok(None) => {
+                    debug!(
+                        "[llm] chat_with_tools_stream complete: {chunk_count} chunks, {} content chars, {} tool_calls",
+                        full_content.len(),
+                        tool_call_acc.len(),
+                    );
+                    break;
+                }
+                Ok(Some(bytes_result)) => {
+                    let bytes = bytes_result.map_err(|e| {
+                        debug!("[llm] chat_with_tools_stream read error: {e}");
+                        anyhow!("stream read error: {e}")
+                    })?;
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+
+                    while let Some(pos) = buf.find('\n') {
+                        let line = buf[..pos].trim_end_matches('\r').to_string();
+                        buf.drain(..=pos);
+
+                        if !line.starts_with("data: ") {
+                            continue;
+                        }
+                        let data = &line["data: ".len()..];
+                        if data == "[DONE]" {
+                            break 'outer;
+                        }
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(err) = val.get("error") {
+                                debug!("[llm] SSE error payload: {err}");
+                                return Err(anyhow!("API error in stream: {err}"));
+                            }
+                            if let Some(u) = parse_usage(&val) {
+                                stream_usage = Some(u);
+                            }
+                            let delta = &val["choices"][0]["delta"];
+
+                            // Text content tokens — emit immediately
+                            if let Some(tok) = delta["content"].as_str() {
+                                if !tok.is_empty() {
+                                    chunk_count += 1;
+                                    full_content.push_str(tok);
+                                    on_token(tok);
+                                }
+                            }
+
+                            // Reasoning tokens (DeepSeek etc.) — skip for now
+                            if let Some(tok) = delta["reasoning_content"].as_str() {
+                                if !tok.is_empty() {
+                                    chunk_count += 1;
+                                }
+                            }
+
+                            // Tool call deltas — accumulate per index
+                            if let Some(tcs) = delta["tool_calls"].as_array() {
+                                for tc_delta in tcs {
+                                    let idx = tc_delta["index"].as_u64().unwrap_or(0) as usize;
+                                    // Grow the accumulator if needed
+                                    while tool_call_acc.len() <= idx {
+                                        tool_call_acc.push((String::new(), String::new(), String::new()));
+                                    }
+                                    if let Some(id) = tc_delta["id"].as_str() {
+                                        tool_call_acc[idx].0 = id.to_string();
+                                    }
+                                    if let Some(name) = tc_delta["function"]["name"].as_str() {
+                                        tool_call_acc[idx].1 = name.to_string();
+                                    }
+                                    if let Some(args_frag) = tc_delta["function"]["arguments"].as_str() {
+                                        tool_call_acc[idx].2.push_str(args_frag);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Accumulate token usage
+        if let Some(ref u) = stream_usage {
+            debug!(
+                "[llm] chat_with_tools_stream usage: prompt={} completion={} total={}",
+                u.prompt_tokens, u.completion_tokens, u.total_tokens
+            );
+            self.usage.accumulate(u);
+            *self.last_call_usage.lock().unwrap() = Some(u.clone());
+        }
+
+        // Build tool calls
+        let tool_calls: Vec<ToolCall> = tool_call_acc
+            .into_iter()
+            .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
+            .map(|(id, name, args_buf)| {
+                let arguments = serde_json::from_str(&args_buf)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }
+            })
+            .collect();
+
+        // Reconstruct the raw assistant message for conversation history
+        let content_val = if full_content.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(full_content.clone())
+        };
+        let mut raw_message = serde_json::json!({
+            "role": "assistant",
+            "content": content_val,
+        });
+        if !tool_calls.is_empty() {
+            let tc_arr: Vec<serde_json::Value> = tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                        }
+                    })
+                })
+                .collect();
+            raw_message["tool_calls"] = serde_json::Value::Array(tc_arr);
+        }
+
+        let content = if full_content.is_empty() {
+            None
+        } else {
+            Some(full_content)
+        };
+
+        debug!(
+            "[llm] chat_with_tools_stream done: text={} tool_calls={}",
+            content.is_some(),
+            tool_calls.len()
+        );
+
+        Ok(Some(ChatWithToolsResponse {
+            content,
+            tool_calls,
+            raw_message,
+        }))
+    }
+
     // ── Embeddings ─────────────────────────────────────────────────────────────
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {

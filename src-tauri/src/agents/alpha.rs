@@ -1047,7 +1047,12 @@ impl AlphaPup {
 
             let response = match self
                 .llm_client
-                .chat_with_tools_abortable(msgs.clone(), iter_tools, abort)
+                .chat_with_tools_stream(
+                    msgs.clone(),
+                    iter_tools,
+                    |tok| on_token(tok.to_string()),
+                    abort,
+                )
                 .await?
             {
                 Some(r) => r,
@@ -1060,7 +1065,7 @@ impl AlphaPup {
             if response.tool_calls.is_empty() {
                 let text = response.content.unwrap_or_default();
                 debug!("[{agent_name}] final answer: {} chars", text.len());
-                on_token(text.clone());
+                // Tokens were already streamed via on_token during generation
                 return Ok(AgentRunResult::FinalText(text));
             }
 
