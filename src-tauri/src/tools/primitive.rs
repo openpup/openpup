@@ -22,6 +22,19 @@ pub struct ToolPermissions {
     pub network: bool,
 }
 
+impl ToolPermissions {
+    /// Merge with skill permissions: OR each flag so the skill can elevate
+    /// the pup's baseline but never restrict it.
+    pub fn union_with_skill(&self, skill: &crate::skills::registry::SkillPermissions) -> Self {
+        Self {
+            shell: self.shell || skill.shell,
+            file_read: self.file_read || skill.file_read,
+            file_write: self.file_write || skill.file_write,
+            network: self.network || skill.network,
+        }
+    }
+}
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 pub struct ToolRegistry {

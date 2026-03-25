@@ -662,9 +662,10 @@ async fn skill_run(
         println!("描述: {}", manifest.metadata.description.dimmed());
         println!("输入: {}", input.unwrap_or("(无)").dimmed());
         println!(
-            "权限: shell={} filesystem={} network={} mcp={}",
+            "权限: shell={} file_read={} file_write={} network={} mcp={}",
             manifest.permissions.shell,
-            manifest.permissions.filesystem,
+            manifest.permissions.file_read,
+            manifest.permissions.file_write,
             manifest.permissions.network,
             manifest.permissions.mcp
         );
@@ -683,18 +684,7 @@ async fn skill_run(
     let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = runtime
         .skill_executor
-        .execute_skill_stream(
-            name,
-            input.unwrap_or(""),
-            Arc::new(|tok: String, _is_reasoning: bool| {
-                print!("{tok}");
-                let _ = io::stdout().flush();
-            }),
-            Arc::new(|kind: String, label: String| {
-                eprintln!("{}", format!("· [{kind}] {label}").dimmed());
-            }),
-            abort,
-        )
+        .execute_skill(name, input.unwrap_or(""))
         .await?;
 
     println!("\n{}", result.white());

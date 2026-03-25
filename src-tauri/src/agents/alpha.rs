@@ -449,12 +449,12 @@ impl AlphaPup {
             // Prompt injection: load the skill's prompt and inject it into
             // the system message, then run the normal tool-call loop with
             // alpha's tools so the LLM can follow the skill instructions.
-            let skill_prompt = match self
+            let (skill_prompt, skill_perms) = match self
                 .skill_executor
                 .load_skill_prompt(skill_name)
                 .await
             {
-                Ok(p) => p,
+                Ok(pair) => pair,
                 Err(e) => return Ok((format!("Skill error: {e}"), pup_key)),
             };
 
@@ -479,13 +479,21 @@ impl AlphaPup {
             }
             msgs.push(serde_json::json!({ "role": "user", "content": msg }));
 
-            // Use alpha's default permissions — the skill uses the pup's tools.
-            let tool_perms = PupToolPermissions {
+            // Alpha baseline (no shell/fs/net, MCP only) unioned with skill
+            // permissions — the skill can elevate but never restrict.
+            let alpha_base = PupToolPermissions {
                 shell: false,
-                file_read: true,
+                file_read: false,
                 file_write: false,
                 network: false,
                 mcp: true,
+            };
+            let tool_perms = PupToolPermissions {
+                shell: alpha_base.shell || skill_perms.shell,
+                file_read: alpha_base.file_read || skill_perms.file_read,
+                file_write: alpha_base.file_write || skill_perms.file_write,
+                network: alpha_base.network || skill_perms.network,
+                mcp: alpha_base.mcp || skill_perms.mcp,
             };
 
             let handle = events.clone();
@@ -1167,11 +1175,24 @@ impl AlphaPup {
                             .load_skill_prompt(&skill_name)
                             .await
                         {
-                            Ok(prompt) => {
+                            Ok((prompt, skill_perms)) => {
                                 let _ = self
                                     .memory
                                     .complete_skill_run(&run_id, "activated", "")
                                     .await;
+                                // Union pup + skill permissions so the skill
+                                // gets the tools it needs.  Rebuild the tool
+                                // list for subsequent iterations.
+                                let merged = primitive_perms.union_with_skill(&skill_perms);
+                                let full_tools = self.skill_executor.tools.available_tools(&merged);
+                                for t in full_tools {
+                                    let t_name = t["function"]["name"].as_str().unwrap_or("");
+                                    if !available_tools.iter().any(|existing| {
+                                        existing["function"]["name"].as_str() == Some(t_name)
+                                    }) {
+                                        available_tools.push(t);
+                                    }
+                                }
                                 format!(
                                     "## Skill '{skill_name}' activated\n\n\
                                      Follow the instructions below to complete the task.\n\n\
@@ -1205,8 +1226,14 @@ impl AlphaPup {
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 };
 
-                // Priority 3: Dynamic tool result truncation proportional to context window
-                let result = self.truncate_tool_result(&result);
+                // Priority 3: Dynamic tool result truncation proportional to context window.
+                // Skip truncation for activate_skill — its result is a prompt that
+                // must be preserved in full for the LLM to follow the instructions.
+                let result = if tc.name == "activate_skill" {
+                    result
+                } else {
+                    self.truncate_tool_result(&result)
+                };
                 debug!("[{agent_name}] {} → {} chars", tc.name, result.len());
                 msgs.push(serde_json::json!({
                   "role": "tool",

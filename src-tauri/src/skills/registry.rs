@@ -395,14 +395,14 @@ impl SkillRegistry {
             }
         }
 
-        if name.is_empty() {
-            // Fall back to directory name
-            name = dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-        }
+        // The directory name is the canonical skill identifier — it matches the
+        // path the user installed and is what the LLM sees in the catalog.
+        // The frontmatter `name` is kept only as display metadata.
+        name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
 
         // ── Parse _meta.json for version ──────────────────────────────────────
         let version = dir
@@ -445,8 +445,8 @@ impl SkillRegistry {
         }
 
         // ── Derive triggers from name words ───────────────────────────────────
-        let triggers: Vec<String> = std::iter::once(name.replace('_', " "))
-            .chain(name.split('_').map(String::from))
+        let triggers: Vec<String> = std::iter::once(name.replace(|c| c == '_' || c == '-', " "))
+            .chain(name.split(|c: char| c == '_' || c == '-').map(String::from))
             .filter(|s| s.len() > 2)
             .collect();
 

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tracing::debug;
 
-use crate::llm::client::{AbortFlag, LlmClient};
+use crate::llm::client::LlmClient;
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::skills::permissions::{Action, PermissionChecker};
-use crate::skills::registry::SkillRegistry;
+use crate::skills::registry::{SkillPermissions, SkillRegistry};
 use crate::tools::primitive::{ToolPermissions, ToolRegistry};
 
 #[derive(Clone)]
@@ -20,10 +20,9 @@ pub struct SkillExecutor {
 }
 
 impl SkillExecutor {
-    /// Load a skill's prompt text for context injection.
+    /// Load a skill's prompt and permissions for context injection.
     /// Confirms dangerous skills with the user before returning.
-    /// Returns the system prompt string to be injected into the conversation.
-    pub async fn load_skill_prompt(&self, name: &str) -> Result<String> {
+    pub async fn load_skill_prompt(&self, name: &str) -> Result<(String, SkillPermissions)> {
         let manifest = self.registry.ensure_skill(name).await?;
 
         // Confirm dangerous skills with the user
@@ -40,20 +39,19 @@ impl SkillExecutor {
             }
         }
 
+        let permissions = manifest.permissions.clone();
         let prompt = manifest
             .prompt
             .ok_or_else(|| anyhow!("skill '{name}' has no [prompt] section"))?;
 
-        Ok(prompt.system)
+        Ok((prompt.system, permissions))
     }
 
     /// Standalone execution for scheduler and commands — runs the skill in its
     /// own tool-call loop (no conversation context).  The main conversation
     /// paths use `load_skill_prompt` + context injection instead.
     pub async fn execute_skill(&self, name: &str, input: &str) -> Result<String> {
-        let prompt_text = self.load_skill_prompt(name).await?;
-        let manifest = self.registry.ensure_skill(name).await?;
-        let permissions = &manifest.permissions;
+        let (prompt_text, permissions) = self.load_skill_prompt(name).await?;
         let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let tool_perms = ToolPermissions {
