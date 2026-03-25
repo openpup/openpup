@@ -27,6 +27,8 @@ pub struct ToolRegistry {
     pub workspace_root: PathBuf,
     pub memory: Arc<MemorySystem>,
     http: reqwest::Client,
+    /// Context window limit in tokens — tool results are truncated proportionally.
+    context_limit: std::sync::atomic::AtomicU64,
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -42,6 +44,34 @@ impl ToolRegistry {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
+            context_limit: std::sync::atomic::AtomicU64::new(128_000),
+        }
+    }
+
+    /// Update the context limit (called once after model is known).
+    pub fn set_context_limit(&self, limit: u64) {
+        self.context_limit.store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Dynamic max chars for tool results: 30% of context window × 4 chars/token, clamped.
+    fn tool_result_max_chars(&self) -> usize {
+        let limit = self.context_limit.load(std::sync::atomic::Ordering::Relaxed);
+        let max = ((limit as f64 * 0.30) * 4.0) as usize;
+        max.clamp(2_000, 32_768)
+    }
+
+    /// Truncate text to the dynamic tool result limit.
+    fn dynamic_truncate(&self, text: &str) -> String {
+        let max = self.tool_result_max_chars();
+        let count = text.chars().count();
+        if count > max {
+            format!(
+                "{}\n… [truncated, {} chars total]",
+                truncate_chars(text, max),
+                count
+            )
+        } else {
+            text.to_string()
         }
     }
 
@@ -252,16 +282,7 @@ impl ToolRegistry {
             format!("{stdout}\n[stderr]\n{stderr}")
         };
         let trimmed = combined.trim().to_string();
-        // Cap output to avoid overflowing the context window
-        if trimmed.chars().count() > 16_384 {
-            Ok(format!(
-                "{}\n… [truncated, {} chars total]",
-                truncate_chars(&trimmed, 16_384),
-                trimmed.chars().count()
-            ))
-        } else {
-            Ok(trimmed)
-        }
+        Ok(self.dynamic_truncate(&trimmed))
     }
 
     async fn file_read(&self, path: &str) -> Result<String> {
@@ -270,15 +291,7 @@ impl ToolRegistry {
         let content = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(|e| anyhow!("file_read '{}': {e}", resolved.display()))?;
-        if content.chars().count() > 32_768 {
-            Ok(format!(
-                "{}\n… [truncated, {} chars total]",
-                truncate_chars(&content, 32_768),
-                content.chars().count()
-            ))
-        } else {
-            Ok(content)
-        }
+        Ok(self.dynamic_truncate(&content))
     }
 
     async fn file_write(&self, path: &str, content: &str) -> Result<String> {
@@ -317,15 +330,7 @@ impl ToolRegistry {
         if !status.is_success() {
             return Err(anyhow!("http_get '{url}': HTTP {status}"));
         }
-        if body.chars().count() > 8_192 {
-            Ok(format!(
-                "{}\n… [truncated, {} chars total]",
-                truncate_chars(&body, 8_192),
-                body.chars().count()
-            ))
-        } else {
-            Ok(body)
-        }
+        Ok(self.dynamic_truncate(&body))
     }
 
     fn resolve_path(&self, path: &str) -> PathBuf {

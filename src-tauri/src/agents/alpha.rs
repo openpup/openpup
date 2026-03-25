@@ -678,10 +678,12 @@ impl AlphaPup {
     const MAX_MCP_TOOLS: usize = 30;
 
     /// Build tool schemas for all currently enabled installed skills.
-    /// Reads from the live in-memory registry — no disk I/O, safe to call each iteration.
-    async fn build_skill_tools(&self) -> Vec<serde_json::Value> {
+    /// Returns the tool list and the registry generation at which it was built.
+    async fn build_skill_tools(&self) -> (Vec<serde_json::Value>, u64) {
         use crate::mcp::orchestrator::sanitize_tool_name;
-        self.skill_executor
+        let gen = self.skill_executor.registry.generation();
+        let tools = self
+            .skill_executor
             .registry
             .enabled_skills_for_tools()
             .await
@@ -711,7 +713,65 @@ impl AlphaPup {
                     }
                 })
             })
-            .collect()
+            .collect();
+        (tools, gen)
+    }
+
+    /// Estimate the token count of the current context (messages + tools).
+    /// Uses ~4 chars per token as a conservative heuristic.
+    fn estimate_context_tokens(
+        msgs: &[serde_json::Value],
+        tools: &[serde_json::Value],
+    ) -> u64 {
+        let msg_chars: usize = msgs
+            .iter()
+            .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+            .sum();
+        let tool_chars: usize = tools
+            .iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
+            .sum();
+        ((msg_chars + tool_chars) / 4) as u64
+    }
+
+    /// Trim oldest non-system messages from the context to fit within the token budget.
+    fn trim_context_to_budget(
+        msgs: &mut Vec<serde_json::Value>,
+        tools: &[serde_json::Value],
+        limit: u64,
+    ) {
+        // Target 85% of limit to leave headroom for the response
+        let budget = (limit as f64 * 0.85) as u64;
+        while Self::estimate_context_tokens(msgs, tools) > budget && msgs.len() > 2 {
+            // Find the first non-system message to remove (preserve system + last user)
+            if let Some(idx) = msgs.iter().position(|m| m["role"] != "system") {
+                if idx < msgs.len() - 1 {
+                    msgs.remove(idx);
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    /// Compute the dynamic truncation limit for tool results, proportional to context window.
+    /// Returns max chars = 30% of context window × 4 chars/token, clamped to [2_000, 32_768].
+    fn tool_result_max_chars(&self) -> usize {
+        let limit = self.get_context_limit();
+        let max = ((limit as f64 * 0.30) * 4.0) as usize;
+        max.clamp(2_000, 32_768)
+    }
+
+    /// Truncate a tool result string to a dynamic limit based on the context window.
+    fn truncate_tool_result(&self, text: &str) -> String {
+        let max = self.tool_result_max_chars();
+        let count = text.chars().count();
+        if count > max {
+            let truncated: String = text.chars().take(max).collect();
+            format!("{truncated}\n… [truncated, {count} chars total]")
+        } else {
+            text.to_string()
+        }
     }
 
     async fn run_agent_with_tools(
@@ -806,6 +866,10 @@ impl AlphaPup {
 
         let mut msgs = messages;
         const MAX_ITER: usize = 20;
+        let context_limit = self.get_context_limit();
+
+        // ── Skill tool cache: rebuild only when the registry generation changes ──
+        let (mut cached_skill_tools, mut cached_skill_gen) = self.build_skill_tools().await;
 
         for iter in 0..MAX_ITER {
             if abort.load(Ordering::Relaxed) {
@@ -813,11 +877,28 @@ impl AlphaPup {
                 return Ok(AgentRunResult::FinalText(String::new()));
             }
 
-            // Rebuild skill tools each iteration so newly installed skills are visible immediately.
+            // Rebuild skill tools only when the registry has changed (install/enable/disable/refresh).
+            let current_gen = self.skill_executor.registry.generation();
+            if current_gen != cached_skill_gen {
+                let (new_tools, new_gen) = self.build_skill_tools().await;
+                cached_skill_tools = new_tools;
+                cached_skill_gen = new_gen;
+                debug!("[{agent_name}] skill tools rebuilt (gen {cached_skill_gen} → {current_gen})");
+            }
+
             let mut iter_tools = available_tools.clone();
-            let skill_tools = self.build_skill_tools().await;
-            let skill_tool_count = skill_tools.len();
-            iter_tools.extend(skill_tools);
+            let skill_tool_count = cached_skill_tools.len();
+            iter_tools.extend(cached_skill_tools.clone());
+
+            // ── Priority 1: Context window guard ──
+            // Estimate tokens and trim if approaching the limit.
+            let estimated_tokens = Self::estimate_context_tokens(&msgs, &iter_tools);
+            if estimated_tokens > (context_limit as f64 * 0.85) as u64 {
+                debug!(
+                    "[{agent_name}] context guard: {estimated_tokens} tokens exceeds 85% of {context_limit}, trimming"
+                );
+                Self::trim_context_to_budget(&mut msgs, &iter_tools, context_limit);
+            }
 
             let msg_chars = msgs
                 .iter()
@@ -830,13 +911,14 @@ impl AlphaPup {
             let tool_count = iter_tools.len();
             let non_skill_tool_count = tool_count.saturating_sub(skill_tool_count);
             debug!(
-                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} (base={} skill={}) tool_chars={}",
+                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} (base={} skill={}) est_tokens={} limit={}",
                     msgs.len(),
                     msg_chars,
                     tool_count,
                     non_skill_tool_count,
                     skill_tool_count,
-                    tool_chars
+                    estimated_tokens,
+                    context_limit,
                 );
 
             let response = match self
@@ -989,6 +1071,8 @@ impl AlphaPup {
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 };
 
+                // Priority 3: Dynamic tool result truncation proportional to context window
+                let result = self.truncate_tool_result(&result);
                 debug!("[{agent_name}] {} → {} chars", tc.name, result.len());
                 msgs.push(serde_json::json!({
                   "role": "tool",
@@ -2155,7 +2239,17 @@ impl AlphaPup {
         if count % 3 == 0 {
             let _ = self.maybe_extract_memories(pup_key).await;
         }
-        if count % 10 == 0 {
+
+        // Priority 5: Token-based compression trigger.
+        // Compress when real prompt_tokens exceed 50% of context window, OR fallback
+        // to message-count based trigger every 10 turns.
+        let context_limit = self.get_context_limit();
+        let should_compress = if let Some(tokens) = self.get_context_tokens(pup_key).await {
+            tokens > context_limit / 2
+        } else {
+            count % 10 == 0
+        };
+        if should_compress {
             let _ = self.maybe_compress_context(pup_key).await;
         }
 
@@ -2489,9 +2583,8 @@ impl AlphaPup {
 
     /// Get the model's context window limit.
     pub fn get_context_limit(&self) -> u64 {
-        // Common context window sizes based on model name
         let model = self.llm_client.model_name();
-        infer_context_limit(&model)
+        infer_context_limit_for_model(&model)
     }
 
     // ── History & memory extraction ────────────────────────────────────────────
@@ -2940,7 +3033,8 @@ pub fn pup_display_name(key: &str) -> String {
 }
 
 /// Infer the context window limit (in tokens) from a model name string.
-fn infer_context_limit(model: &str) -> u64 {
+/// Public so other modules (main, primitive tools) can use it.
+pub fn infer_context_limit_for_model(model: &str) -> u64 {
     let m = model.to_lowercase();
     if m.contains("gpt-4o") || m.contains("gpt-4-turbo") {
         128_000

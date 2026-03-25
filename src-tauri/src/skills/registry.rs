@@ -112,6 +112,9 @@ pub struct SkillRegistry {
     persist_path: PathBuf,
     /// Directories to re-scan on refresh() — populated at startup.
     scan_roots: Arc<RwLock<Vec<(PathBuf, String)>>>,
+    /// Monotonically increasing counter bumped on any skill change (enable/disable/install/refresh).
+    /// Callers can compare against a cached value to know if they need to rebuild tool lists.
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl SkillRegistry {
@@ -121,9 +124,21 @@ impl SkillRegistry {
             installed: Arc::new(RwLock::new(HashMap::new())),
             persist_path,
             scan_roots: Arc::new(RwLock::new(Vec::new())),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         registry.load_installed_snapshot();
         registry
+    }
+
+    /// Returns the current generation counter. Changes whenever skills are installed,
+    /// enabled, disabled, or refreshed from disk.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Bump the generation counter to signal that skill state has changed.
+    fn bump_generation(&self) {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a built-in skill from an embedded TOML string.
@@ -167,6 +182,7 @@ impl SkillRegistry {
                 warn!("skill refresh {}: {e}", path.display());
             }
         }
+        self.bump_generation();
     }
 
     /// Returns enabled skills as (name, description, triggers) for injection into LLM tool lists.
@@ -302,6 +318,7 @@ impl SkillRegistry {
                 installed_at: now,
                 enabled: true,
             });
+        self.bump_generation();
     }
 
     /// Parse a SkillHub / ClawHub skill directory (contains `SKILL.md` and
@@ -477,6 +494,7 @@ impl SkillRegistry {
             meta.enabled = enabled;
             drop(guard);
             self.save_installed_snapshot();
+            self.bump_generation();
             Ok(())
         } else {
             Err(anyhow!("skill not installed: {name}"))

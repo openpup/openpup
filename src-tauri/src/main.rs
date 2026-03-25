@@ -201,6 +201,10 @@ fn main() {
 
             // ToolRegistry — primitive tool execution surface for skills
             let tool_registry = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
+            // Propagate model context limit so tool results are truncated proportionally
+            tool_registry.set_context_limit(
+                crate::agents::alpha::infer_context_limit_for_model(&llm_client.model_name()),
+            );
 
             // SkillExecutor — shares the same PermissionChecker clone
             let skill_executor = Arc::new(SkillExecutor {
