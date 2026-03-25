@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.6...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.7...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,24 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.7](https://github.com/openpup/openpup/compare/v0.1.6...v0.1.7) — 2026-03-25
+
+### Added
+
+- **Real context visibility** — the desktop header now shows real per-pup prompt token usage against the active model context window instead of a rough estimate.
+- **Adaptive skill discovery** — when many skills are enabled, Alpha now exposes a compact `discover_skills` catalog flow so installed skills remain usable without exhausting the model context window.
+- **Current-time context injection** — the agent system prompt now includes the local date, weekday, and timezone so time-sensitive reasoning stays grounded.
+- **Pack Channel abort control** — owners can terminate a review-stage Pack Channel directly from the operator UI, with the decision propagated through the command layer and workflow state.
+- **Linux titlebar controls** — custom Linux window minimize, maximize, restore, and close controls were added for overlay titlebar layouts.
+
+### Changed
+
+- **Context guardrails** — agent runs now trim oversized context before calls, cache skill tool schemas by registry generation, and trigger compression based on real token usage when available.
+- **Tool output budgeting** — primitive tool responses and in-loop tool results now scale truncation to the active model context window, preserving both the head and tail of long outputs to retain important errors.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.7`.
 
 ---
 
