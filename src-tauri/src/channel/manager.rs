@@ -21,7 +21,9 @@ pub enum ReviewDecision {
         reply_to: Option<String>,
     },
     /// Owner explicitly terminated the channel — stop all execution immediately.
-    Abort { comment: String },
+    Abort {
+        comment: String,
+    },
 }
 
 struct PendingReview {
@@ -350,12 +352,7 @@ impl ChannelManager {
     }
 
     /// Abort a channel during review — terminates execution immediately.
-    pub async fn abort_channel(
-        &self,
-        channel_id: &str,
-        sender: &str,
-        comment: &str,
-    ) -> Result<()> {
+    pub async fn abort_channel(&self, channel_id: &str, sender: &str, comment: &str) -> Result<()> {
         self.post_message(
             channel_id,
             sender,

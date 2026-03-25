@@ -1249,11 +1249,7 @@ pub async fn get_context_stats(
         .map_err(|e| e.to_string())?;
 
     // Real context tokens from the last API call for this pup
-    let context_tokens = state
-        .alpha
-        .get_context_tokens(&pup_key)
-        .await
-        .unwrap_or(0);
+    let context_tokens = state.alpha.get_context_tokens(&pup_key).await.unwrap_or(0);
 
     // Model context window limit
     let context_limit = state.alpha.get_context_limit();

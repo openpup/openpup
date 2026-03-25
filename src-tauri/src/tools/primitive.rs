@@ -64,12 +64,15 @@ impl ToolRegistry {
 
     /// Update the context limit (called once after model is known).
     pub fn set_context_limit(&self, limit: u64) {
-        self.context_limit.store(limit, std::sync::atomic::Ordering::Relaxed);
+        self.context_limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Dynamic max chars for tool results: 30% of context window × 4 chars/token, clamped.
     fn tool_result_max_chars(&self) -> usize {
-        let limit = self.context_limit.load(std::sync::atomic::Ordering::Relaxed);
+        let limit = self
+            .context_limit
+            .load(std::sync::atomic::Ordering::Relaxed);
         let max = ((limit as f64 * 0.30) * 4.0) as usize;
         max.clamp(2_000, 32_768)
     }
@@ -225,7 +228,9 @@ impl ToolRegistry {
             }
             "file_read" => {
                 if !perms.file_read {
-                    return Err(anyhow!("file_read: permission denied (requires permissions.file_read = true)"));
+                    return Err(anyhow!(
+                        "file_read: permission denied (requires permissions.file_read = true)"
+                    ));
                 }
                 let path = args["path"]
                     .as_str()
@@ -234,7 +239,9 @@ impl ToolRegistry {
             }
             "file_write" => {
                 if !perms.file_write {
-                    return Err(anyhow!("file_write: permission denied (requires permissions.file_write = true)"));
+                    return Err(anyhow!(
+                        "file_write: permission denied (requires permissions.file_write = true)"
+                    ));
                 }
                 let path = args["path"]
                     .as_str()

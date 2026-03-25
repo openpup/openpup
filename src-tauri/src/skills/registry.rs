@@ -142,7 +142,8 @@ impl SkillRegistry {
 
     /// Bump the generation counter to signal that skill state has changed.
     fn bump_generation(&self) {
-        self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a built-in skill from an embedded TOML string.
@@ -209,7 +210,9 @@ impl SkillRegistry {
 
     /// Returns enabled skills as (name, description, triggers, is_builtin) for adaptive injection.
     /// `is_builtin` is true for `SkillSource::BuiltinToml` skills.
-    pub async fn enabled_skills_for_tools_tagged(&self) -> Vec<(String, String, Vec<String>, bool)> {
+    pub async fn enabled_skills_for_tools_tagged(
+        &self,
+    ) -> Vec<(String, String, Vec<String>, bool)> {
         let installed = self.installed.read().await;
         let skills = self.skills.read().await;
         installed

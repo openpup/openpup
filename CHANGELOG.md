@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.7...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.8...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,22 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.8](https://github.com/openpup/openpup/compare/v0.1.7...v0.1.8) — 2026-03-25
+
+### Added
+
+- **Streaming tool-call path** — agent tool loops can now consume tool-capable LLM responses through a streaming API, forwarding text tokens live while reconstructing tool calls after the stream completes.
+- **Pre-connect abort handling** — streaming tool-call requests now honor abort signals even before the HTTP stream opens, so cancellation works during slow time-to-first-byte cases.
+- **Skill prompt activation model** — skills can now be activated by injecting their prompt and permissions into the ongoing conversation, allowing Alpha to reuse skill instructions without always spawning a separate standalone loop.
+
+### Changed
+
+- **Skill permissions granularity** — file system access is now split into `file_read` and `file_write` across skills, pups, primitive tools, CLI output, and permission editing surfaces.
+- **Skill identity and discovery** — SkillHub directory names are treated as canonical skill identifiers, and activated skills can expand the available tool set by unioning their permissions into the current run.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.8`.
 
 ---
 

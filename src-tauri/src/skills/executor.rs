@@ -35,7 +35,10 @@ impl SkillExecutor {
                 )
                 .await?;
             if !allowed {
-                return Err(anyhow!("Skill '{}' was not permitted.", manifest.metadata.name));
+                return Err(anyhow!(
+                    "Skill '{}' was not permitted.",
+                    manifest.metadata.name
+                ));
             }
         }
 
@@ -66,10 +69,7 @@ impl SkillExecutor {
         if permissions.mcp {
             const MAX_MCP: usize = 20;
             let mcp_specs = self.mcp.tools_for_task(input, MAX_MCP).await;
-            debug!(
-                "[skill/{name}] injecting {} MCP tools",
-                mcp_specs.len()
-            );
+            debug!("[skill/{name}] injecting {} MCP tools", mcp_specs.len());
             available_tools.extend(mcp_specs);
         }
 

@@ -689,9 +689,7 @@ impl LlmClient {
                     .await;
 
             if abort.load(Ordering::Relaxed) {
-                debug!(
-                    "[llm] chat_with_tools_stream aborted after {chunk_count} chunks",
-                );
+                debug!("[llm] chat_with_tools_stream aborted after {chunk_count} chunks",);
                 return Ok(None);
             }
 
@@ -755,7 +753,11 @@ impl LlmClient {
                                     let idx = tc_delta["index"].as_u64().unwrap_or(0) as usize;
                                     // Grow the accumulator if needed
                                     while tool_call_acc.len() <= idx {
-                                        tool_call_acc.push((String::new(), String::new(), String::new()));
+                                        tool_call_acc.push((
+                                            String::new(),
+                                            String::new(),
+                                            String::new(),
+                                        ));
                                     }
                                     if let Some(id) = tc_delta["id"].as_str() {
                                         tool_call_acc[idx].0 = id.to_string();
@@ -763,7 +765,9 @@ impl LlmClient {
                                     if let Some(name) = tc_delta["function"]["name"].as_str() {
                                         tool_call_acc[idx].1 = name.to_string();
                                     }
-                                    if let Some(args_frag) = tc_delta["function"]["arguments"].as_str() {
+                                    if let Some(args_frag) =
+                                        tc_delta["function"]["arguments"].as_str()
+                                    {
                                         tool_call_acc[idx].2.push_str(args_frag);
                                     }
                                 }

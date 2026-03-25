@@ -449,14 +449,11 @@ impl AlphaPup {
             // Prompt injection: load the skill's prompt and inject it into
             // the system message, then run the normal tool-call loop with
             // alpha's tools so the LLM can follow the skill instructions.
-            let (skill_prompt, skill_perms) = match self
-                .skill_executor
-                .load_skill_prompt(skill_name)
-                .await
-            {
-                Ok(pair) => pair,
-                Err(e) => return Ok((format!("Skill error: {e}"), pup_key)),
-            };
+            let (skill_prompt, skill_perms) =
+                match self.skill_executor.load_skill_prompt(skill_name).await {
+                    Ok(pair) => pair,
+                    Err(e) => return Ok((format!("Skill error: {e}"), pup_key)),
+                };
 
             let run_id = Uuid::new_v4().to_string();
             let _ = self
@@ -524,7 +521,11 @@ impl AlphaPup {
                 }
             };
 
-            let status = if output.is_empty() { "aborted" } else { "completed" };
+            let status = if output.is_empty() {
+                "aborted"
+            } else {
+                "completed"
+            };
             let _ = self
                 .memory
                 .complete_skill_run(&run_id, status, &output)
@@ -827,8 +828,14 @@ impl AlphaPup {
         use chrono::Local;
         let now = Local::now();
         let weekday = match now.format("%u").to_string().as_str() {
-            "1" => "周一", "2" => "周二", "3" => "周三", "4" => "周四",
-            "5" => "周五", "6" => "周六", "7" => "周日", _ => "",
+            "1" => "周一",
+            "2" => "周二",
+            "3" => "周三",
+            "4" => "周四",
+            "5" => "周五",
+            "6" => "周六",
+            "7" => "周日",
+            _ => "",
         };
         let tz = now.format("%Z").to_string();
         let time_line = format!(
@@ -838,9 +845,7 @@ impl AlphaPup {
         if let Some(sys) = msgs.first_mut() {
             if sys["role"] == "system" {
                 if let Some(content) = sys["content"].as_str() {
-                    sys["content"] = serde_json::Value::String(
-                        format!("{content}{time_line}"),
-                    );
+                    sys["content"] = serde_json::Value::String(format!("{content}{time_line}"));
                 }
             }
         }
@@ -848,10 +853,7 @@ impl AlphaPup {
 
     /// Estimate the token count of the current context (messages + tools).
     /// Uses ~4 chars per token as a conservative heuristic.
-    fn estimate_context_tokens(
-        msgs: &[serde_json::Value],
-        tools: &[serde_json::Value],
-    ) -> u64 {
+    fn estimate_context_tokens(msgs: &[serde_json::Value], tools: &[serde_json::Value]) -> u64 {
         let msg_chars: usize = msgs
             .iter()
             .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
@@ -1016,7 +1018,9 @@ impl AlphaPup {
                 let (new_tools, new_gen) = self.build_skill_catalog().await;
                 cached_skill_tools = new_tools;
                 cached_skill_gen = new_gen;
-                debug!("[{agent_name}] skill catalog rebuilt (gen {cached_skill_gen} → {current_gen})");
+                debug!(
+                    "[{agent_name}] skill catalog rebuilt (gen {cached_skill_gen} → {current_gen})"
+                );
             }
 
             let mut iter_tools = available_tools.clone();
@@ -1170,11 +1174,7 @@ impl AlphaPup {
                             .memory
                             .record_skill_run(&run_id, &skill_name, agent_name)
                             .await;
-                        match self
-                            .skill_executor
-                            .load_skill_prompt(&skill_name)
-                            .await
-                        {
+                        match self.skill_executor.load_skill_prompt(&skill_name).await {
                             Ok((prompt, skill_perms)) => {
                                 let _ = self
                                     .memory
