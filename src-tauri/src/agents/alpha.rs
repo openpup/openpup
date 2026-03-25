@@ -809,6 +809,30 @@ impl AlphaPup {
         (tools, gen)
     }
 
+    /// Append the current local date/time to the first system message.
+    fn inject_current_time(msgs: &mut [serde_json::Value]) {
+        use chrono::Local;
+        let now = Local::now();
+        let weekday = match now.format("%u").to_string().as_str() {
+            "1" => "周一", "2" => "周二", "3" => "周三", "4" => "周四",
+            "5" => "周五", "6" => "周六", "7" => "周日", _ => "",
+        };
+        let tz = now.format("%Z").to_string();
+        let time_line = format!(
+            "\n\nCurrent time: {} ({weekday}) {tz}",
+            now.format("%Y-%m-%d %H:%M"),
+        );
+        if let Some(sys) = msgs.first_mut() {
+            if sys["role"] == "system" {
+                if let Some(content) = sys["content"].as_str() {
+                    sys["content"] = serde_json::Value::String(
+                        format!("{content}{time_line}"),
+                    );
+                }
+            }
+        }
+    }
+
     /// Estimate the token count of the current context (messages + tools).
     /// Uses ~4 chars per token as a conservative heuristic.
     fn estimate_context_tokens(
@@ -959,6 +983,9 @@ impl AlphaPup {
         let mut msgs = messages;
         const MAX_ITER: usize = 20;
         let context_limit = self.get_context_limit();
+
+        // ── Inject current time into system message ──
+        Self::inject_current_time(&mut msgs);
 
         // ── Skill tool cache: rebuild only when the registry generation changes ──
         let (mut cached_skill_tools, mut cached_skill_gen) = self.build_skill_tools().await;
