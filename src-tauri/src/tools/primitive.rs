@@ -60,19 +60,22 @@ impl ToolRegistry {
         max.clamp(2_000, 32_768)
     }
 
-    /// Truncate text to the dynamic tool result limit.
+    /// Truncate tool results using head+tail strategy: keep the first ~70% and
+    /// last ~30% of the budget so that error messages at the end aren't lost.
     fn dynamic_truncate(&self, text: &str) -> String {
         let max = self.tool_result_max_chars();
         let count = text.chars().count();
-        if count > max {
-            format!(
-                "{}\n… [truncated, {} chars total]",
-                truncate_chars(text, max),
-                count
-            )
-        } else {
-            text.to_string()
+        if count <= max {
+            return text.to_string();
         }
+        let tail_budget = max * 3 / 10; // 30% for tail
+        let head_budget = max - tail_budget - 80; // room for the marker line
+        let head: String = text.chars().take(head_budget).collect();
+        let tail: String = text.chars().skip(count - tail_budget).collect();
+        format!(
+            "{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}",
+            omitted = count - head_budget - tail_budget,
+        )
     }
 
     // ── Schema generation ──────────────────────────────────────────────────────

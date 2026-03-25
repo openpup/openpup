@@ -5,7 +5,7 @@ use tauri::{Emitter, State};
 
 use tracing::{debug, warn};
 
-use crate::agents::alpha::{AlphaPup, PupConfig};
+use crate::agents::alpha::{AlphaPup, PupConfig, PupPermissionConfig};
 use crate::bridge::types::{BridgeConfig, BridgeConnectionStatus};
 use crate::llm::client::Provider;
 use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry, McpToolInfo};
@@ -434,10 +434,11 @@ pub async fn update_pup(
     key: String,
     system_prompt_override: String,
     enabled: bool,
+    permissions: Option<PupPermissionConfig>,
 ) -> Result<(), String> {
     state
         .alpha
-        .update_pup_config(&key, system_prompt_override, enabled)
+        .update_pup_config(&key, system_prompt_override, enabled, permissions)
         .await
         .map_err(|e| e.to_string())
 }

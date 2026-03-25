@@ -2,6 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
 
+interface PupPermissionConfig {
+  shell?: boolean | null;
+  filesystem?: boolean | null;
+  network?: boolean | null;
+  mcp?: boolean | null;
+}
+
 interface PupConfig {
   key: string;
   display_name: string;
@@ -9,6 +16,28 @@ interface PupConfig {
   system_prompt_override: string;
   enabled: boolean;
   is_custom: boolean;
+  permissions?: PupPermissionConfig | null;
+}
+
+/** Built-in pup default permissions (matches Rust hardcoded values). */
+const DEFAULT_PERMS: Record<string, PupPermissionConfig> = {
+  dev:        { shell: true,  filesystem: true,  network: true,  mcp: true },
+  ops:        { shell: true,  filesystem: true,  network: true,  mcp: true },
+  research:   { shell: false, filesystem: false, network: true,  mcp: true },
+  writer:     { shell: false, filesystem: false, network: false, mcp: true },
+  life_admin: { shell: false, filesystem: false, network: false, mcp: true },
+};
+const CUSTOM_DEFAULT: PupPermissionConfig = { shell: false, filesystem: false, network: false, mcp: true };
+
+function resolvePerms(pup: PupConfig): Required<{ [K in keyof PupPermissionConfig]: boolean }> {
+  const base = DEFAULT_PERMS[pup.key] ?? CUSTOM_DEFAULT;
+  const over = pup.permissions ?? {};
+  return {
+    shell: over.shell ?? base.shell ?? false,
+    filesystem: over.filesystem ?? base.filesystem ?? false,
+    network: over.network ?? base.network ?? false,
+    mcp: over.mcp ?? base.mcp ?? true,
+  };
 }
 
 const inputStyle: React.CSSProperties = {
@@ -27,6 +56,7 @@ export const PupManager: React.FC = () => {
   const [pups, setPups] = useState<PupConfig[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState('');
+  const [draftPerms, setDraftPerms] = useState<PupPermissionConfig>({});
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -47,7 +77,15 @@ export const PupManager: React.FC = () => {
   const save = async (key: string, enabled: boolean) => {
     setError(null);
     try {
-      await invoke('update_pup', { key, systemPromptOverride: draftPrompt, enabled });
+      // Only send permissions if any field is explicitly set
+      const hasOverride = draftPerms.shell != null || draftPerms.filesystem != null ||
+        draftPerms.network != null || draftPerms.mcp != null;
+      await invoke('update_pup', {
+        key,
+        systemPromptOverride: draftPrompt,
+        enabled,
+        permissions: hasOverride ? draftPerms : null,
+      });
       setEditing(null);
       await load();
       flash(t('pup_saved', lang));
@@ -61,6 +99,7 @@ export const PupManager: React.FC = () => {
         key: pup.key,
         systemPromptOverride: pup.system_prompt_override,
         enabled: !pup.enabled,
+        permissions: pup.permissions ?? null,
       });
       await load();
     } catch (e) { setError(String(e)); }
@@ -158,6 +197,7 @@ export const PupManager: React.FC = () => {
                 onClick={() => {
                   setEditing(editing === pup.key ? null : pup.key);
                   setDraftPrompt(pup.system_prompt_override);
+                  setDraftPerms(pup.permissions ?? {});
                 }}
                 style={{
                   padding: '4px 8px',
@@ -235,6 +275,38 @@ export const PupManager: React.FC = () => {
                 value={draftPrompt}
                 onChange={(e) => setDraftPrompt(e.target.value)}
               />
+              {/* Permission toggles */}
+              <div>
+                <p style={{ color: 'var(--color-text-tertiary)', margin: '0 0 6px' }}>{t('pup_perms_title', lang)}</p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {([
+                    ['shell', 'pup_perm_shell'],
+                    ['filesystem', 'pup_perm_filesystem'],
+                    ['network', 'pup_perm_network'],
+                    ['mcp', 'pup_perm_mcp'],
+                  ] as const).map(([perm, labelKey]) => {
+                    const resolved = resolvePerms({ ...pup, permissions: draftPerms });
+                    const isOn = resolved[perm as keyof typeof resolved];
+                    return (
+                      <button
+                        key={perm}
+                        onClick={() => setDraftPerms((prev) => ({ ...prev, [perm]: !isOn }))}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: 8,
+                          fontSize: 11,
+                          border: 'none',
+                          cursor: 'pointer',
+                          background: isOn ? 'var(--color-background-success)' : 'var(--color-background-secondary)',
+                          color: isOn ? 'var(--color-text-success)' : 'var(--color-text-tertiary)',
+                        }}
+                      >
+                        {t(labelKey, lang)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={() => void save(pup.key, pup.enabled)}

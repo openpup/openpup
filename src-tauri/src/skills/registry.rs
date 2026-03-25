@@ -203,6 +203,27 @@ impl SkillRegistry {
             .collect()
     }
 
+    /// Returns enabled skills as (name, description, triggers, is_builtin) for adaptive injection.
+    /// `is_builtin` is true for `SkillSource::BuiltinToml` skills.
+    pub async fn enabled_skills_for_tools_tagged(&self) -> Vec<(String, String, Vec<String>, bool)> {
+        let installed = self.installed.read().await;
+        let skills = self.skills.read().await;
+        installed
+            .values()
+            .filter(|s| s.enabled)
+            .filter_map(|s| {
+                let manifest = skills.get(&s.name)?;
+                let is_builtin = matches!(manifest.source, SkillSource::BuiltinToml(_));
+                Some((
+                    s.name.clone(),
+                    manifest.metadata.description.clone(),
+                    manifest.metadata.triggers.clone(),
+                    is_builtin,
+                ))
+            })
+            .collect()
+    }
+
     // ── CRUD ───────────────────────────────────────────────────────────────────
 
     pub async fn load_from_dir(&self, root: impl AsRef<Path>) -> Result<()> {

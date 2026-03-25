@@ -41,6 +41,33 @@ pub struct PupConfig {
     /// True for user-created pups (can be deleted); false for built-ins.
     #[serde(default)]
     pub is_custom: bool,
+    /// Optional tool permission overrides. When set, these take priority over
+    /// the pup's hardcoded `tool_permissions()` defaults.
+    #[serde(default)]
+    pub permissions: Option<PupPermissionConfig>,
+}
+
+/// Configurable tool permissions for a pup.
+/// Each field is optional — `None` means "use the pup's built-in default".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PupPermissionConfig {
+    pub shell: Option<bool>,
+    pub filesystem: Option<bool>,
+    pub network: Option<bool>,
+    pub mcp: Option<bool>,
+}
+
+impl PupPermissionConfig {
+    /// Overlay config permissions on top of a pup's hardcoded defaults.
+    /// `None` fields fall through to the default.
+    pub fn merge_over(&self, base: PupToolPermissions) -> PupToolPermissions {
+        PupToolPermissions {
+            shell: self.shell.unwrap_or(base.shell),
+            filesystem: self.filesystem.unwrap_or(base.filesystem),
+            network: self.network.unwrap_or(base.network),
+            mcp: self.mcp.unwrap_or(base.mcp),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -66,6 +93,7 @@ fn default_pup_configs() -> HashMap<String, PupConfig> {
                 system_prompt_override: String::new(),
                 enabled: true,
                 is_custom: false,
+                permissions: None,
             },
         )
     })
@@ -513,7 +541,14 @@ impl AlphaPup {
             };
 
             let system_prompt = pup.build_system_prompt(&task);
-            let tool_perms = pup.tool_permissions();
+            let base_perms = pup.tool_permissions();
+            let tool_perms = if let Some(cfg) = self.configured_pup(&pup_key).await {
+                cfg.permissions
+                    .map(|p| p.merge_over(base_perms.clone()))
+                    .unwrap_or(base_perms)
+            } else {
+                base_perms
+            };
 
             // Build message list as JSON values for chat_with_tools
             let mut msgs: Vec<serde_json::Value> =
@@ -677,43 +712,100 @@ impl AlphaPup {
     /// than this, `tools_for_task` keeps only the most relevant ones.
     const MAX_MCP_TOOLS: usize = 30;
 
+    /// Build a single skill tool definition from (name, description, triggers).
+    fn skill_to_tool_json(name: &str, description: &str, triggers: &[String]) -> serde_json::Value {
+        use crate::mcp::orchestrator::sanitize_tool_name;
+        let desc = if triggers.is_empty() {
+            description.to_string()
+        } else {
+            format!("{description}（触发词: {}）", triggers.join(", "))
+        };
+        let safe_name = sanitize_tool_name(name);
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": format!("skill__{safe_name}"),
+                "description": desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "用户的请求或任务描述，原文传入"
+                        }
+                    },
+                    "required": ["input"]
+                }
+            }
+        })
+    }
+
     /// Build tool schemas for all currently enabled installed skills.
     /// Returns the tool list and the registry generation at which it was built.
+    ///
+    /// **Adaptive injection:**
+    /// - Builtin (TOML) skills are always injected as full tool definitions.
+    /// - External (user-installed) skills always use catalog mode with a single
+    ///   `discover_skills` meta-tool to keep token costs constant regardless of
+    ///   how many skills are installed.
     async fn build_skill_tools(&self) -> (Vec<serde_json::Value>, u64) {
-        use crate::mcp::orchestrator::sanitize_tool_name;
         let gen = self.skill_executor.registry.generation();
-        let tools = self
+        let enabled = self
             .skill_executor
             .registry
-            .enabled_skills_for_tools()
-            .await
-            .into_iter()
-            .map(|(name, description, triggers)| {
-                let desc = if triggers.is_empty() {
-                    description
+            .enabled_skills_for_tools_tagged()
+            .await;
+
+        let (builtins, external): (Vec<_>, Vec<_>) =
+            enabled.iter().partition(|(_, _, _, is_builtin)| *is_builtin);
+
+        // Builtins are always injected as full tool definitions.
+        let mut tools: Vec<serde_json::Value> = builtins
+            .iter()
+            .map(|(name, desc, triggers, _)| Self::skill_to_tool_json(name, desc, triggers))
+            .collect();
+
+        if external.is_empty() {
+            return (tools, gen);
+        }
+
+        // Catalog mode for external skills — compact catalog + discover_skills meta-tool.
+        let catalog_lines: Vec<String> = external
+            .iter()
+            .map(|(name, desc, triggers, _)| {
+                if triggers.is_empty() {
+                    format!("- {name}: {desc}")
                 } else {
-                    format!("{description}（触发词: {}）", triggers.join(", "))
-                };
-                let safe_name = sanitize_tool_name(&name);
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": format!("skill__{safe_name}"),
-                        "description": desc,
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "input": {
-                                    "type": "string",
-                                    "description": "用户的请求或任务描述，原文传入"
-                                }
-                            },
-                            "required": ["input"]
-                        }
-                    }
-                })
+                    format!("- {name}: {desc}（触发词: {}）", triggers.join(", "))
+                }
             })
             .collect();
+        let catalog = catalog_lines.join("\n");
+        let meta_desc = format!(
+            "Search and activate installed skills by keyword. \
+             Call this tool with a query to find matching skills, \
+             which will then become available as tools.\n\n\
+             Available skills ({} total):\n{catalog}",
+            external.len()
+        );
+
+        tools.push(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "discover_skills",
+                "description": meta_desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索关键词，用于匹配技能名称和描述"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }));
         (tools, gen)
     }
 
@@ -870,6 +962,9 @@ impl AlphaPup {
 
         // ── Skill tool cache: rebuild only when the registry generation changes ──
         let (mut cached_skill_tools, mut cached_skill_gen) = self.build_skill_tools().await;
+        // When in catalog mode (discover_skills), dynamically discovered skill tools
+        // are accumulated here so they persist across iterations within a single call.
+        let mut discovered_skill_tools: Vec<serde_json::Value> = Vec::new();
 
         for iter in 0..MAX_ITER {
             if abort.load(Ordering::Relaxed) {
@@ -883,12 +978,14 @@ impl AlphaPup {
                 let (new_tools, new_gen) = self.build_skill_tools().await;
                 cached_skill_tools = new_tools;
                 cached_skill_gen = new_gen;
+                discovered_skill_tools.clear(); // catalog changed, reset discoveries
                 debug!("[{agent_name}] skill tools rebuilt (gen {cached_skill_gen} → {current_gen})");
             }
 
             let mut iter_tools = available_tools.clone();
-            let skill_tool_count = cached_skill_tools.len();
+            let skill_tool_count = cached_skill_tools.len() + discovered_skill_tools.len();
             iter_tools.extend(cached_skill_tools.clone());
+            iter_tools.extend(discovered_skill_tools.clone());
 
             // ── Priority 1: Context window guard ──
             // Estimate tokens and trim if approaching the limit.
@@ -1014,6 +1111,65 @@ impl AlphaPup {
                     {
                         Ok(_) => format!("Task {id} updated to {status}."),
                         Err(e) => format!("task_update failed: {e}"),
+                    }
+                } else if tc.name == "discover_skills" {
+                    // Meta-tool for catalog mode: match skills by query and inject
+                    // their full tool definitions for the next iteration.
+                    let query = tc.arguments["query"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let enabled = self
+                        .skill_executor
+                        .registry
+                        .enabled_skills_for_tools()
+                        .await;
+                    let matched: Vec<_> = enabled
+                        .iter()
+                        .filter(|(name, desc, triggers)| {
+                            let haystack = format!(
+                                "{} {} {}",
+                                name.to_lowercase(),
+                                desc.to_lowercase(),
+                                triggers.join(" ").to_lowercase()
+                            );
+                            query.split_whitespace().any(|kw| haystack.contains(kw))
+                        })
+                        .collect();
+                    if matched.is_empty() {
+                        format!(
+                            "No skills matched query '{}'. Available skills: {}",
+                            query,
+                            enabled
+                                .iter()
+                                .map(|(n, _, _)| n.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    } else {
+                        // Inject matched skills as full tool definitions for subsequent iterations
+                        use crate::mcp::orchestrator::sanitize_tool_name;
+                        let mut result_lines = Vec::new();
+                        for (name, desc, triggers) in &matched {
+                            let safe = sanitize_tool_name(name);
+                            let tool_name = format!("skill__{safe}");
+                            // Avoid duplicates
+                            if !discovered_skill_tools.iter().any(|t| {
+                                t["function"]["name"].as_str() == Some(&tool_name)
+                            }) {
+                                discovered_skill_tools.push(
+                                    Self::skill_to_tool_json(name, desc, triggers),
+                                );
+                            }
+                            result_lines.push(format!(
+                                "- skill__{safe}: {desc}"
+                            ));
+                        }
+                        format!(
+                            "Found {} skill(s). They are now available as tools:\n{}",
+                            matched.len(),
+                            result_lines.join("\n")
+                        )
                     }
                 } else if let Some(safe_name) = tc.name.strip_prefix("skill__") {
                     // LLM explicitly called an installed skill as a tool.
@@ -2359,7 +2515,14 @@ impl AlphaPup {
         };
 
         let system_prompt = pup.build_system_prompt(&task);
-        let tool_perms = pup.tool_permissions();
+        let base_perms = pup.tool_permissions();
+        let tool_perms = if let Some(cfg) = self.configured_pup(pup_key).await {
+            cfg.permissions
+                .map(|p| p.merge_over(base_perms.clone()))
+                .unwrap_or(base_perms)
+        } else {
+            base_perms
+        };
         let msgs = vec![
             serde_json::json!({ "role": "system", "content": system_prompt }),
             serde_json::json!({ "role": "user", "content": msg }),
@@ -2889,12 +3052,14 @@ impl AlphaPup {
         key: &str,
         system_prompt_override: String,
         enabled: bool,
+        permissions: Option<PupPermissionConfig>,
     ) -> Result<()> {
         {
             let mut guard = self.pup_configs.write().await;
             if let Some(cfg) = guard.get_mut(key) {
                 cfg.system_prompt_override = system_prompt_override;
                 cfg.enabled = enabled;
+                cfg.permissions = permissions;
             }
         }
         self.persist_pup_configs().await
@@ -2914,6 +3079,7 @@ impl AlphaPup {
             system_prompt_override: system_prompt.clone(),
             enabled: true,
             is_custom: true,
+            permissions: None,
         };
         {
             let mut guard = self.pup_configs.write().await;
@@ -2994,6 +3160,10 @@ pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, Stri
         "task_update" => {
             let status = args["status"].as_str().unwrap_or("");
             ("task".into(), format!("→ {status}"))
+        }
+        "discover_skills" => {
+            let query = args["query"].as_str().unwrap_or("");
+            ("skill".into(), format!("discover: {}", trunc(query, 40)))
         }
         _ if name.starts_with("skill__") => {
             let skill = name.strip_prefix("skill__").unwrap_or(name);
