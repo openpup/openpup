@@ -51,10 +51,11 @@ impl SpecialistPup for OpsPup {
     }
 
     fn tool_permissions(&self) -> PupToolPermissions {
-        // Ops gets shell + filesystem + network — running commands, automation, and fetching resources.
+        // Ops gets full tool access — running commands, automation, and fetching resources.
         PupToolPermissions {
             shell: true,
-            filesystem: true,
+            file_read: true,
+            file_write: true,
             network: true,
             mcp: true,
         }

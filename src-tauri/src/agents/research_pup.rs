@@ -51,10 +51,11 @@ impl SpecialistPup for ResearchPup {
     }
 
     fn tool_permissions(&self) -> PupToolPermissions {
-        // Research gets network access so it can fetch URLs.
+        // Research gets network + file_read — can fetch URLs and read project files for context.
         PupToolPermissions {
             shell: false,
-            filesystem: false,
+            file_read: true,
+            file_write: false,
             network: true,
             mcp: true,
         }

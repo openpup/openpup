@@ -8,7 +8,8 @@ triggers = ["daily summary", "日报", "今日总结", "今天总结", "daily re
 
 [permissions]
 shell = false
-filesystem = false
+file_read = false
+file_write = false
 network = false
 dangerous = false
 

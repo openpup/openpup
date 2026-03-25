@@ -11,7 +11,8 @@ triggers = [
 ]
 
 [permissions]
-filesystem = true
+file_read = true
+file_write = true
 
 [prompt]
 system = """你是 Task Manager，负责管理 openpup 的定时任务系统。

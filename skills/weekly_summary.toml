@@ -8,7 +8,8 @@ triggers = ["weekly summary", "周报", "周总结", "本周总结", "weekly rep
 
 [permissions]
 shell = false
-filesystem = false
+file_read = false
+file_write = false
 network = false
 dangerous = false
 

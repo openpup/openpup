@@ -4,7 +4,8 @@ import { useLang, t } from '../i18n';
 
 interface PupPermissionConfig {
   shell?: boolean | null;
-  filesystem?: boolean | null;
+  file_read?: boolean | null;
+  file_write?: boolean | null;
   network?: boolean | null;
   mcp?: boolean | null;
 }
@@ -21,20 +22,21 @@ interface PupConfig {
 
 /** Built-in pup default permissions (matches Rust hardcoded values). */
 const DEFAULT_PERMS: Record<string, PupPermissionConfig> = {
-  dev:        { shell: true,  filesystem: true,  network: true,  mcp: true },
-  ops:        { shell: true,  filesystem: true,  network: true,  mcp: true },
-  research:   { shell: false, filesystem: false, network: true,  mcp: true },
-  writer:     { shell: false, filesystem: false, network: false, mcp: true },
-  life_admin: { shell: false, filesystem: false, network: false, mcp: true },
+  dev:        { shell: true,  file_read: true,  file_write: true,  network: true,  mcp: true },
+  ops:        { shell: true,  file_read: true,  file_write: true,  network: true,  mcp: true },
+  research:   { shell: false, file_read: true,  file_write: false, network: true,  mcp: true },
+  writer:     { shell: false, file_read: false, file_write: false, network: false, mcp: true },
+  life_admin: { shell: false, file_read: false, file_write: false, network: false, mcp: true },
 };
-const CUSTOM_DEFAULT: PupPermissionConfig = { shell: false, filesystem: false, network: false, mcp: true };
+const CUSTOM_DEFAULT: PupPermissionConfig = { shell: false, file_read: false, file_write: false, network: false, mcp: true };
 
 function resolvePerms(pup: PupConfig): Required<{ [K in keyof PupPermissionConfig]: boolean }> {
   const base = DEFAULT_PERMS[pup.key] ?? CUSTOM_DEFAULT;
   const over = pup.permissions ?? {};
   return {
     shell: over.shell ?? base.shell ?? false,
-    filesystem: over.filesystem ?? base.filesystem ?? false,
+    file_read: over.file_read ?? base.file_read ?? false,
+    file_write: over.file_write ?? base.file_write ?? false,
     network: over.network ?? base.network ?? false,
     mcp: over.mcp ?? base.mcp ?? true,
   };
@@ -78,8 +80,8 @@ export const PupManager: React.FC = () => {
     setError(null);
     try {
       // Only send permissions if any field is explicitly set
-      const hasOverride = draftPerms.shell != null || draftPerms.filesystem != null ||
-        draftPerms.network != null || draftPerms.mcp != null;
+      const hasOverride = draftPerms.shell != null || draftPerms.file_read != null ||
+        draftPerms.file_write != null || draftPerms.network != null || draftPerms.mcp != null;
       await invoke('update_pup', {
         key,
         systemPromptOverride: draftPrompt,
@@ -281,7 +283,8 @@ export const PupManager: React.FC = () => {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {([
                     ['shell', 'pup_perm_shell'],
-                    ['filesystem', 'pup_perm_filesystem'],
+                    ['file_read', 'pup_perm_file_read'],
+                    ['file_write', 'pup_perm_file_write'],
                     ['network', 'pup_perm_network'],
                     ['mcp', 'pup_perm_mcp'],
                   ] as const).map(([perm, labelKey]) => {

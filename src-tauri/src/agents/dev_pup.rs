@@ -51,10 +51,11 @@ impl SpecialistPup for DevPup {
     }
 
     fn tool_permissions(&self) -> PupToolPermissions {
-        // Dev gets shell + filesystem + network for builds, tests, reading project files and docs.
+        // Dev gets full tool access for builds, tests, reading/writing project files and docs.
         PupToolPermissions {
             shell: true,
-            filesystem: true,
+            file_read: true,
+            file_write: true,
             network: true,
             mcp: true,
         }

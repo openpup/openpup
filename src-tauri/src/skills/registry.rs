@@ -26,13 +26,16 @@ pub struct SkillMetadata {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SkillPermissions {
-    // ── New primitive-level flags (zeroclaw-style) ─────────────────────────────
+    // ── Primitive-level flags ──────────────────────────────────────────────────
     /// Allow the skill to run shell commands.
     #[serde(default)]
     pub shell: bool,
-    /// Allow file_read and file_write tools.
+    /// Allow file_read tool.
     #[serde(default)]
-    pub filesystem: bool,
+    pub file_read: bool,
+    /// Allow file_write tool.
+    #[serde(default)]
+    pub file_write: bool,
     /// Allow http_get tool.
     #[serde(default)]
     pub network: bool,
@@ -52,7 +55,8 @@ impl Default for SkillPermissions {
     fn default() -> Self {
         Self {
             shell: false,
-            filesystem: false,
+            file_read: false,
+            file_write: false,
             network: false,
             mcp: false,
             dangerous: false,

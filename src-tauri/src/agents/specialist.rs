@@ -46,8 +46,10 @@ pub struct TaskResult {
 pub struct PupToolPermissions {
     /// Allow `shell_exec` primitive.
     pub shell: bool,
-    /// Allow `file_read` / `file_write` primitives.
-    pub filesystem: bool,
+    /// Allow `file_read` primitive.
+    pub file_read: bool,
+    /// Allow `file_write` primitive.
+    pub file_write: bool,
     /// Allow `http_get` primitive.
     pub network: bool,
     /// Inject all cached MCP server tools.
@@ -58,7 +60,8 @@ impl Default for PupToolPermissions {
     fn default() -> Self {
         Self {
             shell: false,
-            filesystem: false,
+            file_read: false,
+            file_write: false,
             network: false,
             mcp: true,
         }

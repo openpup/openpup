@@ -17,7 +17,8 @@ use crate::memory::system::MemorySystem;
 #[derive(Debug, Clone, Default)]
 pub struct ToolPermissions {
     pub shell: bool,
-    pub filesystem: bool,
+    pub file_read: bool,
+    pub file_write: bool,
     pub network: bool,
 }
 
@@ -103,7 +104,7 @@ impl ToolRegistry {
       }));
         }
 
-        if perms.filesystem {
+        if perms.file_read {
             tools.push(serde_json::json!({
         "type": "function",
         "function": {
@@ -118,6 +119,9 @@ impl ToolRegistry {
           }
         }
       }));
+        }
+
+        if perms.file_write {
             tools.push(serde_json::json!({
         "type": "function",
         "function": {
@@ -207,8 +211,8 @@ impl ToolRegistry {
                 self.shell_exec(cmd).await
             }
             "file_read" => {
-                if !perms.filesystem {
-                    return Err(anyhow!("file_read: permission denied (skill requires permissions.filesystem = true)"));
+                if !perms.file_read {
+                    return Err(anyhow!("file_read: permission denied (requires permissions.file_read = true)"));
                 }
                 let path = args["path"]
                     .as_str()
@@ -216,8 +220,8 @@ impl ToolRegistry {
                 self.file_read(path).await
             }
             "file_write" => {
-                if !perms.filesystem {
-                    return Err(anyhow!("file_write: permission denied (skill requires permissions.filesystem = true)"));
+                if !perms.file_write {
+                    return Err(anyhow!("file_write: permission denied (requires permissions.file_write = true)"));
                 }
                 let path = args["path"]
                     .as_str()
