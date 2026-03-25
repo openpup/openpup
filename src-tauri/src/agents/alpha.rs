@@ -156,6 +156,8 @@ pub struct AlphaPup {
     pub abort_flag: AbortFlag,
     /// Per-pup configuration (enabled state, system-prompt overrides, custom pups).
     pup_configs: Arc<RwLock<HashMap<String, PupConfig>>>,
+    /// Per-pup real context token counts (prompt_tokens from the last API call for each pup).
+    per_pup_context_tokens: Arc<RwLock<HashMap<String, u64>>>,
     pup_config_path: Option<PathBuf>,
     /// Cached summarised OWNER.md with TTL.
     owner_summary_cache: Arc<RwLock<Option<(String, std::time::Instant)>>>,
@@ -196,6 +198,7 @@ impl AlphaPup {
             skill_executor,
             abort_flag: Arc::new(AtomicBool::new(false)),
             pup_configs: Arc::new(RwLock::new(configs)),
+            per_pup_context_tokens: Arc::new(RwLock::new(HashMap::new())),
             pup_config_path,
             owner_summary_cache: Arc::new(RwLock::new(None)),
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -470,6 +473,7 @@ impl AlphaPup {
                     events.clone(),
                 )
                 .await?;
+            self.record_pup_context_tokens_async("alpha").await;
             return Ok((reply, "alpha".to_string()));
         }
 
@@ -546,6 +550,7 @@ impl AlphaPup {
                     "Error: review requests are not supported in direct chat.".to_string()
                 }
             };
+            self.record_pup_context_tokens_async(&pup_key).await;
             return Ok((output, pup_key));
         }
 
@@ -561,6 +566,7 @@ impl AlphaPup {
                 events.clone(),
             )
             .await?;
+        self.record_pup_context_tokens_async("alpha").await;
         Ok((reply, "alpha".to_string()))
     }
 
@@ -2043,6 +2049,7 @@ impl AlphaPup {
             let reply = self
                 .run_pup_for_channel(&pup_key, &msg, &owner_summary)
                 .await?;
+            self.record_pup_context_tokens_async(&pup_key).await;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
                 self.post_process_conversation_turn(&pup_key, &msg, &reply)
                     .await?;
@@ -2067,6 +2074,7 @@ impl AlphaPup {
                 &pending_tasks,
             )
             .await?;
+        self.record_pup_context_tokens_async("alpha").await;
         if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
             self.post_process_conversation_turn("alpha", &msg, &reply)
                 .await?;
@@ -2458,6 +2466,32 @@ impl AlphaPup {
             *guard = Some((summary.clone(), std::time::Instant::now()));
         }
         summary
+    }
+
+    // ── Per-pup context token tracking ──────────────────────────────────────────
+
+    /// Record prompt_tokens from the last API call for a pup.
+    async fn record_pup_context_tokens_async(&self, pup: &str) {
+        if let Some(usage) = self.llm_client.take_last_call_usage() {
+            if usage.prompt_tokens > 0 {
+                self.per_pup_context_tokens
+                    .write()
+                    .await
+                    .insert(pup.to_string(), usage.prompt_tokens);
+            }
+        }
+    }
+
+    /// Get the real context token count for a pup (from its last API call).
+    pub async fn get_context_tokens(&self, pup: &str) -> Option<u64> {
+        self.per_pup_context_tokens.read().await.get(pup).copied()
+    }
+
+    /// Get the model's context window limit.
+    pub fn get_context_limit(&self) -> u64 {
+        // Common context window sizes based on model name
+        let model = self.llm_client.model_name();
+        infer_context_limit(&model)
     }
 
     // ── History & memory extraction ────────────────────────────────────────────
@@ -2902,5 +2936,32 @@ pub fn pup_display_name(key: &str) -> String {
                 Some(f) => f.to_uppercase().collect::<String>() + c.as_str() + " Pup",
             }
         }
+    }
+}
+
+/// Infer the context window limit (in tokens) from a model name string.
+fn infer_context_limit(model: &str) -> u64 {
+    let m = model.to_lowercase();
+    if m.contains("gpt-4o") || m.contains("gpt-4-turbo") {
+        128_000
+    } else if m.contains("gpt-4") {
+        8_192
+    } else if m.contains("gpt-3.5") {
+        16_385
+    } else if m.contains("deepseek") {
+        65_536
+    } else if m.contains("claude-3") || m.contains("claude-4") {
+        200_000
+    } else if m.contains("qwen") {
+        131_072
+    } else if m.contains("llama-3") || m.contains("llama3") {
+        131_072
+    } else if m.contains("gemma") {
+        8_192
+    } else if m.contains("mistral") || m.contains("mixtral") {
+        32_768
+    } else {
+        // Conservative default
+        128_000
     }
 }

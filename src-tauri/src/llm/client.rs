@@ -123,6 +123,8 @@ pub struct LlmClient {
     http: reqwest::Client,
     /// Cumulative token usage across all API calls in this session.
     pub usage: Arc<CumulativeUsage>,
+    /// Usage from the most recent API call (for per-pup tracking).
+    last_call_usage: Arc<Mutex<Option<TokenUsage>>>,
 }
 
 impl LlmClient {
@@ -175,7 +177,18 @@ impl LlmClient {
             cache: Arc::new(Mutex::new(VecDeque::new())),
             http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
+            last_call_usage: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Returns the token usage from the most recent API call.
+    pub fn take_last_call_usage(&self) -> Option<TokenUsage> {
+        self.last_call_usage.lock().unwrap().take()
+    }
+
+    /// Returns the currently configured model name.
+    pub fn model_name(&self) -> String {
+        self.config.read().unwrap().model.clone()
     }
 
     pub fn provider(&self) -> Provider {
@@ -320,6 +333,7 @@ impl LlmClient {
         // Track token usage from the response
         if let Some(u) = parse_usage(&val) {
             self.usage.accumulate(&u);
+            *self.last_call_usage.lock().unwrap() = Some(u);
         }
 
         debug!("[llm] chat done: {} chars", text.len());
@@ -461,6 +475,7 @@ impl LlmClient {
                 u.prompt_tokens, u.completion_tokens, u.total_tokens
             );
             self.usage.accumulate(u);
+            *self.last_call_usage.lock().unwrap() = Some(u.clone());
         }
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
@@ -524,6 +539,7 @@ impl LlmClient {
         // Track token usage
         if let Some(u) = parse_usage(&val) {
             self.usage.accumulate(&u);
+            *self.last_call_usage.lock().unwrap() = Some(u);
         }
 
         let message = val["choices"][0]["message"].clone();

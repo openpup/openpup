@@ -93,7 +93,8 @@ interface PupConfig {
 interface ContextStats {
   pup_key: string;
   message_count: number;
-  estimated_tokens: number;
+  context_tokens: number;
+  context_limit: number;
   compression_status: {
     is_compressed: boolean;
     last_compression_row: number;
@@ -371,7 +372,7 @@ const AppInner: React.FC = () => {
           loadMemoryChips();
           setMessages([{ id: 'welcome', role: 'assistant', content: t('chat_welcome', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
           // Load initial context stats + token usage
-          void invoke<ContextStats>('get_context_stats', { pup_key: 'alpha' })
+          void invoke<ContextStats>('get_context_stats', { pupKey: 'alpha' })
             .then((stats) => setContextStats(stats))
             .catch((e) => {
               console.warn('get_context_stats failed on init:', e);
@@ -419,7 +420,7 @@ const AppInner: React.FC = () => {
           ]);
           void loadMemoryChips();
           // Load context stats after message completes
-          void invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey })
+          void invoke<ContextStats>('get_context_stats', { pupKey: selectedPupKey })
             .then((stats) => {
               setContextStats(stats);
             })
@@ -461,7 +462,7 @@ const AppInner: React.FC = () => {
   // Keep title-bar context stats in sync with current pup selection.
   useEffect(() => {
     if (!onboardingDone) return;
-    void invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey })
+    void invoke<ContextStats>('get_context_stats', { pupKey: selectedPupKey })
       .then((stats) => setContextStats(stats))
       .catch((e) => {
         console.warn('get_context_stats failed on pup switch:', e);
@@ -654,7 +655,23 @@ const AppInner: React.FC = () => {
           {/* Context stats + compress button */}
           {contextStats && (
             <div data-tauri-drag-region style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span data-tauri-drag-region>~{Math.round(contextStats.estimated_tokens / 1000)}k ctx</span>
+              {contextStats.context_tokens > 0 ? (
+                <span
+                  data-tauri-drag-region
+                  title={`${contextStats.context_tokens.toLocaleString()} / ${contextStats.context_limit.toLocaleString()} tokens (${Math.round(contextStats.context_tokens / contextStats.context_limit * 100)}%)`}
+                  style={{
+                    color: contextStats.context_tokens / contextStats.context_limit > 0.8
+                      ? 'var(--color-text-danger, #e55)'
+                      : contextStats.context_tokens / contextStats.context_limit > 0.5
+                        ? 'var(--color-text-warning, #ea3)'
+                        : 'var(--color-text-tertiary)',
+                  }}
+                >
+                  {formatTokens(contextStats.context_tokens)}/{formatTokens(contextStats.context_limit)} ctx
+                </span>
+              ) : (
+                <span data-tauri-drag-region style={{ opacity: 0.5 }}>-- ctx</span>
+              )}
               {contextStats.compression_status.is_compressed && (
                 <span data-tauri-drag-region style={{ fontSize: '9px', opacity: 0.6 }}>{t('ctx_compressed', lang)}</span>
               )}
@@ -662,8 +679,8 @@ const AppInner: React.FC = () => {
                 <button
                   title={t('ctx_compress_tip', lang)}
                   onClick={() => {
-                    void invoke('compress_pup_context', { pup_key: selectedPupKey })
-                      .then(() => invoke<ContextStats>('get_context_stats', { pup_key: selectedPupKey }))
+                    void invoke('compress_pup_context', { pupKey: selectedPupKey })
+                      .then(() => invoke<ContextStats>('get_context_stats', { pupKey: selectedPupKey }))
                       .then((stats) => setContextStats(stats))
                       .catch(() => {});
                   }}

@@ -1197,11 +1197,14 @@ pub struct CompressionStatus {
 pub struct ContextStats {
     pub pup_key: String,
     pub message_count: i64,
-    pub estimated_tokens: usize,
+    /// Real prompt token count from the last API call for this pup (0 if no data yet).
+    pub context_tokens: u64,
+    /// Model's context window limit in tokens.
+    pub context_limit: u64,
     pub compression_status: CompressionStatus,
 }
 
-/// Fetch comprehensive context statistics for a pup (message count, estimated tokens, compression status).
+/// Fetch comprehensive context statistics for a pup (real token counts, compression status).
 #[tauri::command]
 pub async fn get_context_stats(
     state: State<'_, AppState>,
@@ -1221,13 +1224,21 @@ pub async fn get_context_stats(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Estimate tokens: conservatively assume ~100 tokens per message
-    let estimated_tokens = (message_count as usize) * 100;
+    // Real context tokens from the last API call for this pup
+    let context_tokens = state
+        .alpha
+        .get_context_tokens(&pup_key)
+        .await
+        .unwrap_or(0);
+
+    // Model context window limit
+    let context_limit = state.alpha.get_context_limit();
 
     Ok(ContextStats {
         pup_key,
         message_count,
-        estimated_tokens,
+        context_tokens,
+        context_limit,
         compression_status: CompressionStatus {
             is_compressed,
             last_compression_row,
