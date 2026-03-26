@@ -3412,7 +3412,7 @@ dependencies = [
 
 [[package]]
 name = "openpup"
-version = "0.1.8"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-core"
-version = "0.1.8"
+version = "0.1.11"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3459,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-daemon"
-version = "0.1.8"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3475,7 +3475,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-tauri"
-version = "0.1.8"
+version = "0.1.11"
 dependencies = [
  "aes-gcm",
  "anyhow",

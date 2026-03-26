@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.8...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.11...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,54 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.11](https://github.com/openpup/openpup/compare/v0.1.10...v0.1.11) — 2026-03-26
+
+### Added
+
+- **Lightweight knowledge graph** — entity extraction, relation storage, and graph-aware retrieval were added on top of the knowledge base so research and writing flows can connect people, places, concepts, and documents across sources.
+- **Graph retrieval integration** — the knowledge workflow can now surface graph-linked context alongside chunk search results to support multi-hop reasoning over indexed materials.
+
+### Fixed
+
+- **Cross-platform shell hardening** — shell execution paths were tightened for safer behavior across platforms while preserving the existing tool workflow.
+- **LLM config key preservation** — configuration updates now preserve existing API key values instead of accidentally clearing them during unrelated saves.
+- **Onboarding shell window chrome** — loading and onboarding screens now restore the missing window titlebar, and onboarding icons resolve through the Vite asset pipeline correctly in packaged builds.
+
+### Changed
+
+- **Knowledge graph and memory formatting** — related Rust modules were normalized with `rustfmt` for a cleaner release baseline.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.11`.
+
+---
+
+## [0.1.10](https://github.com/openpup/openpup/compare/v0.1.9...v0.1.10) — 2026-03-26
+
+### Added
+
+- **FTS5 hybrid retrieval** — keyword and vector search are now combined to improve recall and ranking quality for knowledge base lookups.
+- **Automatic ingestion** — knowledge artifacts can be queued and indexed automatically so new material becomes searchable with less manual intervention.
+- **Knowledge base settings** — configuration surfaces were added for tuning ingestion and retrieval behavior.
+
+### Changed
+
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.10`.
+
+---
+
+## [0.1.9](https://github.com/openpup/openpup/compare/v0.1.8...v0.1.9) — 2026-03-26
+
+### Added
+
+- **Knowledge base foundation** — a new document ingestion and semantic search module establishes the first dedicated knowledge retrieval layer separate from long-term memory.
+- **Document chunk indexing** — imported knowledge sources are split into searchable chunks so long-form content can be retrieved precisely.
+- **Research-ready retrieval path** — the system can now search indexed knowledge documents as a first-class source for research-oriented workflows.
+
+### Changed
+
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.9`.
 
 ---
 
