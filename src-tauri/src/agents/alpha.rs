@@ -52,6 +52,7 @@ pub struct PupConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PupPermissionConfig {
     pub shell: Option<bool>,
+    pub sandbox_shell: Option<bool>,
     pub file_read: Option<bool>,
     pub file_write: Option<bool>,
     pub network: Option<bool>,
@@ -64,6 +65,7 @@ impl PupPermissionConfig {
     pub fn merge_over(&self, base: PupToolPermissions) -> PupToolPermissions {
         PupToolPermissions {
             shell: self.shell.unwrap_or(base.shell),
+            sandbox_shell: self.sandbox_shell.unwrap_or(base.sandbox_shell),
             file_read: self.file_read.unwrap_or(base.file_read),
             file_write: self.file_write.unwrap_or(base.file_write),
             network: self.network.unwrap_or(base.network),
@@ -480,6 +482,7 @@ impl AlphaPup {
             // permissions — the skill can elevate but never restrict.
             let alpha_base = PupToolPermissions {
                 shell: false,
+                sandbox_shell: false,
                 file_read: false,
                 file_write: false,
                 network: false,
@@ -487,6 +490,7 @@ impl AlphaPup {
             };
             let tool_perms = PupToolPermissions {
                 shell: alpha_base.shell || skill_perms.shell,
+                sandbox_shell: alpha_base.sandbox_shell || skill_perms.sandbox_shell,
                 file_read: alpha_base.file_read || skill_perms.file_read,
                 file_write: alpha_base.file_write || skill_perms.file_write,
                 network: alpha_base.network || skill_perms.network,
@@ -716,6 +720,7 @@ impl AlphaPup {
         // Alpha gets MCP access; no dangerous primitives in conversational context.
         let tool_perms = PupToolPermissions {
             shell: false,
+            sandbox_shell: false,
             file_read: false,
             file_write: false,
             network: false,
@@ -917,6 +922,7 @@ impl AlphaPup {
     ) -> Result<AgentRunResult> {
         let primitive_perms = ToolPermissions {
             shell: tool_perms.shell,
+            sandbox_shell: tool_perms.sandbox_shell,
             file_read: tool_perms.file_read,
             file_write: tool_perms.file_write,
             network: tool_perms.network,

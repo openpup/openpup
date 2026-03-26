@@ -5,8 +5,10 @@
 /// the declared capability surface.
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use scraper::{Html, Selector};
 use serde_json::Value;
 use tracing::debug;
 
@@ -18,6 +20,7 @@ use crate::skills::registry::SkillRegistry;
 #[derive(Debug, Clone, Default)]
 pub struct ToolPermissions {
     pub shell: bool,
+    pub sandbox_shell: bool,
     pub file_read: bool,
     pub file_write: bool,
     pub network: bool,
@@ -29,6 +32,7 @@ impl ToolPermissions {
     pub fn union_with_skill(&self, skill: &crate::skills::registry::SkillPermissions) -> Self {
         Self {
             shell: self.shell || skill.shell,
+            sandbox_shell: self.sandbox_shell || skill.sandbox_shell,
             file_read: self.file_read || skill.file_read,
             file_write: self.file_write || skill.file_write,
             network: self.network || skill.network,
@@ -111,11 +115,29 @@ impl ToolRegistry {
         "type": "function",
         "function": {
           "name": "shell_exec",
-          "description": "Execute a shell command and return combined stdout + stderr.",
+          "description": "Execute a shell command in the real workspace and return combined stdout + stderr.",
           "parameters": {
             "type": "object",
             "properties": {
               "command": { "type": "string", "description": "Shell command to run (passed to /bin/sh -c)" }
+            },
+            "required": ["command"]
+          }
+        }
+      }));
+        }
+
+        if perms.sandbox_shell {
+            tools.push(serde_json::json!({
+        "type": "function",
+        "function": {
+          "name": "sandbox_shell_exec",
+          "description": "Execute a shell command in a temporary isolated working directory with a reduced environment. Use this to test commands before using shell_exec in the real workspace.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": { "type": "string", "description": "Shell command to run inside the sandbox (passed to /bin/sh -c)" },
+              "timeout_ms": { "type": "integer", "description": "Optional timeout in milliseconds (default: 10000, max: 30000)" }
             },
             "required": ["command"]
           }
@@ -193,11 +215,25 @@ impl ToolRegistry {
         "type": "function",
         "function": {
           "name": "http_get",
-          "description": "Perform an HTTP GET request and return the response body (truncated to 8 KB).",
+          "description": "Perform an HTTP GET request and return the response body.",
           "parameters": {
             "type": "object",
             "properties": {
               "url": { "type": "string", "description": "URL to fetch" }
+            },
+            "required": ["url"]
+          }
+        }
+      }));
+            tools.push(serde_json::json!({
+        "type": "function",
+        "function": {
+          "name": "web_fetch",
+          "description": "Fetch a web page, extract readable text, and return a structured summary including the final URL and page title.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string", "description": "URL of the web page to fetch" }
             },
             "required": ["url"]
           }
@@ -258,6 +294,18 @@ impl ToolRegistry {
                     .as_str()
                     .ok_or_else(|| anyhow!("shell_exec: missing 'command'"))?;
                 self.shell_exec(cmd).await
+            }
+            "sandbox_shell_exec" => {
+                if !perms.sandbox_shell {
+                    return Err(anyhow!(
+                        "sandbox_shell_exec: permission denied (requires permissions.sandbox_shell = true)"
+                    ));
+                }
+                let cmd = args["command"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("sandbox_shell_exec: missing 'command'"))?;
+                let timeout_ms = args["timeout_ms"].as_u64().unwrap_or(10_000);
+                self.sandbox_shell_exec(cmd, timeout_ms).await
             }
             "file_read" => {
                 if !perms.file_read {
@@ -321,6 +369,17 @@ impl ToolRegistry {
                     .ok_or_else(|| anyhow!("http_get: missing 'url'"))?;
                 self.http_get(url).await
             }
+            "web_fetch" => {
+                if !perms.network {
+                    return Err(anyhow!(
+                        "web_fetch: permission denied (requires permissions.network = true)"
+                    ));
+                }
+                let url = args["url"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("web_fetch: missing 'url'"))?;
+                self.web_fetch(url).await
+            }
             "memory_search" => {
                 let query = args["query"]
                     .as_str()
@@ -358,17 +417,50 @@ impl ToolRegistry {
             .await
             .map_err(|e| anyhow!("shell_exec failed to spawn: {e}"))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let combined = if stderr.is_empty() {
-            stdout
-        } else if stdout.is_empty() {
-            format!("[stderr]\n{stderr}")
-        } else {
-            format!("{stdout}\n[stderr]\n{stderr}")
-        };
-        let trimmed = combined.trim().to_string();
-        Ok(self.dynamic_truncate(&trimmed))
+        Ok(self.format_process_output(output.stdout, output.stderr, output.status.code(), false, None))
+    }
+
+    async fn sandbox_shell_exec(&self, command: &str, timeout_ms: u64) -> Result<String> {
+        let timeout_ms = timeout_ms.clamp(1_000, 30_000);
+        let sandbox_dir = tempfile::tempdir().map_err(|e| anyhow!("sandbox_shell_exec tempdir: {e}"))?;
+        let sandbox_path = sandbox_dir.path().to_path_buf();
+        debug!(
+            "[tool/sandbox_shell_exec] {} in {}",
+            truncate_chars(command, 120),
+            sandbox_path.display()
+        );
+
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(&sandbox_path)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("HOME", &sandbox_path)
+            .env("TMPDIR", &sandbox_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = cmd
+            .spawn()
+            .map_err(|e| anyhow!("sandbox_shell_exec failed to spawn: {e}"))?;
+
+        match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+            Ok(Ok(output)) => Ok(self.format_process_output(
+                output.stdout,
+                output.stderr,
+                output.status.code(),
+                false,
+                Some(&sandbox_path),
+            )),
+            Ok(Err(e)) => Err(anyhow!("sandbox_shell_exec failed: {e}")),
+            Err(_) => Ok(self.dynamic_truncate(&format!(
+                "sandbox_shell_exec timed out after {} ms\nsandbox_dir: {}",
+                timeout_ms,
+                sandbox_path.display()
+            ))),
+        }
     }
 
     async fn file_read(&self, path: &str) -> Result<String> {
@@ -450,6 +542,69 @@ impl ToolRegistry {
             return Err(anyhow!("http_get '{url}': HTTP {status}"));
         }
         Ok(self.dynamic_truncate(&body))
+    }
+
+    async fn web_fetch(&self, url: &str) -> Result<String> {
+        debug!("[tool/web_fetch] {}", truncate_chars(url, 120));
+        let resp = self
+            .http
+            .get(url)
+            .header("User-Agent", "openpup/0.1")
+            .send()
+            .await
+            .map_err(|e| anyhow!("web_fetch '{url}': {e}"))?;
+        let status = resp.status();
+        let final_url = resp.url().to_string();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!("web_fetch '{url}': HTTP {status}"));
+        }
+
+        let document = Html::parse_document(&body);
+        let title = Selector::parse("title")
+            .ok()
+            .and_then(|selector| document.select(&selector).next())
+            .map(|node| node.text().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let text = document.root_element().text().collect::<Vec<_>>().join(" ");
+        let normalized = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let result = format!(
+            "final_url: {final_url}\ntitle: {}\ncontent:\n{}",
+            if title.is_empty() { "(untitled)" } else { &title },
+            normalized
+        );
+        Ok(self.dynamic_truncate(&result))
+    }
+
+    fn format_process_output(
+        &self,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        sandbox_dir: Option<&std::path::Path>,
+    ) -> String {
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&stderr).into_owned();
+        let mut sections = Vec::new();
+        sections.push(format!("exit_code: {}", exit_code.map(|c| c.to_string()).unwrap_or_else(|| "terminated".to_string())));
+        sections.push(format!("timed_out: {timed_out}"));
+        if let Some(path) = sandbox_dir {
+            sections.push(format!("sandbox_dir: {}", path.display()));
+        }
+        if !stdout.trim().is_empty() {
+            sections.push(format!("stdout:\n{}", stdout.trim()));
+        }
+        if !stderr.trim().is_empty() {
+            sections.push(format!("stderr:\n{}", stderr.trim()));
+        }
+        self.dynamic_truncate(&sections.join("\n\n"))
     }
 
     fn resolve_path(&self, path: &str) -> PathBuf {

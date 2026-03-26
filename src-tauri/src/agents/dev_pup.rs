@@ -54,6 +54,7 @@ impl SpecialistPup for DevPup {
         // Dev gets full tool access for builds, tests, reading/writing project files and docs.
         PupToolPermissions {
             shell: true,
+            sandbox_shell: true,
             file_read: true,
             file_write: true,
             network: true,

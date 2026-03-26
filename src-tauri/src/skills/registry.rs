@@ -29,6 +29,8 @@ pub struct SkillPermissions {
     #[serde(default)]
     pub shell: bool,
     #[serde(default)]
+    pub sandbox_shell: bool,
+    #[serde(default)]
     pub file_read: bool,
     #[serde(default)]
     pub file_write: bool,
@@ -46,6 +48,7 @@ impl Default for SkillPermissions {
     fn default() -> Self {
         Self {
             shell: false,
+            sandbox_shell: false,
             file_read: false,
             file_write: false,
             network: false,

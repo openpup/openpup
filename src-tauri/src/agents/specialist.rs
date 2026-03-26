@@ -46,6 +46,8 @@ pub struct TaskResult {
 pub struct PupToolPermissions {
     /// Allow `shell_exec` primitive.
     pub shell: bool,
+    /// Allow `sandbox_shell_exec` primitive.
+    pub sandbox_shell: bool,
     /// Allow `file_read` primitive.
     pub file_read: bool,
     /// Allow `file_write` primitive.
@@ -60,6 +62,7 @@ impl Default for PupToolPermissions {
     fn default() -> Self {
         Self {
             shell: false,
+            sandbox_shell: false,
             file_read: false,
             file_write: false,
             network: false,

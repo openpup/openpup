@@ -54,6 +54,7 @@ impl SpecialistPup for OpsPup {
         // Ops gets full tool access — running commands, automation, and fetching resources.
         PupToolPermissions {
             shell: true,
+            sandbox_shell: true,
             file_read: true,
             file_write: true,
             network: true,

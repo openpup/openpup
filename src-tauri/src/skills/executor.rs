@@ -58,6 +58,7 @@ impl SkillExecutor {
 
         let tool_perms = ToolPermissions {
             shell: permissions.shell,
+            sandbox_shell: permissions.sandbox_shell,
             file_read: permissions.file_read,
             file_write: permissions.file_write,
             network: permissions.network,

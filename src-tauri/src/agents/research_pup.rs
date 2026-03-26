@@ -54,6 +54,7 @@ impl SpecialistPup for ResearchPup {
         // Research gets network + file_read — can fetch URLs and read project files for context.
         PupToolPermissions {
             shell: false,
+            sandbox_shell: true,
             file_read: true,
             file_write: false,
             network: true,
