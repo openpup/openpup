@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useLang, type Lang, t } from '../i18n';
+import openpupIcon from '../../openpup-icon.svg';
 
 interface OnboardingData {
   name: string;
@@ -288,7 +289,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
       {/* Sub-header with step info + progress */}
       <div style={{ borderBottom: '1px solid var(--color-border-primary)', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: 'var(--color-background-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <img src="/openpup-icon.svg" alt="OpenPup" style={{ width: '20px', height: '20px' }} />
+          <img src={openpupIcon} alt="OpenPup" style={{ width: '20px', height: '20px' }} />
           <span style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)', userSelect: 'none' }}>
             {t('onboarding_tagline', lang)}
           </span>
