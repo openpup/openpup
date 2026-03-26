@@ -216,8 +216,12 @@ impl LlmClient {
             g.embed_model = em;
         }
         g.model = model;
-        g.api_key = api_key;
-        g.api_base = api_base;
+        if let Some(k) = api_key {
+            g.api_key = Some(k);
+        }
+        if let Some(b) = api_base {
+            g.api_base = Some(b);
+        }
     }
 
     pub fn current_config(

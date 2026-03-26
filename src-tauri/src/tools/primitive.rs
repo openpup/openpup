@@ -461,9 +461,12 @@ impl ToolRegistry {
                     // Also try to show entity info even without chunks
                     let entities = self.memory.find_kg_entities(entity).await?;
                     if entities.is_empty() {
-                        Ok(format!("No entity matching '{entity}' found in the knowledge graph."))
+                        Ok(format!(
+                            "No entity matching '{entity}' found in the knowledge graph."
+                        ))
                     } else {
-                        let mut out = format!("Found {} entities matching '{entity}':\n", entities.len());
+                        let mut out =
+                            format!("Found {} entities matching '{entity}':\n", entities.len());
                         for (id, name, etype, desc) in &entities {
                             out.push_str(&format!("\n- {} [{}]", name, etype));
                             if let Some(d) = desc {
@@ -549,26 +552,135 @@ impl ToolRegistry {
 
     // ── Tool implementations ───────────────────────────────────────────────────
 
+    /// Maximum execution time for shell_exec (2 minutes).
+    const SHELL_EXEC_TIMEOUT_MS: u64 = 120_000;
+
+    /// Build a platform-appropriate shell command.
+    /// - Unix: `sh -c <command>`
+    /// - Windows: `cmd /d /s /c "<command>"` — `/d` disables AutoRun, `/s` preserves quotes
+    fn build_shell_command(command: &str) -> tokio::process::Command {
+        #[cfg(windows)]
+        {
+            let mut cmd = tokio::process::Command::new("cmd");
+            cmd.args(["/d", "/s", "/c", command]);
+            cmd
+        }
+        #[cfg(not(windows))]
+        {
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.args(["-c", command]);
+            cmd
+        }
+    }
+
+    /// Validate a command for sandbox execution. Rejects destructive patterns.
+    fn validate_sandbox_command(command: &str) -> Result<()> {
+        // Block commands that escape the sandbox or are destructive
+        let blocked_patterns = [
+            "rm -rf /",
+            "mkfs",
+            "dd if=",
+            ":(){ :|:", // fork bomb
+            "> /dev/sd",
+            "chmod -R 777 /",
+        ];
+        let lower = command.to_lowercase();
+        for pat in &blocked_patterns {
+            if lower.contains(pat) {
+                return Err(anyhow!(
+                    "sandbox_shell_exec: blocked dangerous command pattern: '{pat}'"
+                ));
+            }
+        }
+
+        // On Windows, additionally block cmd.exe metacharacters that could escape the sandbox
+        #[cfg(windows)]
+        {
+            // Reject commands trying to chain via & or | into system-level ops
+            if command.contains("&&") && (lower.contains("del /") || lower.contains("rmdir /s")) {
+                return Err(anyhow!(
+                    "sandbox_shell_exec: blocked potentially destructive chained command"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Kill a child process and its descendants.
+    #[cfg(not(windows))]
+    async fn kill_process_tree(pid: u32) {
+        use tokio::process::Command;
+        // Send SIGTERM to the process group
+        let _ = Command::new("kill")
+            .args(["-TERM", &format!("-{pid}")])
+            .output()
+            .await;
+        // Grace period, then SIGKILL
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{pid}")])
+            .output()
+            .await;
+    }
+
+    #[cfg(windows)]
+    async fn kill_process_tree(pid: u32) {
+        use tokio::process::Command;
+        // taskkill /T kills the process tree, /F forces termination
+        let _ = Command::new("taskkill")
+            .args(["/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+    }
+
     async fn shell_exec(&self, command: &str) -> Result<String> {
         debug!("[tool/shell_exec] $ {}", truncate_chars(command, 120));
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
+
+        let mut child = Self::build_shell_command(command)
             .current_dir(&self.workspace_root)
-            .output()
-            .await
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| anyhow!("shell_exec failed to spawn: {e}"))?;
 
-        Ok(self.format_process_output(
-            output.stdout,
-            output.stderr,
-            output.status.code(),
-            false,
-            None,
-        ))
+        let pid = child.id();
+
+        match tokio::time::timeout(
+            Duration::from_millis(Self::SHELL_EXEC_TIMEOUT_MS),
+            child.wait_with_output(),
+        )
+        .await
+        {
+            Ok(Ok(output)) => Ok(self.format_process_output(
+                output.stdout,
+                output.stderr,
+                output.status.code(),
+                false,
+                None,
+            )),
+            Ok(Err(e)) => Err(anyhow!("shell_exec failed: {e}")),
+            Err(_) => {
+                // Timeout — kill the process tree
+                if let Some(pid) = pid {
+                    Self::kill_process_tree(pid).await;
+                }
+                Ok(self.dynamic_truncate(&format!(
+                    "shell_exec timed out after {} ms (process killed)",
+                    Self::SHELL_EXEC_TIMEOUT_MS
+                )))
+            }
+        }
     }
 
     async fn sandbox_shell_exec(&self, command: &str, timeout_ms: u64) -> Result<String> {
+        Self::validate_sandbox_command(command)?;
+
         let timeout_ms = timeout_ms.clamp(1_000, 30_000);
         let sandbox_dir =
             tempfile::tempdir().map_err(|e| anyhow!("sandbox_shell_exec tempdir: {e}"))?;
@@ -579,21 +691,38 @@ impl ToolRegistry {
             sandbox_path.display()
         );
 
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&sandbox_path)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .env("HOME", &sandbox_path)
-            .env("TMPDIR", &sandbox_path)
+        let mut cmd = Self::build_shell_command(command);
+        cmd.current_dir(&sandbox_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let child = cmd
+        // Platform-specific sandbox environment
+        #[cfg(windows)]
+        {
+            cmd.env_clear()
+                .env("PATH", std::env::var("PATH").unwrap_or_default())
+                .env(
+                    "SYSTEMROOT",
+                    std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into()),
+                )
+                .env("TEMP", &sandbox_path)
+                .env("TMP", &sandbox_path)
+                .env("USERPROFILE", &sandbox_path);
+        }
+        #[cfg(not(windows))]
+        {
+            cmd.env_clear()
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("HOME", &sandbox_path)
+                .env("TMPDIR", &sandbox_path);
+        }
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| anyhow!("sandbox_shell_exec failed to spawn: {e}"))?;
+
+        let pid = child.id();
 
         match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
             .await
@@ -606,11 +735,17 @@ impl ToolRegistry {
                 Some(&sandbox_path),
             )),
             Ok(Err(e)) => Err(anyhow!("sandbox_shell_exec failed: {e}")),
-            Err(_) => Ok(self.dynamic_truncate(&format!(
-                "sandbox_shell_exec timed out after {} ms\nsandbox_dir: {}",
-                timeout_ms,
-                sandbox_path.display()
-            ))),
+            Err(_) => {
+                // Timeout — kill the process tree
+                if let Some(pid) = pid {
+                    Self::kill_process_tree(pid).await;
+                }
+                Ok(self.dynamic_truncate(&format!(
+                    "sandbox_shell_exec timed out after {} ms (process killed)\nsandbox_dir: {}",
+                    timeout_ms,
+                    sandbox_path.display()
+                )))
+            }
         }
     }
 
