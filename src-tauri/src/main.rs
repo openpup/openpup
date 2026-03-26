@@ -386,6 +386,7 @@ fn main() {
             commands::kb_search,
             commands::kb_get_auto_ingest,
             commands::kb_set_auto_ingest,
+            commands::kg_list_entities,
         ])
         .setup(move |app| {
             // On Windows, the Overlay titlebar style may not work correctly,

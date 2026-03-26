@@ -264,6 +264,21 @@ impl ToolRegistry {
         tools.push(serde_json::json!({
       "type": "function",
       "function": {
+        "name": "search_knowledge_graph",
+        "description": "Search the knowledge graph for entity relationships. Use this for relationship-oriented queries like 'what depends on X', 'who created Y', 'what tools does project Z use'. Complements search_knowledge_base: that tool does semantic text search, this tool traverses entity relationships.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "entity": { "type": "string", "description": "Entity name to start the graph traversal from, e.g. 'Rust', 'Alpha Pup', 'SQLite'" },
+            "hops": { "type": "integer", "description": "Number of hops to traverse (1 = direct relations, 2 = second-degree). Default: 1, max: 2" }
+          },
+          "required": ["entity"]
+        }
+      }
+    }));
+        tools.push(serde_json::json!({
+      "type": "function",
+      "function": {
         "name": "memory_search",
         "description": "Search the owner's long-term memory store for relevant information.",
         "parameters": {
@@ -432,6 +447,79 @@ impl ToolRegistry {
                         results.len(),
                         formatted.join("\n\n---\n\n")
                     )))
+                }
+            }
+            "search_knowledge_graph" => {
+                let entity = args["entity"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("search_knowledge_graph: missing 'entity'"))?;
+                let hops = args["hops"].as_u64().unwrap_or(1).min(2) as usize;
+                let retriever =
+                    crate::knowledge::graph_retriever::GraphRetriever::new(self.memory.clone());
+                let results = retriever.search(entity, hops).await?;
+                if results.is_empty() {
+                    // Also try to show entity info even without chunks
+                    let entities = self.memory.find_kg_entities(entity).await?;
+                    if entities.is_empty() {
+                        Ok(format!("No entity matching '{entity}' found in the knowledge graph."))
+                    } else {
+                        let mut out = format!("Found {} entities matching '{entity}':\n", entities.len());
+                        for (id, name, etype, desc) in &entities {
+                            out.push_str(&format!("\n- {} [{}]", name, etype));
+                            if let Some(d) = desc {
+                                out.push_str(&format!(": {d}"));
+                            }
+                            // Show relations
+                            if let Ok(rels) = self.memory.kg_entity_relations(id).await {
+                                for (rel, other_name, _other_type, dir, conf) in &rels {
+                                    let arrow = if dir == "out" { "→" } else { "←" };
+                                    out.push_str(&format!(
+                                        "\n    {arrow} {rel} {other_name} ({:.0}%)",
+                                        conf * 100.0
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(self.dynamic_truncate(&out))
+                    }
+                } else {
+                    // Show entities + related chunks
+                    let entities = self.memory.find_kg_entities(entity).await?;
+                    let mut out = String::new();
+                    if !entities.is_empty() {
+                        out.push_str(&format!("Entities matching '{entity}':\n"));
+                        for (id, name, etype, desc) in &entities {
+                            out.push_str(&format!("\n- {} [{}]", name, etype));
+                            if let Some(d) = desc {
+                                out.push_str(&format!(": {d}"));
+                            }
+                            if let Ok(rels) = self.memory.kg_entity_relations(id).await {
+                                for (rel, other_name, _other_type, dir, conf) in &rels {
+                                    let arrow = if dir == "out" { "→" } else { "←" };
+                                    out.push_str(&format!(
+                                        "\n    {arrow} {rel} {other_name} ({:.0}%)",
+                                        conf * 100.0
+                                    ));
+                                }
+                            }
+                        }
+                        out.push_str("\n\n");
+                    }
+                    out.push_str(&format!("Related chunks ({}):\n", results.len()));
+                    for (i, r) in results.iter().enumerate().take(10) {
+                        let source = r
+                            .heading_path
+                            .as_deref()
+                            .map(|h| format!("{} > {}", r.source_title, h))
+                            .unwrap_or_else(|| r.source_title.clone());
+                        out.push_str(&format!(
+                            "\n[{}] Source: {}\n{}\n",
+                            i + 1,
+                            source,
+                            r.content
+                        ));
+                    }
+                    Ok(self.dynamic_truncate(&out))
                 }
             }
             "memory_search" => {

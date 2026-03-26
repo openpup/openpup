@@ -5,20 +5,31 @@ use chrono::Utc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+use crate::llm::client::LlmClient;
 use crate::memory::system::MemorySystem;
 
 use super::chunker::{chunk_sections, ChunkConfig};
+use super::graph_extractor::GraphExtractor;
 use super::parser::{parse_file, Section};
 use super::types::{IngestProgressEvent, IngestRequest, IngestTextRequest};
 
 /// Async document ingestion pipeline.
 pub struct Ingestor {
     memory: Arc<MemorySystem>,
+    llm: Option<Arc<LlmClient>>,
 }
 
 impl Ingestor {
     pub fn new(memory: Arc<MemorySystem>) -> Self {
-        Self { memory }
+        Self { memory, llm: None }
+    }
+
+    /// Create an ingestor with graph extraction support.
+    pub fn with_llm(memory: Arc<MemorySystem>, llm: Arc<LlmClient>) -> Self {
+        Self {
+            memory,
+            llm: Some(llm),
+        }
     }
 
     /// Ingest a file: parse → chunk → embed → store.
@@ -175,6 +186,9 @@ impl Ingestor {
             error: None,
         });
 
+        // Async graph extraction (non-blocking, failure is silent)
+        self.spawn_graph_extraction(&source_id);
+
         Ok(source_id)
     }
 
@@ -258,6 +272,33 @@ impl Ingestor {
             source_id, req.title, total
         );
 
+        // Async graph extraction (non-blocking, failure is silent)
+        self.spawn_graph_extraction(&source_id);
+
         Ok(source_id)
+    }
+
+    /// Spawn background graph extraction for a source. Non-blocking, silent on failure.
+    fn spawn_graph_extraction(&self, source_id: &str) {
+        let llm = match &self.llm {
+            Some(l) => l.clone(),
+            None => return,
+        };
+        let memory = self.memory.clone();
+        let sid = source_id.to_string();
+
+        tokio::spawn(async move {
+            let chunks = match memory.get_source_chunks(&sid).await {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("[kg] failed to load chunks for {sid}: {e}");
+                    return;
+                }
+            };
+            let extractor = GraphExtractor::new(memory, llm);
+            if let Err(e) = extractor.extract_from_source(&sid, &chunks).await {
+                debug!("[kg] graph extraction failed for {sid}: {e}");
+            }
+        });
     }
 }

@@ -456,6 +456,63 @@ impl MemorySystem {
             .await?;
         }
 
+        // ── Knowledge Graph tables (v0.1.11) ────────────────────────────────
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS kg_entities (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        entity_type TEXT NOT NULL
+                    CHECK(entity_type IN
+                      ('person','project','concept','tool','org','file','other')),
+        description TEXT,
+        source_id   TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        UNIQUE(name, entity_type)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS kg_relations (
+        id          TEXT PRIMARY KEY,
+        from_id     TEXT NOT NULL,
+        to_id       TEXT NOT NULL,
+        relation    TEXT NOT NULL,
+        source_id   TEXT,
+        confidence  REAL NOT NULL DEFAULT 0.8,
+        created_at  INTEGER NOT NULL,
+        UNIQUE(from_id, to_id, relation)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON kg_relations(from_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON kg_relations(to_id)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS kg_chunk_entities (
+        chunk_id   TEXT NOT NULL,
+        entity_id  TEXT NOT NULL,
+        PRIMARY KEY (chunk_id, entity_id)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -1921,6 +1978,239 @@ impl MemorySystem {
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         Ok(scored.into_iter().take(limit).map(|(_, r)| r).collect())
+    }
+
+    // ── Knowledge Graph (v0.1.11) ─────────────────────────────────────────────
+
+    /// Upsert an entity; returns the actual id (existing or new).
+    pub async fn upsert_kg_entity(
+        &self,
+        id: &str,
+        name: &str,
+        entity_type: &str,
+        description: Option<&str>,
+        source_id: &str,
+        now: i64,
+    ) -> Result<String> {
+        sqlx::query(
+            r#"INSERT INTO kg_entities
+            (id, name, entity_type, description, source_id, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            ON CONFLICT(name, entity_type) DO UPDATE
+            SET updated_at=excluded.updated_at,
+                description=COALESCE(excluded.description, kg_entities.description)"#,
+        )
+        .bind(id)
+        .bind(name)
+        .bind(entity_type)
+        .bind(description)
+        .bind(source_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        let actual_id: String = sqlx::query_scalar(
+            "SELECT id FROM kg_entities WHERE name=?1 AND entity_type=?2",
+        )
+        .bind(name)
+        .bind(entity_type)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(actual_id)
+    }
+
+    /// Link a chunk to an entity.
+    pub async fn link_chunk_entity(&self, chunk_id: &str, entity_id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO kg_chunk_entities (chunk_id, entity_id) VALUES (?1, ?2)",
+        )
+        .bind(chunk_id)
+        .bind(entity_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Insert a relation (idempotent via UNIQUE constraint).
+    pub async fn insert_kg_relation(
+        &self,
+        id: &str,
+        from_id: &str,
+        to_id: &str,
+        relation: &str,
+        source_id: &str,
+        confidence: f32,
+        now: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT OR IGNORE INTO kg_relations
+            (id, from_id, to_id, relation, source_id, confidence, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+        )
+        .bind(id)
+        .bind(from_id)
+        .bind(to_id)
+        .bind(relation)
+        .bind(source_id)
+        .bind(confidence)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Find entities by fuzzy name match.
+    pub async fn find_kg_entities(&self, name: &str) -> Result<Vec<(String, String, String, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT id, name, entity_type, description FROM kg_entities WHERE name LIKE ?1",
+        )
+        .bind(format!("%{name}%"))
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("id"), r.get("name"), r.get("entity_type"), r.get("description")))
+            .collect())
+    }
+
+    /// Get neighbor entity IDs (both directions).
+    pub async fn kg_neighbors(&self, entity_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT to_id FROM kg_relations WHERE from_id=?1
+             UNION
+             SELECT from_id FROM kg_relations WHERE to_id=?1",
+        )
+        .bind(entity_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Get chunks linked to an entity.
+    pub async fn kg_entity_chunks(
+        &self,
+        entity_id: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::knowledge::types::KbSearchResult>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT kc.id, kc.source_id, kc.content, kc.heading_path, kc.chunk_index,
+                   ks.title, ks.source_path
+            FROM kg_chunk_entities kce
+            JOIN knowledge_chunks kc ON kce.chunk_id = kc.id
+            JOIN knowledge_sources ks ON kc.source_id = ks.id
+            WHERE kce.entity_id = ?1 AND ks.status = 'indexed'
+            LIMIT ?2
+            "#,
+        )
+        .bind(entity_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| crate::knowledge::types::KbSearchResult {
+                chunk_id: r.get("id"),
+                source_id: r.get("source_id"),
+                source_title: r.get("title"),
+                source_path: r.get("source_path"),
+                content: r.get("content"),
+                heading_path: r.get("heading_path"),
+                score: 0.7,
+                chunk_index: r.get("chunk_index"),
+            })
+            .collect())
+    }
+
+    /// List all entities, optionally filtered by type.
+    pub async fn list_kg_entities(
+        &self,
+        entity_type: Option<&str>,
+    ) -> Result<Vec<(String, String, String, Option<String>)>> {
+        let rows = if let Some(et) = entity_type {
+            sqlx::query(
+                "SELECT id, name, entity_type, description FROM kg_entities WHERE entity_type=?1 ORDER BY name",
+            )
+            .bind(et)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, name, entity_type, description FROM kg_entities ORDER BY entity_type, name",
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("id"), r.get("name"), r.get("entity_type"), r.get("description")))
+            .collect())
+    }
+
+    /// Get relations for an entity (both directions).
+    pub async fn kg_entity_relations(
+        &self,
+        entity_id: &str,
+    ) -> Result<Vec<(String, String, String, String, f32)>> {
+        // (relation, other_entity_name, other_entity_type, direction, confidence)
+        let rows = sqlx::query(
+            r#"
+            SELECT r.relation, r.confidence, e.name, e.entity_type, 'out' AS direction
+            FROM kg_relations r
+            JOIN kg_entities e ON r.to_id = e.id
+            WHERE r.from_id = ?1
+            UNION ALL
+            SELECT r.relation, r.confidence, e.name, e.entity_type, 'in' AS direction
+            FROM kg_relations r
+            JOIN kg_entities e ON r.from_id = e.id
+            WHERE r.to_id = ?1
+            "#,
+        )
+        .bind(entity_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<String, _>("relation"),
+                    r.get::<String, _>("name"),
+                    r.get::<String, _>("entity_type"),
+                    r.get::<String, _>("direction"),
+                    r.get::<f32, _>("confidence"),
+                )
+            })
+            .collect())
+    }
+
+    /// Get chunks for a knowledge source.
+    pub async fn get_source_chunks(&self, source_id: &str) -> Result<Vec<crate::knowledge::types::KnowledgeChunk>> {
+        let rows = sqlx::query(
+            "SELECT id, source_id, content, chunk_index, heading_path, char_start, char_end, created_at
+             FROM knowledge_chunks WHERE source_id=?1 ORDER BY chunk_index",
+        )
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| crate::knowledge::types::KnowledgeChunk {
+                id: r.get("id"),
+                source_id: r.get("source_id"),
+                content: r.get("content"),
+                chunk_index: r.get("chunk_index"),
+                heading_path: r.get("heading_path"),
+                char_start: r.get("char_start"),
+                char_end: r.get("char_end"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 }
 

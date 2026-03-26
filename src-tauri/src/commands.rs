@@ -1316,7 +1316,8 @@ pub async fn kb_ingest_file(
     tags: Vec<String>,
 ) -> Result<String, String> {
     let memory = state.alpha.memory.clone();
-    let ingestor = crate::knowledge::ingestor::Ingestor::new(memory);
+    let llm = state.alpha.llm_client.clone();
+    let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(memory, llm);
     let req = crate::knowledge::types::IngestRequest { path, title, tags };
 
     let handle = app_handle.clone();
@@ -1379,4 +1380,64 @@ pub fn kb_set_auto_ingest(state: State<'_, AppState>, enabled: bool) {
         .alpha
         .kb_auto_ingest
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+// ─── Knowledge Graph ────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct KgEntityInfo {
+    pub id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub description: Option<String>,
+    pub relations: Vec<KgRelationInfo>,
+}
+
+#[derive(Serialize)]
+pub struct KgRelationInfo {
+    pub relation: String,
+    pub other_name: String,
+    pub other_type: String,
+    pub direction: String,
+    pub confidence: f32,
+}
+
+#[tauri::command]
+pub async fn kg_list_entities(
+    state: State<'_, AppState>,
+    entity_type: Option<String>,
+) -> Result<Vec<KgEntityInfo>, String> {
+    let entities = state
+        .alpha
+        .memory
+        .list_kg_entities(entity_type.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for (id, name, etype, desc) in entities {
+        let rels = state
+            .alpha
+            .memory
+            .kg_entity_relations(&id)
+            .await
+            .unwrap_or_default();
+        result.push(KgEntityInfo {
+            id,
+            name,
+            entity_type: etype,
+            description: desc,
+            relations: rels
+                .into_iter()
+                .map(|(rel, other_name, other_type, direction, confidence)| KgRelationInfo {
+                    relation: rel,
+                    other_name,
+                    other_type,
+                    direction,
+                    confidence,
+                })
+                .collect(),
+        });
+    }
+    Ok(result)
 }
