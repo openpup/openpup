@@ -284,16 +284,13 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--color-background-primary)', color: 'var(--color-text-primary)', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <div style={{ borderBottom: '1px solid var(--color-border-primary)', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: 'var(--color-background-secondary)' }}>
+    <div style={{ height: '100%', background: 'var(--color-background-primary)', color: 'var(--color-text-primary)', display: 'flex', flexDirection: 'column' }}>
+      {/* Sub-header with step info + progress */}
+      <div style={{ borderBottom: '1px solid var(--color-border-primary)', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: 'var(--color-background-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#1D9E75', flexShrink: 0, display: 'inline-block' }} />
-          <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--color-text-secondary)', userSelect: 'none' }}>
-            open<span style={{ color: '#1D9E75' }}>pup</span>
-            <span style={{ marginLeft: '10px', color: 'var(--color-text-tertiary)' }}>
-              {t('onboarding_tagline', lang)}
-            </span>
+          <img src="/openpup-icon.svg" alt="OpenPup" style={{ width: '20px', height: '20px' }} />
+          <span style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)', userSelect: 'none' }}>
+            {t('onboarding_tagline', lang)}
           </span>
         </div>
         <div style={{ fontSize: '12px', color: 'var(--color-text-tertiary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>{stepLabel}</div>

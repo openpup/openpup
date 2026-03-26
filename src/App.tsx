@@ -117,7 +117,7 @@ interface LlmConfigInfo {
 
 const PROVIDER_PRESETS: Record<string, { label: string; api_base: string; model: string; mini_model: string; embed_model: string }> = {
   openai:       { label: 'OpenAI',        api_base: '',                              model: 'gpt-4o',                   mini_model: 'gpt-4o-mini',           embed_model: 'text-embedding-3-small' },
-  siliconflow:  { label: 'SiliconFlow',   api_base: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3',  mini_model: 'Qwen/Qwen2.5-7B-Instruct', embed_model: 'BAAI/bge-m3' },
+  siliconflow:  { label: 'SiliconFlow',   api_base: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3',  mini_model: 'Qwen/Qwen3.5-27B', embed_model: 'BAAI/bge-m3' },
   ollama:       { label: 'Ollama (Local)', api_base: 'http://localhost:11434/v1',     model: 'llama3',                   mini_model: 'llama3',                embed_model: 'nomic-embed-text' },
   deepseek:     { label: 'DeepSeek',      api_base: 'https://api.deepseek.com/v1',   model: 'deepseek-chat',            mini_model: 'deepseek-chat',         embed_model: '' },
   openrouter:   { label: 'OpenRouter',    api_base: 'https://openrouter.ai/api/v1',  model: 'anthropic/claude-3.5-sonnet', mini_model: 'openai/gpt-4o-mini', embed_model: '' },
@@ -585,22 +585,90 @@ const AppInner: React.FC = () => {
     finally { setImporting(false); }
   };
 
+  // Minimal titlebar rendered for loading / onboarding screens so the window
+  // remains draggable and closeable (especially on Windows where native
+  // decorations are disabled).
+  const minimalTitleBar = (
+    <div
+      data-tauri-drag-region
+      style={{
+        height: '35px',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingLeft: platform === 'macos' ? '78px' : '12px',
+        paddingRight: platform === 'macos' ? '12px' : '0px',
+        background: 'var(--color-background-secondary)',
+        borderBottom: '0.5px solid var(--color-border-tertiary)',
+        userSelect: 'none',
+      } as React.CSSProperties}
+    >
+      <span data-tauri-drag-region style={{ fontSize: '13px', fontWeight: 500, color: 'var(--color-text-secondary)' }}>
+        open<span style={{ color: '#1D9E75' }}>pup</span>
+      </span>
+      {platform !== 'macos' && (
+        <div style={{ display: 'flex', alignItems: 'stretch', height: '100%', marginLeft: '8px', flexShrink: 0 }}>
+          <button
+            aria-label="Minimize"
+            onClick={() => { void getCurrentWindow().minimize(); }}
+            style={{ background: 'none', border: 'none', width: '46px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-background-tertiary, rgba(128,128,128,0.15))'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+          >
+            <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor" /></svg>
+          </button>
+          <button
+            aria-label={isMaximized ? 'Restore' : 'Maximize'}
+            onClick={() => { void getCurrentWindow().toggleMaximize(); }}
+            style={{ background: 'none', border: 'none', width: '46px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-background-tertiary, rgba(128,128,128,0.15))'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+          >
+            {isMaximized ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1"><rect x="2" y="3" width="6" height="6" rx="0.5" /><polyline points="3,3 3,1.5 8.5,1.5 8.5,7 7,7" /></svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1"><rect x="1" y="1" width="8" height="8" rx="0.5" /></svg>
+            )}
+          </button>
+          <button
+            aria-label="Close"
+            onClick={() => { void getCurrentWindow().close(); }}
+            style={{ background: 'none', border: 'none', width: '46px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#e81123'; e.currentTarget.style.color = '#fff'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--color-text-tertiary)'; }}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2"><line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" /></svg>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   if (onboardingDone === null) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--color-background-secondary)' }}>
-      <div className="flex flex-col items-center gap-3">
-        <span className="text-[22px] font-medium select-none" style={{ color: 'var(--color-text-secondary)' }}>
-          open<span style={{ color: '#1D9E75' }}>pup</span>
-        </span>
-        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: '#1D9E75', borderTopColor: 'transparent' }} />
+    <div className="h-screen flex flex-col" style={{ background: 'var(--color-background-secondary)' }}>
+      {minimalTitleBar}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="flex flex-col items-center gap-3">
+          <span className="text-[22px] font-medium select-none" style={{ color: 'var(--color-text-secondary)' }}>
+            open<span style={{ color: '#1D9E75' }}>pup</span>
+          </span>
+          <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: '#1D9E75', borderTopColor: 'transparent' }} />
+        </div>
       </div>
     </div>
   );
 
   if (!onboardingDone) return (
-    <Onboarding onComplete={() => {
-      setOnboardingDone(true); loadMemoryChips();
-      setMessages([{ id: 'welcome', role: 'assistant', content: t('onboarding_complete_message', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
-    }} />
+    <div className="h-screen flex flex-col" style={{ background: 'var(--color-background-primary)' }}>
+      {minimalTitleBar}
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <Onboarding onComplete={() => {
+          setOnboardingDone(true); loadMemoryChips();
+          setMessages([{ id: 'welcome', role: 'assistant', content: t('onboarding_complete_message', lang), pup_key: 'alpha', pup_name: 'Alpha' }]);
+        }} />
+      </div>
+    </div>
   );
 
   // Sidebar nav button matching spec style
