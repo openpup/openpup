@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.11...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.12...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,20 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.12](https://github.com/openpup/openpup/compare/v0.1.11...v0.1.12) — 2026-03-26
+
+### Added
+
+- **Memory conflict resolution** — long-term memory handling now includes stronger conflict-aware updates so newer facts can supersede stale or contradictory entries more cleanly.
+- **Hybrid memory retrieval** — memory lookup now blends multiple retrieval signals to improve recall and ranking quality across different memory access patterns.
+
+### Changed
+
+- **Weibull-style memory decay** — memory freshness scoring now uses a Weibull-inspired decay curve, giving the system a more nuanced balance between importance, recency, and revisit behavior.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.12`.
 
 ---
 

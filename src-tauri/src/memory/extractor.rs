@@ -7,8 +7,8 @@ use sqlx::{Pool, Row, Sqlite};
 use tracing::debug;
 use uuid::Uuid;
 
-use super::system::cosine_similarity;
 use crate::llm::client::{LlmClient, LlmMessage};
+use crate::memory::system::cosine_similarity;
 
 /// LLM-extracted candidate memory.
 #[derive(Debug, Deserialize)]

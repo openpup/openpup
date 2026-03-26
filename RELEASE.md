@@ -6,7 +6,7 @@
 
 ### 1. 准备版本号
 
-1. 选择一个新的语义化版本号，例如 `v0.1.11`。
+1. 选择一个新的语义化版本号，例如 `v0.1.12`。
 2. 在以下位置统一更新版本号（保持一致）：
    - `src-tauri/Cargo.toml`
    - `core/Cargo.toml`
@@ -50,8 +50,8 @@ cargo build --release
 #### 3.1 创建 Tag 并推送
 
 ```bash
-git tag v0.1.11
-git push origin v0.1.11
+git tag v0.1.12
+git push origin v0.1.12
 ```
 
 当 tag 被推送到远程后：
@@ -76,7 +76,7 @@ git push origin v0.1.11
 2. 将构建产物打包：
 
    ```bash
-   tar czvf openpup-0.1.11-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release openpup
+   tar czvf openpup-0.1.12-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release openpup
    ```
 
 3. 在 GitHub 页面上新建一个 Release，上传打包文件，并填写版本说明。

@@ -126,7 +126,7 @@ pub struct LlmClient {
     /// Usage from the most recent API call (for per-pup tracking).
     last_call_usage: Arc<Mutex<Option<TokenUsage>>>,
     /// Local embedding fallback (fastembed) — lazy-initialized on first API failure.
-    local_embedder: Arc<super::local_embed::LocalEmbedder>,
+    local_embedder: Arc<crate::llm::local_embed::LocalEmbedder>,
 }
 
 impl LlmClient {
@@ -180,7 +180,7 @@ impl LlmClient {
             http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
             last_call_usage: Arc::new(Mutex::new(None)),
-            local_embedder: Arc::new(super::local_embed::LocalEmbedder::new()),
+            local_embedder: Arc::new(crate::llm::local_embed::LocalEmbedder::new()),
         }
     }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use sqlx::{Pool, Row, Sqlite};
 
-use super::retriever::{MemoryRetriever, MemorySearchResult};
+use crate::memory::retriever::{MemoryRetriever, MemorySearchResult};
 
 pub struct MemoryBudget {
     pub rule_slots: usize,

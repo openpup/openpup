@@ -39,8 +39,14 @@ pub mod llm_client;
 pub mod mcp_orchestrator;
 #[path = "../../src-tauri/src/mcp/server.rs"]
 pub mod mcp_server;
+#[path = "../../src-tauri/src/memory/extractor.rs"]
+pub mod memory_extractor;
 #[path = "../../src-tauri/src/memory/file_layer.rs"]
 pub mod memory_file_layer;
+#[path = "../../src-tauri/src/memory/injector.rs"]
+pub mod memory_injector;
+#[path = "../../src-tauri/src/memory/retriever.rs"]
+pub mod memory_retriever;
 #[path = "../../src-tauri/src/memory/system.rs"]
 pub mod memory_system;
 #[path = "../../src-tauri/src/skills/executor.rs"]
@@ -71,6 +77,21 @@ pub mod channel {
 
 pub mod llm {
     pub use crate::llm_client as client;
+
+    /// Stub local_embed module for the core crate (fastembed not available).
+    pub mod local_embed {
+        pub struct LocalEmbedder;
+        impl LocalEmbedder {
+            pub fn new() -> Self {
+                Self
+            }
+            pub fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+                Err(anyhow::anyhow!(
+                    "local embedding not available in core crate (fastembed not linked)"
+                ))
+            }
+        }
+    }
 }
 
 pub mod mcp {
@@ -79,7 +100,10 @@ pub mod mcp {
 }
 
 pub mod memory {
+    pub use crate::memory_extractor as extractor;
     pub use crate::memory_file_layer as file_layer;
+    pub use crate::memory_injector as injector;
+    pub use crate::memory_retriever as retriever;
     pub use crate::memory_system as system;
 }
 

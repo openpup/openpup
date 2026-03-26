@@ -575,7 +575,7 @@ async fn memory_list(
         .list_long_term_memories(0, 100_000, None)
         .await?;
     if let Some(memory_type) = filter_type {
-        memories.retain(|(_, _, ty, _, _)| ty == memory_type);
+        memories.retain(|(_, _, ty, _, _, _)| ty == memory_type);
     }
     memories.truncate(limit.max(0) as usize);
 
@@ -584,7 +584,7 @@ async fn memory_list(
         return Ok(());
     }
 
-    for (_id, content, memory_type, importance, _created_at) in &memories {
+    for (_id, content, memory_type, importance, _created_at, _) in &memories {
         let icon = memory_type_icon(memory_type);
         let importance = format!("({:.2})", importance);
         println!("{} {} {}", icon, content.white(), importance.dimmed());
@@ -605,7 +605,7 @@ async fn memory_search(runtime: &HeadlessRuntime, query: &str, limit: i64) -> Re
         return Ok(());
     }
 
-    for (_id, content, memory_type, _importance, _created_at) in &memories {
+    for (_id, content, memory_type, _importance, _created_at, _) in &memories {
         let icon = memory_type_icon(memory_type);
         println!("{} {}", icon, content.white());
     }

@@ -5,8 +5,8 @@ use anyhow::Result;
 use chrono::Utc;
 use sqlx::{Pool, Row, Sqlite};
 
-use super::system::cosine_similarity;
 use crate::llm::client::LlmClient;
+use crate::memory::system::cosine_similarity;
 
 const RRF_K: f32 = 60.0;
 
