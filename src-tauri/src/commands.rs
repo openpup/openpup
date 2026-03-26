@@ -1343,10 +1343,7 @@ pub async fn kb_list_sources(
 }
 
 #[tauri::command]
-pub async fn kb_delete_source(
-    state: State<'_, AppState>,
-    source_id: String,
-) -> Result<(), String> {
+pub async fn kb_delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
     state
         .alpha
         .memory
@@ -1366,4 +1363,20 @@ pub async fn kb_search(
         .search(&query, limit.unwrap_or(10), None)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn kb_get_auto_ingest(state: State<'_, AppState>) -> bool {
+    state
+        .alpha
+        .kb_auto_ingest
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn kb_set_auto_ingest(state: State<'_, AppState>, enabled: bool) {
+    state
+        .alpha
+        .kb_auto_ingest
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
 }

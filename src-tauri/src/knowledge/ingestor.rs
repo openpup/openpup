@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::memory::system::MemorySystem;
 
 use super::chunker::{chunk_sections, ChunkConfig};
-use super::parser::parse_file;
-use super::types::{IngestProgressEvent, IngestRequest};
+use super::parser::{parse_file, Section};
+use super::types::{IngestProgressEvent, IngestRequest, IngestTextRequest};
 
 /// Async document ingestion pipeline.
 pub struct Ingestor {
@@ -126,8 +126,7 @@ impl Ingestor {
                 }
             };
 
-            let emb_json =
-                serde_json::to_string(&embedding).unwrap_or_else(|_| "[]".to_string());
+            let emb_json = serde_json::to_string(&embedding).unwrap_or_else(|_| "[]".to_string());
 
             self.memory
                 .insert_knowledge_chunk(
@@ -175,6 +174,89 @@ impl Ingestor {
             chunks_total: total,
             error: None,
         });
+
+        Ok(source_id)
+    }
+
+    /// Ingest raw text content (conversation summary, artifact output, etc.).
+    /// Returns the source_id on success.
+    pub async fn ingest_text(&self, req: &IngestTextRequest) -> Result<String> {
+        let source_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+        let tags_json = serde_json::to_string(&req.tags).unwrap_or_else(|_| "[]".to_string());
+
+        self.memory
+            .insert_knowledge_source(
+                &source_id,
+                &req.title,
+                &req.source_type,
+                None,
+                Some("text/plain"),
+                Some(req.content.len() as i64),
+                Some(&tags_json),
+                now,
+            )
+            .await?;
+
+        self.memory
+            .update_knowledge_source_status(&source_id, "indexing", None)
+            .await?;
+
+        // Treat content as a single section, then chunk it
+        let sections = vec![Section {
+            heading_path: None,
+            content: req.content.clone(),
+            char_start: 0,
+            char_end: req.content.len(),
+        }];
+
+        let config = ChunkConfig::default();
+        let drafts = chunk_sections(&sections, &config);
+        let total = drafts.len();
+
+        for (i, draft) in drafts.iter().enumerate() {
+            let chunk_id = Uuid::new_v4().to_string();
+
+            let embedding = match self.memory.embed_text(&draft.content).await {
+                Ok(emb) => emb,
+                Err(e) => {
+                    error!("Embedding failed for text chunk {i} of {source_id}: {e}");
+                    continue;
+                }
+            };
+
+            let emb_json = serde_json::to_string(&embedding).unwrap_or_else(|_| "[]".to_string());
+
+            self.memory
+                .insert_knowledge_chunk(
+                    &chunk_id,
+                    &source_id,
+                    &draft.content,
+                    i as i64,
+                    draft.heading_path.as_deref(),
+                    draft.char_start.map(|v| v as i64),
+                    draft.char_end.map(|v| v as i64),
+                    &emb_json,
+                    Utc::now().timestamp(),
+                )
+                .await?;
+
+            debug!(
+                "[kb/ingest_text] chunk {}/{} embedded for source {}",
+                i + 1,
+                total,
+                source_id
+            );
+        }
+
+        self.memory
+            .update_knowledge_source_indexed(&source_id, total as i64)
+            .await?;
+
+        debug!(
+            "[kb/ingest_text] completed: source={} title='{}' chunks={}",
+            source_id, req.title, total
+        );
 
         Ok(source_id)
     }

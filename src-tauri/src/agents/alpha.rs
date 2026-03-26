@@ -196,6 +196,8 @@ pub struct AlphaPup {
     msg_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
     layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
+    /// Whether to auto-ingest pup artifacts and conversation summaries to KB.
+    pub kb_auto_ingest: Arc<AtomicBool>,
 }
 
 impl AlphaPup {
@@ -236,6 +238,7 @@ impl AlphaPup {
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             channel_manager,
             layer_hook: Arc::new(RwLock::new(None)),
+            kb_auto_ingest: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -1334,7 +1337,18 @@ impl AlphaPup {
             },
         );
 
-        self.aggregate_channel_results(msg, &pup_outputs).await
+        let aggregated = self.aggregate_channel_results(msg, &pup_outputs).await;
+
+        // Auto-ingest aggregated result as artifact to KB
+        if let Ok(ref text) = aggregated {
+            if text.len() > 100 {
+                if self.kb_auto_ingest.load(Ordering::Relaxed) {
+                    self.auto_ingest_artifact(msg, text).await;
+                }
+            }
+        }
+
+        aggregated
     }
 
     // ── DAG-based pack dispatch ───────────────────────────────────────────────
@@ -2043,6 +2057,15 @@ impl AlphaPup {
         // 10. Complete channel
         let _ = self.channel_manager.complete(&channel_id).await;
 
+        // Auto-ingest aggregated result as artifact to KB
+        if let Ok(ref text) = aggregated {
+            if text.len() > 100 {
+                if self.kb_auto_ingest.load(Ordering::Relaxed) {
+                    self.auto_ingest_artifact(msg, text).await;
+                }
+            }
+        }
+
         aggregated
     }
 
@@ -2268,6 +2291,11 @@ impl AlphaPup {
             .await;
         let _ = self.channel_manager.complete(&channel_id).await;
 
+        // Auto-ingest aggregated result as artifact to KB
+        if aggregated.len() > 100 && self.kb_auto_ingest.load(Ordering::Relaxed) {
+            self.auto_ingest_artifact(msg, &aggregated).await;
+        }
+
         Ok(aggregated)
     }
 
@@ -2426,6 +2454,11 @@ impl AlphaPup {
         let count = self.msg_count.fetch_add(1, Ordering::Relaxed);
         if count % 3 == 0 {
             let _ = self.maybe_extract_memories(pup_key).await;
+        }
+
+        // Auto-ingest conversation summary to KB every 6 messages
+        if count % 6 == 0 && count > 0 && self.kb_auto_ingest.load(Ordering::Relaxed) {
+            let _ = self.maybe_ingest_conversation_summary(pup_key).await;
         }
 
         // Priority 5: Token-based compression trigger.
@@ -2965,6 +2998,84 @@ impl AlphaPup {
             }
         }
         let _ = self.file_layer.append_daily_diary(&diary_entries);
+        Ok(())
+    }
+
+    // ── Artifact auto-ingestion → KB ─────────────────────────────────────────────
+
+    async fn auto_ingest_artifact(&self, original_msg: &str, artifact: &str) {
+        let title_snippet: String = original_msg.chars().take(60).collect();
+        let title = format!(
+            "协作产出: {} ({})",
+            title_snippet,
+            chrono::Utc::now().format("%Y-%m-%d %H:%M")
+        );
+
+        let ingestor = crate::knowledge::ingestor::Ingestor::new(self.memory.clone());
+        let req = crate::knowledge::types::IngestTextRequest {
+            title,
+            content: artifact.to_string(),
+            source_type: "artifact".to_string(),
+            tags: vec!["auto-artifact".to_string()],
+        };
+
+        match ingestor.ingest_text(&req).await {
+            Ok(id) => debug!("[alpha] artifact auto-ingested to KB: {id}"),
+            Err(e) => debug!("[alpha] artifact auto-ingest failed: {e}"),
+        }
+    }
+
+    // ── Conversation auto-summary → KB ────────────────────────────────────────────
+
+    async fn maybe_ingest_conversation_summary(&self, pup: &str) -> Result<()> {
+        let recent = self.memory.recent_conversations(pup, 12).await?;
+        if recent.len() < 4 {
+            return Ok(()); // not enough content to summarize
+        }
+
+        let transcript = recent
+            .into_iter()
+            .rev()
+            .map(|(role, content)| format!("{role}: {content}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Ask the LLM to produce a concise summary worth storing
+        let prompt = format!(
+            "请将下面的对话浓缩为一段 200-400 字的摘要，保留关键决策、结论和行动项。\
+       如果对话没有实质性内容（纯闲聊/问候），返回空字符串 \"\"。\n\n{transcript}"
+        );
+
+        let summary = self
+            .llm_client
+            .chat_mini(vec![LlmMessage {
+                role: "user".into(),
+                content: prompt,
+            }])
+            .await?;
+
+        let summary = summary.trim().trim_matches('"');
+        if summary.is_empty() || summary.len() < 30 {
+            return Ok(());
+        }
+
+        let ingestor = crate::knowledge::ingestor::Ingestor::new(self.memory.clone());
+        let req = crate::knowledge::types::IngestTextRequest {
+            title: format!(
+                "对话摘要 ({} · {})",
+                pup,
+                chrono::Utc::now().format("%Y-%m-%d %H:%M")
+            ),
+            content: summary.to_string(),
+            source_type: "conversation".to_string(),
+            tags: vec!["auto-summary".to_string(), pup.to_string()],
+        };
+
+        match ingestor.ingest_text(&req).await {
+            Ok(id) => debug!("[alpha] conversation summary ingested: {id}"),
+            Err(e) => debug!("[alpha] conversation summary ingest failed: {e}"),
+        }
+
         Ok(())
     }
 

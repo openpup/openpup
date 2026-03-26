@@ -404,8 +404,7 @@ impl ToolRegistry {
                     .as_str()
                     .ok_or_else(|| anyhow!("search_knowledge_base: missing 'query'"))?;
                 let limit = args["limit"].as_u64().unwrap_or(5).min(20) as usize;
-                let retriever =
-                    crate::knowledge::retriever::KbRetriever::new(self.memory.clone());
+                let retriever = crate::knowledge::retriever::KbRetriever::new(self.memory.clone());
                 let results = retriever.search(query, limit, None).await?;
                 if results.is_empty() {
                     Ok("No matching documents found in the knowledge base.".to_string())

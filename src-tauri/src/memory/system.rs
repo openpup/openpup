@@ -400,6 +400,62 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        // ── FTS5 full-text index over knowledge chunks (v0.1.10) ────────────
+        sqlx::query(
+            r#"
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
+      USING fts5(content, heading_path, chunk_id UNINDEXED, source_id UNINDEXED,
+                 content_rowid='rowid', tokenize='unicode61');
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Trigger: auto-populate FTS on chunk insert
+        sqlx::query(
+            r#"
+      CREATE TRIGGER IF NOT EXISTS trg_kb_fts_insert
+      AFTER INSERT ON knowledge_chunks
+      BEGIN
+        INSERT INTO knowledge_chunks_fts(content, heading_path, chunk_id, source_id)
+        VALUES (NEW.content, NEW.heading_path, NEW.id, NEW.source_id);
+      END;
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Trigger: auto-delete FTS on chunk delete
+        sqlx::query(
+            r#"
+      CREATE TRIGGER IF NOT EXISTS trg_kb_fts_delete
+      AFTER DELETE ON knowledge_chunks
+      BEGIN
+        DELETE FROM knowledge_chunks_fts WHERE chunk_id = OLD.id;
+      END;
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Back-fill FTS for any pre-existing chunks (v0.1.9 → v0.1.10 migration).
+        // Only runs if FTS table is empty.
+        let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM knowledge_chunks_fts")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+
+        if fts_count == 0 {
+            sqlx::query(
+                r#"
+          INSERT INTO knowledge_chunks_fts(content, heading_path, chunk_id, source_id)
+          SELECT content, heading_path, id, source_id FROM knowledge_chunks;
+          "#,
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+
         Ok(())
     }
 
@@ -1649,11 +1705,7 @@ impl MemorySystem {
         Ok(())
     }
 
-    pub async fn update_knowledge_source_indexed(
-        &self,
-        id: &str,
-        chunk_count: i64,
-    ) -> Result<()> {
+    pub async fn update_knowledge_source_indexed(&self, id: &str, chunk_count: i64) -> Result<()> {
         let now = Utc::now().timestamp();
         sqlx::query(
             "UPDATE knowledge_sources SET status='indexed', chunk_count=?1, updated_at=?2 WHERE id=?3",
@@ -1739,6 +1791,74 @@ impl MemorySystem {
         Ok(())
     }
 
+    /// Full-text search over knowledge chunks using FTS5.
+    pub async fn fts_search_knowledge_chunks(
+        &self,
+        query: &str,
+        limit: usize,
+        tags: Option<&[String]>,
+    ) -> Result<Vec<crate::knowledge::types::KbSearchResult>> {
+        if query.trim().is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Escape special FTS5 characters and use implicit AND
+        let sanitized: String = query
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect();
+        if sanitized.trim().is_empty() {
+            return Ok(vec![]);
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT f.chunk_id, f.source_id, f.content, f.heading_path,
+                   kc.chunk_index, ks.title, ks.source_path, ks.tags,
+                   rank
+            FROM knowledge_chunks_fts f
+            JOIN knowledge_chunks kc ON f.chunk_id = kc.id
+            JOIN knowledge_sources ks ON f.source_id = ks.id
+            WHERE knowledge_chunks_fts MATCH ?1
+              AND ks.status = 'indexed'
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )
+        .bind(&sanitized)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            // Tag filter
+            if let Some(filter_tags) = tags {
+                if !filter_tags.is_empty() {
+                    let src_tags: String = row.get::<Option<String>, _>("tags").unwrap_or_default();
+                    let src_tags_vec: Vec<String> =
+                        serde_json::from_str(&src_tags).unwrap_or_default();
+                    if !filter_tags.iter().any(|t| src_tags_vec.contains(t)) {
+                        continue;
+                    }
+                }
+            }
+
+            results.push(crate::knowledge::types::KbSearchResult {
+                chunk_id: row.get("chunk_id"),
+                source_id: row.get("source_id"),
+                source_title: row.get("title"),
+                source_path: row.get("source_path"),
+                content: row.get("content"),
+                heading_path: row.get("heading_path"),
+                score: 0.0, // will be set by RRF fusion
+                chunk_index: row.get("chunk_index"),
+            });
+        }
+
+        Ok(results)
+    }
+
     /// Semantic search over knowledge chunks using cosine similarity.
     pub async fn search_knowledge_chunks(
         &self,
@@ -1773,7 +1893,8 @@ impl MemorySystem {
                 // Tag filter
                 if let Some(filter_tags) = tags {
                     if !filter_tags.is_empty() {
-                        let src_tags: String = row.get::<Option<String>, _>("tags").unwrap_or_default();
+                        let src_tags: String =
+                            row.get::<Option<String>, _>("tags").unwrap_or_default();
                         let src_tags_vec: Vec<String> =
                             serde_json::from_str(&src_tags).unwrap_or_default();
                         if !filter_tags.iter().any(|t| src_tags_vec.contains(t)) {

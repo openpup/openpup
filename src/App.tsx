@@ -275,11 +275,12 @@ const AppInner: React.FC = () => {
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
   // Auto-expand sidebar section when an item inside it becomes active
   useEffect(() => {
-    const toolsItems: NavItem[] = ['memories', 'timeline', 'tasks', 'skills'];
+    const toolsItems: NavItem[] = ['memories', 'timeline', 'tasks', 'skills', 'knowledge'];
     const configItems: NavItem[] = ['pups', 'mcp', 'bridge', 'settings'];
     if (toolsItems.includes(activeNav)) setToolsExpanded(true);
     if (configItems.includes(activeNav)) setConfigExpanded(true);
   }, [activeNav]);
+  const [kbSourceCount, setKbSourceCount] = useState(0);
   const [memoryChips, setMemoryChips] = useState<MemoryChip[]>([]);
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
   const [pups, setPups] = useState<PupConfig[]>([]);
@@ -333,6 +334,7 @@ const AppInner: React.FC = () => {
   const [importPath, setImportPath] = useState('');
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
+  const [kbAutoIngest, setKbAutoIngest] = useState(true);
   const [execMode, setExecMode] = useState<'leashed' | 'free_run'>('leashed');
   const [membersExpanded, setMembersExpanded] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -388,6 +390,8 @@ const AppInner: React.FC = () => {
   useEffect(() => {
     invoke<string>('get_execution_mode').then((m) => setExecMode(m as 'leashed' | 'free_run')).catch(() => {});
     loadPups();
+    invoke<{ id: string }[]>('kb_list_sources').then((s) => setKbSourceCount(s.length)).catch(() => {});
+    invoke<boolean>('kb_get_auto_ingest').then(setKbAutoIngest).catch(() => {});
 
     invoke<boolean>('check_onboarding_completed')
       .then((done) => {
@@ -619,6 +623,23 @@ const AppInner: React.FC = () => {
         }}
       >
         <span>{label}</span>
+        {navKey === 'knowledge' && kbSourceCount > 0 && (
+          <span style={{
+            marginLeft: 'auto',
+            minWidth: '18px',
+            height: '18px',
+            padding: '0 6px',
+            borderRadius: '999px',
+            background: 'rgba(29,158,117,0.14)',
+            color: '#1D9E75',
+            fontSize: '11px',
+            lineHeight: '18px',
+            textAlign: 'center',
+            fontWeight: 500,
+          }}>
+            {kbSourceCount}
+          </span>
+        )}
         {navKey === 'channel' && activeChannelCount > 0 && (
           <span style={{
             marginLeft: 'auto',
@@ -940,7 +961,7 @@ const AppInner: React.FC = () => {
                 <>
                   <NavBtn label={t('nav_timeline', lang)} navKey="timeline" />
                   <NavBtn label={t('nav_memories', lang)} navKey="memories" />
-                  <NavBtn label={t('nav_knowledge', lang)} navKey="knowledge" />
+                  <NavBtn label={t('nav_knowledge', lang)} navKey="knowledge" onClick={() => invoke<{ id: string }[]>('kb_list_sources').then(s => setKbSourceCount(s.length)).catch(() => {})} />
                   <NavBtn label={t('nav_tasks', lang)} navKey="tasks" />
                 </>
               )}
@@ -1314,6 +1335,27 @@ const AppInner: React.FC = () => {
             <div className="flex-1 overflow-auto px-4 py-4 space-y-8" style={{ fontSize: "13px" }}>
 
               <LlmConfigPanel />
+
+              <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
+
+              <section>
+                <h2 className="mb-3" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>{t('kb_settings_title', lang)}</h2>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={kbAutoIngest}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setKbAutoIngest(v);
+                      invoke('kb_set_auto_ingest', { enabled: v }).catch(() => {});
+                    }}
+                    style={{ accentColor: '#1D9E75' }}
+                  />
+                  <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>
+                    {t('kb_auto_ingest_label', lang)}
+                  </span>
+                </label>
+              </section>
 
               <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 

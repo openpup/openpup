@@ -51,6 +51,15 @@ pub struct IngestRequest {
     pub tags: Vec<String>,
 }
 
+/// Request to ingest raw text content (conversation summaries, artifacts, etc.).
+#[derive(Debug, Clone)]
+pub struct IngestTextRequest {
+    pub title: String,
+    pub content: String,
+    pub source_type: String, // "conversation" | "artifact"
+    pub tags: Vec<String>,
+}
+
 /// Progress event emitted during ingestion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestProgressEvent {
