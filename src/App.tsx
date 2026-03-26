@@ -14,6 +14,7 @@ import { TaskManager } from './components/TaskManager';
 import { PermissionDialog, PermissionRequest } from './components/PermissionDialog';
 import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
+import { KnowledgeBase } from './components/KnowledgeBase';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
 import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
@@ -102,7 +103,7 @@ interface ContextStats {
   };
 }
 
-type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'bridge' | 'settings';
+type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'bridge' | 'settings' | 'knowledge';
 
 // ─── LLM Config Panel ────────────────────────────────────────────────────────
 
@@ -939,6 +940,7 @@ const AppInner: React.FC = () => {
                 <>
                   <NavBtn label={t('nav_timeline', lang)} navKey="timeline" />
                   <NavBtn label={t('nav_memories', lang)} navKey="memories" />
+                  <NavBtn label={t('nav_knowledge', lang)} navKey="knowledge" />
                   <NavBtn label={t('nav_tasks', lang)} navKey="tasks" />
                 </>
               )}
@@ -1275,6 +1277,11 @@ const AppInner: React.FC = () => {
           {/* ── Timeline ── */}
           {activeNav === 'timeline' && (
             <div className="flex-1 overflow-auto px-5 py-4"><Timeline /></div>
+          )}
+
+          {/* ── Knowledge Base ── */}
+          {activeNav === 'knowledge' && (
+            <div className="flex-1 overflow-hidden flex flex-col px-5 py-4"><KnowledgeBase /></div>
           )}
 
           {/* ── Tasks ── */}

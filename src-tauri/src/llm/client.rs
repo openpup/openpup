@@ -125,6 +125,8 @@ pub struct LlmClient {
     pub usage: Arc<CumulativeUsage>,
     /// Usage from the most recent API call (for per-pup tracking).
     last_call_usage: Arc<Mutex<Option<TokenUsage>>>,
+    /// Local embedding fallback (fastembed) — lazy-initialized on first API failure.
+    local_embedder: Arc<super::local_embed::LocalEmbedder>,
 }
 
 impl LlmClient {
@@ -178,6 +180,7 @@ impl LlmClient {
             http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
             last_call_usage: Arc::new(Mutex::new(None)),
+            local_embedder: Arc::new(super::local_embed::LocalEmbedder::new()),
         }
     }
 
@@ -852,6 +855,25 @@ impl LlmClient {
     // ── Embeddings ─────────────────────────────────────────────────────────────
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        // Try remote API first
+        match self.embed_remote(text).await {
+            Ok(v) => Ok(v),
+            Err(api_err) => {
+                // Fallback to local fastembed
+                warn!(
+                    "[embed] API failed ({}), falling back to local fastembed",
+                    api_err
+                );
+                let embedder = self.local_embedder.clone();
+                let input = text.to_string();
+                tokio::task::spawn_blocking(move || embedder.embed(&input))
+                    .await
+                    .map_err(|e| anyhow!("local embed join: {e}"))?
+            }
+        }
+    }
+
+    async fn embed_remote(&self, text: &str) -> Result<Vec<f32>> {
         let (api_key, api_base, embed_model) = {
             let g = self.config.read().unwrap();
             (g.api_key.clone(), g.api_base.clone(), g.embed_model.clone())

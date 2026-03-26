@@ -245,7 +245,22 @@ impl ToolRegistry {
       }));
         }
 
-        // Memory tools are always available — they don't need a permission flag.
+        // Memory & knowledge tools are always available — they don't need a permission flag.
+        tools.push(serde_json::json!({
+      "type": "function",
+      "function": {
+        "name": "search_knowledge_base",
+        "description": "Search the owner's local knowledge base for relevant documents, notes, and reference material. The knowledge base contains documents the owner has manually imported. Use this to find specific technical documentation, project notes, or archived content. Different from memory_search: knowledge base stores imported documents, while memory stores facts extracted from conversations.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Natural-language search query describing what you're looking for" },
+            "limit": { "type": "integer", "description": "Maximum number of results (default: 5, max: 20)" }
+          },
+          "required": ["query"]
+        }
+      }
+    }));
         tools.push(serde_json::json!({
       "type": "function",
       "function": {
@@ -383,6 +398,42 @@ impl ToolRegistry {
                     .as_str()
                     .ok_or_else(|| anyhow!("web_fetch: missing 'url'"))?;
                 self.web_fetch(url).await
+            }
+            "search_knowledge_base" => {
+                let query = args["query"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("search_knowledge_base: missing 'query'"))?;
+                let limit = args["limit"].as_u64().unwrap_or(5).min(20) as usize;
+                let retriever =
+                    crate::knowledge::retriever::KbRetriever::new(self.memory.clone());
+                let results = retriever.search(query, limit, None).await?;
+                if results.is_empty() {
+                    Ok("No matching documents found in the knowledge base.".to_string())
+                } else {
+                    let formatted: Vec<String> = results
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            let source = r
+                                .heading_path
+                                .as_deref()
+                                .map(|h| format!("{} > {}", r.source_title, h))
+                                .unwrap_or_else(|| r.source_title.clone());
+                            format!(
+                                "[{}] Source: {} (relevance: {:.0}%)\n{}",
+                                i + 1,
+                                source,
+                                r.score * 100.0,
+                                r.content
+                            )
+                        })
+                        .collect();
+                    Ok(self.dynamic_truncate(&format!(
+                        "Found {} results:\n\n{}",
+                        results.len(),
+                        formatted.join("\n\n---\n\n")
+                    )))
+                }
             }
             "memory_search" => {
                 let query = args["query"]

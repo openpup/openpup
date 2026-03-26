@@ -353,6 +353,53 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        // ── Knowledge Base tables ─────────────────────────────────────────────
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS knowledge_sources (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        source_type TEXT NOT NULL DEFAULT 'file',
+        source_path TEXT,
+        mime_type   TEXT,
+        byte_size   INTEGER,
+        tags        TEXT,
+        chunk_count INTEGER NOT NULL DEFAULT 0,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        error_msg   TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS knowledge_chunks (
+        id           TEXT PRIMARY KEY,
+        source_id    TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        chunk_index  INTEGER NOT NULL,
+        heading_path TEXT,
+        char_start   INTEGER,
+        char_end     INTEGER,
+        embedding    TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(source_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -1535,6 +1582,224 @@ impl MemorySystem {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("m"))
+    }
+
+    // ── Knowledge Base ────────────────────────────────────────────────────────
+
+    /// Expose LLM embed for knowledge module use.
+    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
+        self.llm.embed(text).await
+    }
+
+    pub async fn insert_knowledge_source(
+        &self,
+        id: &str,
+        title: &str,
+        source_type: &str,
+        source_path: Option<&str>,
+        mime_type: Option<&str>,
+        byte_size: Option<i64>,
+        tags: Option<&str>,
+        now: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO knowledge_sources
+            (id, title, source_type, source_path, mime_type, byte_size, tags,
+             chunk_count, status, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 'pending', ?8, ?8)"#,
+        )
+        .bind(id)
+        .bind(title)
+        .bind(source_type)
+        .bind(source_path)
+        .bind(mime_type)
+        .bind(byte_size)
+        .bind(tags)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_knowledge_source_status(
+        &self,
+        id: &str,
+        status: &str,
+        error_msg: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            "UPDATE knowledge_sources SET status=?1, error_msg=?2, updated_at=?3 WHERE id=?4",
+        )
+        .bind(status)
+        .bind(error_msg)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_knowledge_source_mime(&self, id: &str, mime_type: &str) -> Result<()> {
+        sqlx::query("UPDATE knowledge_sources SET mime_type=?1 WHERE id=?2")
+            .bind(mime_type)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_knowledge_source_indexed(
+        &self,
+        id: &str,
+        chunk_count: i64,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            "UPDATE knowledge_sources SET status='indexed', chunk_count=?1, updated_at=?2 WHERE id=?3",
+        )
+        .bind(chunk_count)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_knowledge_chunk(
+        &self,
+        id: &str,
+        source_id: &str,
+        content: &str,
+        chunk_index: i64,
+        heading_path: Option<&str>,
+        char_start: Option<i64>,
+        char_end: Option<i64>,
+        embedding_json: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO knowledge_chunks
+            (id, source_id, content, chunk_index, heading_path,
+             char_start, char_end, embedding, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+        )
+        .bind(id)
+        .bind(source_id)
+        .bind(content)
+        .bind(chunk_index)
+        .bind(heading_path)
+        .bind(char_start)
+        .bind(char_end)
+        .bind(embedding_json)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_knowledge_sources(
+        &self,
+    ) -> Result<Vec<crate::knowledge::types::KnowledgeSource>> {
+        let rows = sqlx::query(
+            "SELECT id, title, source_type, source_path, mime_type, byte_size, tags, chunk_count, status, error_msg, created_at, updated_at FROM knowledge_sources ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| crate::knowledge::types::KnowledgeSource {
+                id: r.get("id"),
+                title: r.get("title"),
+                source_type: r.get("source_type"),
+                source_path: r.get("source_path"),
+                mime_type: r.get("mime_type"),
+                byte_size: r.get("byte_size"),
+                tags: r.get("tags"),
+                chunk_count: r.get("chunk_count"),
+                status: r.get("status"),
+                error_msg: r.get("error_msg"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn delete_knowledge_source(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM knowledge_chunks WHERE source_id=?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM knowledge_sources WHERE id=?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Semantic search over knowledge chunks using cosine similarity.
+    pub async fn search_knowledge_chunks(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+        tags: Option<&[String]>,
+    ) -> Result<Vec<crate::knowledge::types::KbSearchResult>> {
+        // Load all chunk embeddings from indexed sources (capped at 2000)
+        let rows = sqlx::query(
+            r#"
+            SELECT kc.id, kc.source_id, kc.content, kc.heading_path, kc.chunk_index, kc.embedding,
+                   ks.title, ks.source_path, ks.tags
+            FROM knowledge_chunks kc
+            JOIN knowledge_sources ks ON kc.source_id = ks.id
+            WHERE ks.status = 'indexed'
+            LIMIT 2000
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut scored: Vec<(f32, crate::knowledge::types::KbSearchResult)> = rows
+            .into_iter()
+            .filter_map(|row| {
+                let emb_json: String = row.get("embedding");
+                let emb: Vec<f32> = serde_json::from_str(&emb_json).ok()?;
+                let score = cosine_similarity(query_vec, &emb);
+                if score < 0.4 {
+                    return None;
+                }
+
+                // Tag filter
+                if let Some(filter_tags) = tags {
+                    if !filter_tags.is_empty() {
+                        let src_tags: String = row.get::<Option<String>, _>("tags").unwrap_or_default();
+                        let src_tags_vec: Vec<String> =
+                            serde_json::from_str(&src_tags).unwrap_or_default();
+                        if !filter_tags.iter().any(|t| src_tags_vec.contains(t)) {
+                            return None;
+                        }
+                    }
+                }
+
+                Some((
+                    score,
+                    crate::knowledge::types::KbSearchResult {
+                        chunk_id: row.get("id"),
+                        source_id: row.get("source_id"),
+                        source_title: row.get("title"),
+                        source_path: row.get("source_path"),
+                        content: row.get("content"),
+                        heading_path: row.get("heading_path"),
+                        score,
+                        chunk_index: row.get("chunk_index"),
+                    },
+                ))
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(scored.into_iter().take(limit).map(|(_, r)| r).collect())
     }
 }
 

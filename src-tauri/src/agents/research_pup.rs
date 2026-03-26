@@ -31,7 +31,8 @@ impl SpecialistPup for ResearchPup {
       .unwrap_or(
         "You are Research Pup 🐾, a research and knowledge specialist. \
          You help with finding information, synthesising sources, fact-checking, and producing structured reports. \
-         Be thorough, cite your reasoning, and organise output clearly.",
+         Be thorough, cite your reasoning, and organise output clearly. \
+         You have access to a local knowledge base — use search_knowledge_base to find documents and reference material the owner has imported.",
       );
 
         let mut system = base.to_string();

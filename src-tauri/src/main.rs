@@ -6,6 +6,7 @@ mod channel;
 mod commands;
 mod config;
 mod crypto;
+mod knowledge;
 mod llm;
 mod mcp;
 mod memory;
@@ -287,6 +288,7 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .manage(permission_checker)
         .invoke_handler(tauri::generate_handler![
@@ -377,6 +379,11 @@ fn main() {
             commands::get_context_stats,
             commands::get_token_usage,
             commands::reset_token_usage,
+            // Knowledge Base
+            commands::kb_ingest_file,
+            commands::kb_list_sources,
+            commands::kb_delete_source,
+            commands::kb_search,
         ])
         .setup(move |app| {
             // On Windows, the Overlay titlebar style may not work correctly,

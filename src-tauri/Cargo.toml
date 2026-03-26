@@ -38,6 +38,8 @@ tracing-appender = "0.2"
 petgraph = "0.6"
 cron = "0.12"
 qrcode = "0.14.1"
+tauri-plugin-dialog = "2"
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

@@ -1304,3 +1304,66 @@ pub async fn delete_scheduled_job(_state: State<'_, AppState>, id: String) -> Re
     let registry = crate::skills::job_registry::JobRegistry::new(jobs_path);
     registry.delete(&id).map_err(|e| e.to_string())
 }
+
+// ─── Knowledge Base ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn kb_ingest_file(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    path: String,
+    title: Option<String>,
+    tags: Vec<String>,
+) -> Result<String, String> {
+    let memory = state.alpha.memory.clone();
+    let ingestor = crate::knowledge::ingestor::Ingestor::new(memory);
+    let req = crate::knowledge::types::IngestRequest { path, title, tags };
+
+    let handle = app_handle.clone();
+    let source_id = ingestor
+        .ingest(&req, move |evt| {
+            let _ = handle.emit("kb_ingest_progress", &evt);
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(source_id)
+}
+
+#[tauri::command]
+pub async fn kb_list_sources(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::knowledge::types::KnowledgeSource>, String> {
+    state
+        .alpha
+        .memory
+        .list_knowledge_sources()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn kb_delete_source(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<(), String> {
+    state
+        .alpha
+        .memory
+        .delete_knowledge_source(&source_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn kb_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::knowledge::types::KbSearchResult>, String> {
+    let retriever = crate::knowledge::retriever::KbRetriever::new(state.alpha.memory.clone());
+    retriever
+        .search(&query, limit.unwrap_or(10), None)
+        .await
+        .map_err(|e| e.to_string())
+}

@@ -56,6 +56,9 @@ pub mod skills_scheduler;
 #[path = "../../src-tauri/src/tools/primitive.rs"]
 pub mod tools_primitive;
 
+#[path = "../../src-tauri/src/knowledge/mod.rs"]
+pub mod knowledge_mod;
+
 pub mod headless;
 pub mod ipc;
 
@@ -82,6 +85,10 @@ pub mod memory {
 
 pub mod tools {
     pub use crate::tools_primitive as primitive;
+}
+
+pub mod knowledge {
+    pub use crate::knowledge_mod::*;
 }
 
 pub mod skills {
