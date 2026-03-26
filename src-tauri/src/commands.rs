@@ -184,6 +184,7 @@ pub struct LongTermMemoryItem {
     pub memory_type: String,
     pub importance: f32,
     pub created_at: i64,
+    pub superseded_by: Option<String>,
 }
 
 fn memory_system_from_state(state: &State<'_, AppState>) -> Arc<MemorySystem> {
@@ -206,12 +207,15 @@ pub async fn list_long_term_memories(
     Ok(rows
         .into_iter()
         .map(
-            |(id, content, memory_type, importance, created_at)| LongTermMemoryItem {
-                id,
-                content,
-                memory_type,
-                importance,
-                created_at,
+            |(id, content, memory_type, importance, created_at, superseded_by)| {
+                LongTermMemoryItem {
+                    id,
+                    content,
+                    memory_type,
+                    importance,
+                    created_at,
+                    superseded_by,
+                }
             },
         )
         .collect())

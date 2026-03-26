@@ -513,7 +513,148 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        // ── Memory upgrade (v0.1.12): conflict tracking + Weibull decay fields ───
+
+        // Conflict tracking: which memory superseded this one
+        let _ = sqlx::query(
+            "ALTER TABLE long_term_memory ADD COLUMN superseded_by TEXT REFERENCES long_term_memory(id)",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // Validity window (UNIX timestamp, NULL = permanent)
+        let _ = sqlx::query("ALTER TABLE long_term_memory ADD COLUMN valid_until INTEGER")
+            .execute(&self.pool)
+            .await;
+
+        // Source conversation tracking
+        let _ = sqlx::query(
+            "ALTER TABLE long_term_memory ADD COLUMN extracted_from INTEGER REFERENCES conversations(id)",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // LLM extraction confidence
+        let _ = sqlx::query(
+            "ALTER TABLE long_term_memory ADD COLUMN confidence REAL NOT NULL DEFAULT 0.8",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // Cumulative access count (never reset, for Weibull reinforcement)
+        let _ = sqlx::query(
+            "ALTER TABLE long_term_memory ADD COLUMN access_count_total INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // FTS5 full-text index for long_term_memory
+        sqlx::query(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                content,
+                content='long_term_memory',
+                content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2'
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Back-fill FTS for existing memories (one-time migration)
+        let mem_fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_fts")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+
+        if mem_fts_count == 0 {
+            let _ = sqlx::query(
+                "INSERT INTO memory_fts(rowid, content)
+                 SELECT rowid, content FROM long_term_memory",
+            )
+            .execute(&self.pool)
+            .await;
+        }
+
+        // FTS sync triggers
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS ltm_fts_insert
+                AFTER INSERT ON long_term_memory BEGIN
+                INSERT INTO memory_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS ltm_fts_update
+                AFTER UPDATE OF content ON long_term_memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, content)
+                    VALUES('delete', old.rowid, old.content);
+                INSERT INTO memory_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS ltm_fts_delete
+                AFTER DELETE ON long_term_memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, content)
+                    VALUES('delete', old.rowid, old.content);
+            END;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // access_count_total auto-increment trigger
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS ltm_access_total
+                AFTER UPDATE OF last_accessed ON long_term_memory
+                WHEN new.last_accessed > old.last_accessed BEGIN
+                UPDATE long_term_memory
+                SET access_count_total = access_count_total + 1
+                WHERE id = new.id;
+            END;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Active rules view (for forced injection)
+        sqlx::query(
+            r#"
+            CREATE VIEW IF NOT EXISTS active_rules AS
+            SELECT *
+            FROM long_term_memory
+            WHERE memory_type = 'rule'
+              AND superseded_by IS NULL
+              AND (valid_until IS NULL OR valid_until > strftime('%s', 'now'))
+            ORDER BY importance DESC;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
+    }
+
+    /// Expose the raw pool for retriever/injector/extractor sub-systems.
+    pub fn pool(&self) -> &Pool<Sqlite> {
+        &self.pool
+    }
+
+    /// Expose the LLM client for sub-systems that need embeddings.
+    pub fn llm(&self) -> &Arc<LlmClient> {
+        &self.llm
     }
 
     // ── Pack Channel ──────────────────────────────────────────────────────────
@@ -1047,7 +1188,9 @@ impl MemorySystem {
             Ok(v) => v,
             Err(_) => {
                 let rows = sqlx::query(
-                    r#"SELECT content FROM long_term_memory ORDER BY importance DESC LIMIT ?1"#,
+                    r#"SELECT content FROM long_term_memory
+                       WHERE memory_type != 'invalidated' AND superseded_by IS NULL
+                       ORDER BY importance DESC LIMIT ?1"#,
                 )
                 .bind(limit as i64)
                 .fetch_all(&self.pool)
@@ -1065,6 +1208,7 @@ impl MemorySystem {
       SELECT m.id, m.content, e.embedding
       FROM long_term_memory m
       JOIN memory_embeddings e ON m.id = e.memory_id
+      WHERE m.memory_type != 'invalidated' AND m.superseded_by IS NULL
       ORDER BY m.importance DESC
       LIMIT 200
       "#,
@@ -1255,10 +1399,6 @@ impl MemorySystem {
         Ok(())
     }
 
-    pub fn pool(&self) -> &Pool<Sqlite> {
-        &self.pool
-    }
-
     /// Returns total number of conversation rows stored (user + assistant combined).
     pub async fn conversation_count(&self) -> Result<i64> {
         let row = sqlx::query("SELECT COUNT(*) as cnt FROM conversations")
@@ -1267,15 +1407,17 @@ impl MemorySystem {
         Ok(row.get::<i64, _>("cnt"))
     }
 
+    /// List memories with optional query filter.
+    /// Returns (id, content, memory_type, importance, created_at, superseded_by).
     pub async fn list_long_term_memories(
         &self,
         offset: i64,
         limit: i64,
         query: Option<&str>,
-    ) -> Result<Vec<(String, String, String, f32, i64)>> {
+    ) -> Result<Vec<(String, String, String, f32, i64, Option<String>)>> {
         let mut sql = String::from(
             r#"
-      SELECT id, content, memory_type, importance, created_at
+      SELECT id, content, memory_type, importance, created_at, superseded_by
       FROM long_term_memory
       "#,
         );
@@ -1305,7 +1447,15 @@ impl MemorySystem {
                 let memory_type: String = row.get("memory_type");
                 let importance: f32 = row.get::<f64, _>("importance") as f32;
                 let created_at: i64 = row.get("created_at");
-                (id, content, memory_type, importance, created_at)
+                let superseded_by: Option<String> = row.get("superseded_by");
+                (
+                    id,
+                    content,
+                    memory_type,
+                    importance,
+                    created_at,
+                    superseded_by,
+                )
             })
             .collect())
     }
@@ -1356,6 +1506,7 @@ impl MemorySystem {
             r#"
       SELECT content, memory_type, importance
       FROM long_term_memory
+      WHERE memory_type != 'invalidated' AND superseded_by IS NULL
       ORDER BY importance DESC, created_at DESC
       LIMIT ?1;
       "#,
@@ -1565,9 +1716,14 @@ impl MemorySystem {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let rows = match sqlx::query(r#"SELECT embedding FROM memory_embeddings LIMIT 500"#)
-            .fetch_all(&self.pool)
-            .await
+        let rows = match sqlx::query(
+            r#"SELECT e.embedding FROM memory_embeddings e
+               JOIN long_term_memory m ON e.memory_id = m.id
+               WHERE m.memory_type != 'invalidated' AND m.superseded_by IS NULL
+               LIMIT 500"#,
+        )
+        .fetch_all(&self.pool)
+        .await
         {
             Ok(r) => r,
             Err(_) => return false,
@@ -2233,7 +2389,7 @@ impl MemorySystem {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }

@@ -18,7 +18,10 @@ use crate::channel::manager::{ChannelManager, ReviewDecision};
 use crate::channel::types::{DelegationPlan, Subtask};
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
+use crate::memory::extractor::MemoryExtractor;
 use crate::memory::file_layer::FileLayer;
+use crate::memory::injector::{MemoryBudget, MemoryInjector};
+use crate::memory::retriever::MemoryRetriever;
 use crate::memory::system::{MemorySystem, TaskRecord};
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
@@ -198,6 +201,9 @@ pub struct AlphaPup {
     layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
     /// Whether to auto-ingest pup artifacts and conversation summaries to KB.
     pub kb_auto_ingest: Arc<AtomicBool>,
+    /// v0.1.12 memory subsystems
+    memory_injector: Arc<MemoryInjector>,
+    memory_extractor: Arc<MemoryExtractor>,
 }
 
 impl AlphaPup {
@@ -223,6 +229,17 @@ impl AlphaPup {
                 }
             }
         }
+        // v0.1.12: build retriever → injector → extractor from shared pool + llm
+        let retriever = Arc::new(MemoryRetriever::new(
+            memory.pool().clone(),
+            llm_client.clone(),
+        ));
+        let injector = Arc::new(MemoryInjector::new(memory.pool().clone(), retriever));
+        let extractor = Arc::new(MemoryExtractor::new(
+            memory.pool().clone(),
+            llm_client.clone(),
+        ));
+
         Self {
             memory,
             specialist_registry: Arc::new(RwLock::new(HashMap::new())),
@@ -239,6 +256,8 @@ impl AlphaPup {
             channel_manager,
             layer_hook: Arc::new(RwLock::new(None)),
             kb_auto_ingest: Arc::new(AtomicBool::new(true)),
+            memory_injector: injector,
+            memory_extractor: extractor,
         }
     }
 
@@ -394,11 +413,18 @@ impl AlphaPup {
     ) -> Result<(String, String)> {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.get_owner_summary(&owner_md).await;
-        let relevant_memories = self
-            .memory
-            .search_long_term(msg, 5)
+        // v0.1.12: hybrid retrieval with rule force-injection + Weibull decay
+        let memory_context = self
+            .memory_injector
+            .build_memory_context(msg, &MemoryBudget::default())
             .await
             .unwrap_or_default();
+        let memories_str = MemoryInjector::format_for_injection(&memory_context);
+        let relevant_memories: Vec<String> = if memories_str.is_empty() {
+            vec![]
+        } else {
+            vec![memories_str]
+        };
         // Brief global history for intent classification (last 4 turns, all pups)
         let classify_history = self.build_classify_history().await;
         // Load pending tasks for context injection
@@ -690,15 +716,16 @@ impl AlphaPup {
         };
 
         if !memories.is_empty() {
-            let bullets: String = memories
-                .iter()
-                .map(|m| {
+            // v0.1.12: memories may be pre-formatted blocks from MemoryInjector
+            for m in memories {
+                if m.contains("## ") {
+                    // Pre-formatted injection block (rules + semantic)
+                    system_content.push_str(&format!("\n\n{m}"));
+                } else {
                     let capped: String = m.chars().take(200).collect();
-                    format!("- {capped}")
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            system_content.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
+                    system_content.push_str(&format!("\n- {capped}"));
+                }
+            }
         }
 
         if !pending_tasks.is_empty() {
@@ -2359,11 +2386,18 @@ impl AlphaPup {
 
         // Alpha fallback — use non-streaming chat
         let pup_history = self.build_history("alpha").await;
-        let relevant_memories = self
-            .memory
-            .search_long_term(&msg, 5)
+        // v0.1.12: hybrid retrieval for bridge fallback path
+        let memory_ctx = self
+            .memory_injector
+            .build_memory_context(&msg, &MemoryBudget::default())
             .await
             .unwrap_or_default();
+        let mem_str = MemoryInjector::format_for_injection(&memory_ctx);
+        let relevant_memories: Vec<String> = if mem_str.is_empty() {
+            vec![]
+        } else {
+            vec![mem_str]
+        };
         let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
         let reply = self
             .alpha_reply_bridge(
@@ -2402,12 +2436,14 @@ impl AlphaPup {
         };
 
         if !memories.is_empty() {
-            let bullets: String = memories
-                .iter()
-                .map(|m| format!("- {}", m.chars().take(200).collect::<String>()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            system_content.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
+            for m in memories {
+                if m.contains("## ") {
+                    system_content.push_str(&format!("\n\n{m}"));
+                } else {
+                    let capped: String = m.chars().take(200).collect();
+                    system_content.push_str(&format!("\n- {capped}"));
+                }
+            }
         }
 
         if !pending_tasks.is_empty() {
@@ -2953,50 +2989,12 @@ impl AlphaPup {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let prompt = format!(
-            "从下面的对话中，提取 0-3 条对用户长期有用的事实/偏好/规则，\
-       用 JSON 数组返回，每条形如 \
-       {{\"type\": \"fact|preference|rule\", \"text\": \"...\", \"importance\": 0.0-1.0}}。\
-       没有值得提取的内容时返回空数组 []。只返回 JSON：\n\n{transcript}"
-        );
-
-        let answer = self
-            .llm_client
-            .chat_mini(vec![LlmMessage {
-                role: "user".into(),
-                content: prompt,
-            }])
+        // v0.1.12: use MemoryExtractor with LLM conflict resolution
+        let diary_entries = self
+            .memory_extractor
+            .extract_and_resolve_with_diary(&transcript, None)
             .await?;
 
-        let json_str = answer
-            .trim()
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim();
-
-        let mut diary_entries: Vec<String> = Vec::new();
-        if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(json_str) {
-            for item in items {
-                if let (Some(text), Some(mem_type)) = (
-                    item.get("text").and_then(|v| v.as_str()),
-                    item.get("type").and_then(|v| v.as_str()),
-                ) {
-                    let importance = item
-                        .get("importance")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.7) as f32;
-                    if self.memory.has_similar_memory(text, 0.88).await {
-                        continue;
-                    }
-                    let _ = self
-                        .memory
-                        .add_long_term_memory(text, mem_type, importance)
-                        .await;
-                    diary_entries.push(format!("[{mem_type}] {text}"));
-                }
-            }
-        }
         let _ = self.file_layer.append_daily_diary(&diary_entries);
         Ok(())
     }

@@ -5,6 +5,7 @@ import { formatDateOnly } from '../utils/locale';
 
 interface LongTermMemoryItem {
   id: string; content: string; memory_type: string; importance: number; created_at: number;
+  superseded_by: string | null;
 }
 
 const PAGE_SIZE = 20;
@@ -20,6 +21,8 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
 };
 
+type TabKey = 'active' | 'history';
+
 export const MemoryManager: React.FC = () => {
   const { lang } = useLang();
   const [items, setItems] = useState<LongTermMemoryItem[]>([]);
@@ -31,18 +34,32 @@ export const MemoryManager: React.FC = () => {
   const [editContent, setEditContent] = useState('');
   const [editType, setEditType] = useState('');
   const [editImportance, setEditImportance] = useState(0.5);
+  const [tab, setTab] = useState<TabKey>('active');
 
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      setItems(await invoke<LongTermMemoryItem[]>('list_long_term_memories', {
+      const all = await invoke<LongTermMemoryItem[]>('list_long_term_memories', {
         offset: page * PAGE_SIZE, limit: PAGE_SIZE, query: query.trim() || null,
-      }));
+      });
+      if (tab === 'active') {
+        // Active: exclude invalidated, sort rules first
+        const active = all.filter((m) => m.memory_type !== 'invalidated');
+        active.sort((a, b) => {
+          if (a.memory_type === 'rule' && b.memory_type !== 'rule') return -1;
+          if (a.memory_type !== 'rule' && b.memory_type === 'rule') return 1;
+          return 0;
+        });
+        setItems(active);
+      } else {
+        // History: only invalidated / superseded
+        setItems(all.filter((m) => m.memory_type === 'invalidated' || m.superseded_by != null));
+      }
     } catch (e: unknown) { setError(String(e)); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void load(); }, [page]);
+  useEffect(() => { void load(); }, [page, tab]);
 
   const saveEdit = async () => {
     if (!editing) return;
@@ -58,8 +75,57 @@ export const MemoryManager: React.FC = () => {
     catch (e: unknown) { setError(String(e)); }
   };
 
+  const typeLabel = (mt: string): string => {
+    switch (mt) {
+      case 'rule': return '🔒 规则';
+      case 'preference': return '偏好';
+      case 'fact': return '事实';
+      case 'experience': return '经历';
+      case 'invalidated': return '已失效';
+      default: return mt || 'general';
+    }
+  };
+
+  const typeBadgeStyle = (mt: string): React.CSSProperties => {
+    const base: React.CSSProperties = {
+      fontWeight: 500,
+      fontSize: 11,
+      padding: '2px 8px',
+      borderRadius: 999,
+      border: '1px solid var(--color-border-tertiary)',
+    };
+    if (mt === 'rule') {
+      return { ...base, background: 'rgba(29, 158, 117, 0.15)', color: '#1D9E75', borderColor: '#1D9E75' };
+    }
+    if (mt === 'invalidated') {
+      return { ...base, background: 'var(--color-background-danger)', color: 'var(--color-text-danger)' };
+    }
+    return { ...base, background: 'var(--color-background-secondary)', color: 'var(--color-text-tertiary)' };
+  };
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '6px 14px',
+    borderRadius: 8,
+    background: active ? 'var(--color-text-primary)' : 'var(--color-background-primary)',
+    color: active ? 'var(--color-background-primary)' : 'var(--color-text-secondary)',
+    border: active ? 'none' : '1px solid var(--color-border-secondary)',
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button style={tabStyle(tab === 'active')} onClick={() => { setTab('active'); setPage(0); }}>
+          {lang === 'zh' ? '当前记忆' : 'Active'}
+        </button>
+        <button style={tabStyle(tab === 'history')} onClick={() => { setTab('history'); setPage(0); }}>
+          {lang === 'zh' ? '历史记录' : 'History'}
+        </button>
+      </div>
+
       <div style={{ display: 'flex', gap: 8 }}>
         <input
           style={{ ...inputStyle, flex: 1 }}
@@ -138,7 +204,9 @@ export const MemoryManager: React.FC = () => {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {items.length === 0 && !loading && (
           <div style={{ color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
-            {t('mem_empty', lang)}
+            {tab === 'history'
+              ? (lang === 'zh' ? '暂无历史记忆' : 'No memory history')
+              : t('mem_empty', lang)}
           </div>
         )}
         {items.map((item) => (
@@ -146,70 +214,72 @@ export const MemoryManager: React.FC = () => {
             key={item.id}
             style={{
               borderRadius: 12,
-              border: '1px solid var(--color-border-primary)',
+              border: item.memory_type === 'rule'
+                ? '1px solid rgba(29, 158, 117, 0.4)'
+                : '1px solid var(--color-border-primary)',
               background: 'var(--color-background-secondary)',
               padding: '12px 16px',
               display: 'flex',
               flexDirection: 'column',
               gap: 6,
+              opacity: item.memory_type === 'invalidated' ? 0.6 : 1,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{
-                fontWeight: 500,
-                color: 'var(--color-text-tertiary)',
-                fontSize: 11,
-                padding: '2px 8px',
-                borderRadius: 999,
-                background: 'var(--color-background-secondary)',
-                border: '1px solid var(--color-border-tertiary)',
-              }}>
-                {item.memory_type || 'general'}
+              <span style={typeBadgeStyle(item.memory_type)}>
+                {typeLabel(item.memory_type)}
               </span>
               <span style={{ color: 'var(--color-text-tertiary)' }}>
                 {t('mem_importance', lang)}: {item.importance.toFixed(2)}
               </span>
             </div>
             <div style={{ marginTop: 2, marginBottom: 2, height: 4, borderRadius: 2, background: 'var(--color-background-secondary)', border: '1px solid var(--color-border-tertiary)', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${item.importance * 100}%`, background: '#1D9E75', borderRadius: 2 }} />
+              <div style={{ height: '100%', width: `${item.importance * 100}%`, background: item.memory_type === 'rule' ? '#1D9E75' : '#1D9E75', borderRadius: 2 }} />
             </div>
             <div style={{ color: 'var(--color-text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
               {item.content}
             </div>
+            {item.superseded_by && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontStyle: 'italic' }}>
+                {lang === 'zh' ? '已被替代 →' : 'Superseded by →'} {item.superseded_by.slice(0, 8)}…
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
               <span style={{ color: 'var(--color-text-tertiary)' }}>
                 {formatDateOnly(item.created_at, lang)}
               </span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 8,
-                    background: 'var(--color-background-primary)',
-                    border: '1px solid var(--color-border-secondary)',
-                    color: 'var(--color-text-tertiary)',
-                    cursor: 'pointer',
-                    fontSize: 12,
-                  }}
-                  onClick={() => { setEditing(item); setEditContent(item.content); setEditType(item.memory_type || ''); setEditImportance(item.importance ?? 0.5); }}
-                >
-                  {t('mem_edit', lang)}
-                </button>
-                <button
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 8,
-                    background: 'var(--color-background-danger)',
-                    color: 'var(--color-text-danger)',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 12,
-                  }}
-                  onClick={() => void deleteItem(item)}
-                >
-                  {t('mem_delete', lang)}
-                </button>
-              </div>
+              {tab === 'active' && (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 8,
+                      background: 'var(--color-background-primary)',
+                      border: '1px solid var(--color-border-secondary)',
+                      color: 'var(--color-text-tertiary)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                    onClick={() => { setEditing(item); setEditContent(item.content); setEditType(item.memory_type || ''); setEditImportance(item.importance ?? 0.5); }}
+                  >
+                    {t('mem_edit', lang)}
+                  </button>
+                  <button
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 8,
+                      background: 'var(--color-background-danger)',
+                      color: 'var(--color-text-danger)',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                    onClick={() => void deleteItem(item)}
+                  >
+                    {t('mem_delete', lang)}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
