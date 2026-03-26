@@ -11,6 +11,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::memory::system::MemorySystem;
+use crate::skills::registry::SkillRegistry;
 
 // ── Permission surface ────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ impl ToolPermissions {
 pub struct ToolRegistry {
     pub workspace_root: PathBuf,
     pub memory: Arc<MemorySystem>,
+    pub skill_registry: SkillRegistry,
     http: reqwest::Client,
     /// Context window limit in tokens — tool results are truncated proportionally.
     context_limit: std::sync::atomic::AtomicU64,
@@ -50,10 +52,11 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 impl ToolRegistry {
-    pub fn new(workspace_root: PathBuf, memory: Arc<MemorySystem>) -> Self {
+    pub fn new(workspace_root: PathBuf, memory: Arc<MemorySystem>, skill_registry: SkillRegistry) -> Self {
         Self {
             workspace_root,
             memory,
+            skill_registry,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -132,6 +135,36 @@ impl ToolRegistry {
               "path": { "type": "string", "description": "Absolute path or path relative to the workspace root" }
             },
             "required": ["path"]
+          }
+        }
+      }));
+            tools.push(serde_json::json!({
+        "type": "function",
+        "function": {
+          "name": "skill_list_resources",
+          "description": "List indexed directories and files from a Claude-style skill bundle. Use this before reading when the exact relative path is not yet certain.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "skill_name": { "type": "string", "description": "The active skill name" },
+              "limit": { "type": "integer", "description": "Maximum number of files and directories to include per section (default: 20)" }
+            },
+            "required": ["skill_name"]
+          }
+        }
+      }));
+            tools.push(serde_json::json!({
+        "type": "function",
+        "function": {
+          "name": "skill_read_resource",
+          "description": "Read an indexed file from a Claude-style skill bundle using the skill name and the exact indexed relative path. Use this instead of guessing workspace paths for skill resources.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "skill_name": { "type": "string", "description": "The active skill name" },
+              "relpath": { "type": "string", "description": "Exact relative path from the skill resource index, such as scripts/run.py" }
+            },
+            "required": ["skill_name", "relpath"]
           }
         }
       }));
@@ -237,6 +270,32 @@ impl ToolRegistry {
                     .ok_or_else(|| anyhow!("file_read: missing 'path'"))?;
                 self.file_read(path).await
             }
+            "skill_list_resources" => {
+                if !perms.file_read {
+                    return Err(anyhow!(
+                        "skill_list_resources: permission denied (requires permissions.file_read = true)"
+                    ));
+                }
+                let skill_name = args["skill_name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("skill_list_resources: missing 'skill_name'"))?;
+                let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+                self.skill_list_resources(skill_name, limit).await
+            }
+            "skill_read_resource" => {
+                if !perms.file_read {
+                    return Err(anyhow!(
+                        "skill_read_resource: permission denied (requires permissions.file_read = true)"
+                    ));
+                }
+                let skill_name = args["skill_name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("skill_read_resource: missing 'skill_name'"))?;
+                let relpath = args["relpath"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("skill_read_resource: missing 'relpath'"))?;
+                self.skill_read_resource(skill_name, relpath).await
+            }
             "file_write" => {
                 if !perms.file_write {
                     return Err(anyhow!(
@@ -341,6 +400,39 @@ impl ToolRegistry {
             content.len(),
             resolved.display()
         ))
+    }
+
+    async fn skill_list_resources(&self, skill_name: &str, limit: usize) -> Result<String> {
+        debug!("[tool/skill_list_resources] {} limit={}", skill_name, limit);
+        let listing = self.skill_registry.list_skill_resources(skill_name, limit).await?;
+        Ok(self.dynamic_truncate(&listing))
+    }
+
+    async fn skill_read_resource(&self, skill_name: &str, relpath: &str) -> Result<String> {
+        let resolved = self
+            .skill_registry
+            .resolve_skill_resource_path(skill_name, relpath)
+            .await?;
+        debug!(
+            "[tool/skill_read_resource] {}:{} -> {}",
+            skill_name,
+            relpath,
+            resolved.display()
+        );
+        let metadata = tokio::fs::metadata(&resolved)
+            .await
+            .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
+        if metadata.is_dir() {
+            return Err(anyhow!(
+                "skill_read_resource '{}:{}' resolved to a directory, not a file",
+                skill_name,
+                relpath
+            ));
+        }
+        let content = tokio::fs::read_to_string(&resolved)
+            .await
+            .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
+        Ok(self.dynamic_truncate(&content))
     }
 
     async fn http_get(&self, url: &str) -> Result<String> {

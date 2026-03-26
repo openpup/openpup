@@ -7,7 +7,7 @@ use tracing::debug;
 use crate::llm::client::LlmClient;
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::skills::permissions::{Action, PermissionChecker};
-use crate::skills::registry::{SkillPermissions, SkillRegistry};
+use crate::skills::registry::{LoadedSkillPrompt, SkillPermissions, SkillRegistry};
 use crate::tools::primitive::{ToolPermissions, ToolRegistry};
 
 #[derive(Clone)]
@@ -23,31 +23,30 @@ impl SkillExecutor {
     /// Load a skill's prompt and permissions for context injection.
     /// Confirms dangerous skills with the user before returning.
     pub async fn load_skill_prompt(&self, name: &str) -> Result<(String, SkillPermissions)> {
-        let manifest = self.registry.ensure_skill(name).await?;
+        let loaded = self.load_skill_bundle(name).await?;
+        Ok((loaded.render_with_preamble(), loaded.permissions.clone()))
+    }
 
-        // Confirm dangerous skills with the user
-        if manifest.permissions.dangerous || manifest.permissions.dangerous_operations {
+    pub async fn load_skill_bundle(&self, name: &str) -> Result<LoadedSkillPrompt> {
+        let loaded = self.registry.load_skill_prompt(name).await?;
+
+        if loaded.permissions.dangerous || loaded.permissions.dangerous_operations {
             let allowed = self
                 .permissions
                 .check_permission(
-                    &manifest.metadata.name,
-                    &Action::Other(format!("execute skill {}", manifest.metadata.name)),
+                    &loaded.metadata.name,
+                    &Action::Other(format!("execute skill {}", loaded.metadata.name)),
                 )
                 .await?;
             if !allowed {
                 return Err(anyhow!(
                     "Skill '{}' was not permitted.",
-                    manifest.metadata.name
+                    loaded.metadata.name
                 ));
             }
         }
 
-        let permissions = manifest.permissions.clone();
-        let prompt = manifest
-            .prompt
-            .ok_or_else(|| anyhow!("skill '{name}' has no [prompt] section"))?;
-
-        Ok((prompt.system, permissions))
+        Ok(loaded)
     }
 
     /// Standalone execution for scheduler and commands — runs the skill in its

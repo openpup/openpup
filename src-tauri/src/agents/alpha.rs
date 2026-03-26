@@ -464,7 +464,7 @@ impl AlphaPup {
             let system_prompt = format!(
                 "{owner_summary}\n\n\
                  ## Active Skill: {skill_name}\n\n\
-                 Follow the instructions below to complete the user's request.\n\n\
+                 Follow the Claude-style skill bundle below to complete the user's request.\n\n\
                  {skill_prompt}"
             );
 
@@ -1195,7 +1195,7 @@ impl AlphaPup {
                                 }
                                 format!(
                                     "## Skill '{skill_name}' activated\n\n\
-                                     Follow the instructions below to complete the task.\n\n\
+                                     Follow the Claude-style skill bundle below to complete the task.\n\n\
                                      {prompt}"
                                 )
                             }
