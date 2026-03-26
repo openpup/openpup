@@ -379,6 +379,17 @@ fn main() {
             commands::reset_token_usage,
         ])
         .setup(move |app| {
+            // On Windows, the Overlay titlebar style may not work correctly,
+            // resulting in a double titlebar. Remove native decorations so
+            // the frontend custom titlebar is the only one visible.
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
+
             let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
                 app.handle().clone(),
             ));

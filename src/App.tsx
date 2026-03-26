@@ -367,9 +367,9 @@ const AppInner: React.FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
-  // Track window maximized state for Linux custom titlebar button icon
+  // Track window maximized state for custom titlebar button icon (Windows & Linux)
   useEffect(() => {
-    if (platform !== 'linux') return;
+    if (platform === 'macos') return;
     const win = getCurrentWindow();
     win.isMaximized().then(setIsMaximized).catch(() => {});
     const unlisten = win.onResized(() => {
@@ -666,7 +666,7 @@ const AppInner: React.FC = () => {
           // Windows: reserve right space for native overlay controls (~138px)
           // Linux: no native controls — custom buttons rendered on the right
           paddingLeft: platform === 'macos' ? '78px' : '12px',
-          paddingRight: platform === 'windows' ? '140px' : (platform === 'linux' ? '0px' : '12px'),
+          paddingRight: platform === 'macos' ? '12px' : '0px',
           background: 'var(--color-background-secondary)',
           borderBottom: '0.5px solid var(--color-border-tertiary)',
           userSelect: 'none',
@@ -736,8 +736,8 @@ const AppInner: React.FC = () => {
             </div>
           )}
         </div>
-        {/* ── Linux window control buttons (macOS has traffic lights, Windows has native overlay controls) ── */}
-        {platform === 'linux' && (
+        {/* ── Custom window control buttons for Windows & Linux (macOS uses native traffic lights) ── */}
+        {platform !== 'macos' && (
           <div style={{ display: 'flex', alignItems: 'stretch', height: '100%', marginLeft: '8px', flexShrink: 0 }}>
             <button
               aria-label="Minimize"
