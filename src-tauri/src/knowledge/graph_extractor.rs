@@ -46,9 +46,7 @@ fn default_confidence() -> f32 {
 const VALID_ENTITY_TYPES: &[&str] = &[
     "person", "project", "concept", "tool", "org", "file", "other",
 ];
-const VALID_RELATIONS: &[&str] = &[
-    "depends_on", "created_by", "part_of", "uses", "related_to",
-];
+const VALID_RELATIONS: &[&str] = &["depends_on", "created_by", "part_of", "uses", "related_to"];
 
 pub struct GraphExtractor {
     memory: Arc<MemorySystem>,
@@ -86,8 +84,9 @@ impl GraphExtractor {
 
             match self.extract_batch(&combined).await {
                 Ok(result) => {
-                    if let Err(e) =
-                        self.upsert_entities_and_relations(source_id, batch, &result).await
+                    if let Err(e) = self
+                        .upsert_entities_and_relations(source_id, batch, &result)
+                        .await
                     {
                         warn!("[kg] upsert failed for source {source_id}: {e}");
                     }
@@ -144,12 +143,12 @@ impl GraphExtractor {
         let mut result: ExtractionResult = serde_json::from_str(clean)?;
 
         // Validate entity types and relations
-        result.entities.retain(|e| {
-            VALID_ENTITY_TYPES.contains(&e.entity_type.as_str())
-        });
-        result.relations.retain(|r| {
-            VALID_RELATIONS.contains(&r.relation.as_str())
-        });
+        result
+            .entities
+            .retain(|e| VALID_ENTITY_TYPES.contains(&e.entity_type.as_str()));
+        result
+            .relations
+            .retain(|r| VALID_RELATIONS.contains(&r.relation.as_str()));
 
         Ok(result)
     }

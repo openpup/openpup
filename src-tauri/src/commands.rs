@@ -1429,13 +1429,15 @@ pub async fn kg_list_entities(
             description: desc,
             relations: rels
                 .into_iter()
-                .map(|(rel, other_name, other_type, direction, confidence)| KgRelationInfo {
-                    relation: rel,
-                    other_name,
-                    other_type,
-                    direction,
-                    confidence,
-                })
+                .map(
+                    |(rel, other_name, other_type, direction, confidence)| KgRelationInfo {
+                        relation: rel,
+                        other_name,
+                        other_type,
+                        direction,
+                        confidence,
+                    },
+                )
                 .collect(),
         });
     }

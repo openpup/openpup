@@ -2009,13 +2009,12 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
-        let actual_id: String = sqlx::query_scalar(
-            "SELECT id FROM kg_entities WHERE name=?1 AND entity_type=?2",
-        )
-        .bind(name)
-        .bind(entity_type)
-        .fetch_one(&self.pool)
-        .await?;
+        let actual_id: String =
+            sqlx::query_scalar("SELECT id FROM kg_entities WHERE name=?1 AND entity_type=?2")
+                .bind(name)
+                .bind(entity_type)
+                .fetch_one(&self.pool)
+                .await?;
 
         Ok(actual_id)
     }
@@ -2061,7 +2060,10 @@ impl MemorySystem {
     }
 
     /// Find entities by fuzzy name match.
-    pub async fn find_kg_entities(&self, name: &str) -> Result<Vec<(String, String, String, Option<String>)>> {
+    pub async fn find_kg_entities(
+        &self,
+        name: &str,
+    ) -> Result<Vec<(String, String, String, Option<String>)>> {
         let rows = sqlx::query(
             "SELECT id, name, entity_type, description FROM kg_entities WHERE name LIKE ?1",
         )
@@ -2071,7 +2073,14 @@ impl MemorySystem {
 
         Ok(rows
             .into_iter()
-            .map(|r| (r.get("id"), r.get("name"), r.get("entity_type"), r.get("description")))
+            .map(|r| {
+                (
+                    r.get("id"),
+                    r.get("name"),
+                    r.get("entity_type"),
+                    r.get("description"),
+                )
+            })
             .collect())
     }
 
@@ -2147,7 +2156,14 @@ impl MemorySystem {
 
         Ok(rows
             .into_iter()
-            .map(|r| (r.get("id"), r.get("name"), r.get("entity_type"), r.get("description")))
+            .map(|r| {
+                (
+                    r.get("id"),
+                    r.get("name"),
+                    r.get("entity_type"),
+                    r.get("description"),
+                )
+            })
             .collect())
     }
 
@@ -2189,7 +2205,10 @@ impl MemorySystem {
     }
 
     /// Get chunks for a knowledge source.
-    pub async fn get_source_chunks(&self, source_id: &str) -> Result<Vec<crate::knowledge::types::KnowledgeChunk>> {
+    pub async fn get_source_chunks(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<crate::knowledge::types::KnowledgeChunk>> {
         let rows = sqlx::query(
             "SELECT id, source_id, content, chunk_index, heading_path, char_start, char_end, created_at
              FROM knowledge_chunks WHERE source_id=?1 ORDER BY chunk_index",

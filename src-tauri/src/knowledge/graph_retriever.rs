@@ -21,11 +21,7 @@ impl GraphRetriever {
 
     /// BFS graph search starting from entities matching `entity_name`.
     /// Returns chunks linked to discovered entities within `max_hops`.
-    pub async fn search(
-        &self,
-        entity_name: &str,
-        max_hops: usize,
-    ) -> Result<Vec<KbSearchResult>> {
+    pub async fn search(&self, entity_name: &str, max_hops: usize) -> Result<Vec<KbSearchResult>> {
         // 1. Find starting entities by fuzzy name match
         let start_entities = self.memory.find_kg_entities(entity_name).await?;
         if start_entities.is_empty() {
