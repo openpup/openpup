@@ -139,7 +139,10 @@ impl SkillResourceIndex {
         } else {
             lines.push(format!("dirs: {}", visible_dirs.join(", ")));
             if dirs.len() > visible_dirs.len() {
-                lines.push(format!("more_dirs_omitted: {}", dirs.len() - visible_dirs.len()));
+                lines.push(format!(
+                    "more_dirs_omitted: {}",
+                    dirs.len() - visible_dirs.len()
+                ));
             }
         }
 
@@ -148,7 +151,10 @@ impl SkillResourceIndex {
         } else {
             lines.push(format!("files: {}", visible_files.join(", ")));
             if files.len() > visible_files.len() {
-                lines.push(format!("more_files_omitted: {}", files.len() - visible_files.len()));
+                lines.push(format!(
+                    "more_files_omitted: {}",
+                    files.len() - visible_files.len()
+                ));
             }
         }
 
@@ -210,7 +216,10 @@ impl LoadedSkillPrompt {
             } else {
                 sections.push(format!("- files: {}", visible_files.join(", ")));
                 if files.len() > visible_files.len() {
-                    sections.push(format!("- more_files_omitted: {}", files.len() - visible_files.len()));
+                    sections.push(format!(
+                        "- more_files_omitted: {}",
+                        files.len() - visible_files.len()
+                    ));
                 }
             }
 
@@ -218,25 +227,39 @@ impl LoadedSkillPrompt {
                 sections.push(String::new());
                 sections.push("## Referenced path validation".to_string());
                 if validation.referenced_paths.is_empty() {
-                    sections.push("- No explicit relative path references were extracted from SKILL.md.".to_string());
+                    sections.push(
+                        "- No explicit relative path references were extracted from SKILL.md."
+                            .to_string(),
+                    );
                 } else {
-                    sections.push(format!("- Referenced paths: {}", validation.referenced_paths.join(", ")));
+                    sections.push(format!(
+                        "- Referenced paths: {}",
+                        validation.referenced_paths.join(", ")
+                    ));
                     if validation.resolved_paths.is_empty() {
                         sections.push("- Resolved paths: none".to_string());
                     } else {
-                        sections.push(format!("- Resolved paths: {}", validation.resolved_paths.join(", ")));
+                        sections.push(format!(
+                            "- Resolved paths: {}",
+                            validation.resolved_paths.join(", ")
+                        ));
                     }
                     if validation.unresolved_paths.is_empty() {
                         sections.push("- Unresolved paths: none".to_string());
                     } else {
-                        sections.push(format!("- Unresolved paths: {}", validation.unresolved_paths.join(", ")));
+                        sections.push(format!(
+                            "- Unresolved paths: {}",
+                            validation.unresolved_paths.join(", ")
+                        ));
                         sections.push("- Guardrail: unresolved paths must not be passed to `file_read`, `file_write`, or `skill_read_resource` unless the user explicitly confirms the exact path or a later tool result resolves it.".to_string());
                         sections.push("- Guardrail: near matches are diagnostic only. Do not auto-select them, even for obvious typos such as `script/` vs `scripts/`.".to_string());
                     }
                     if validation.near_matches.is_empty() {
                         sections.push("- Near matches: none".to_string());
                     } else {
-                        sections.push("- Near matches (for reporting only; do not auto-use):".to_string());
+                        sections.push(
+                            "- Near matches (for reporting only; do not auto-use):".to_string(),
+                        );
                         sections.extend(validation.near_matches.iter().map(|item| {
                             format!("  - {} -> {}", item.referenced_path, item.matched_path)
                         }));
@@ -514,11 +537,12 @@ impl SkillRegistry {
         let mut network = false;
 
         if let Some(ref mv) = meta_value {
-            let requires = if let Some(req) = mv.pointer("/clawdbot/requires") {
-                Some(req)
-            } else {
-                mv.get("requires")
-            };
+            let requires: Option<&serde_json::Value> =
+                if let Some(req) = mv.pointer("/clawdbot/requires") {
+                    Some(req)
+                } else {
+                    mv.get("requires")
+                };
             if let Some(req) = requires {
                 if req["bins"]
                     .as_array()
@@ -632,12 +656,22 @@ impl SkillRegistry {
             metadata: skill.metadata,
             permissions: skill.permissions,
             prompt: prompt.system,
-            resource_index: skill.bundle.as_ref().map(|bundle| bundle.resource_index.clone()),
-            path_validation: skill.bundle.as_ref().map(|bundle| bundle.path_validation.clone()),
+            resource_index: skill
+                .bundle
+                .as_ref()
+                .map(|bundle| bundle.resource_index.clone()),
+            path_validation: skill
+                .bundle
+                .as_ref()
+                .map(|bundle| bundle.path_validation.clone()),
         })
     }
 
-    pub async fn resolve_skill_resource_path(&self, skill_name: &str, relpath: &str) -> Result<PathBuf> {
+    pub async fn resolve_skill_resource_path(
+        &self,
+        skill_name: &str,
+        relpath: &str,
+    ) -> Result<PathBuf> {
         let skill = self
             .skills
             .read()
@@ -767,8 +801,8 @@ impl SkillRegistry {
 
     fn build_resource_index(dir: &Path, entry_prompt_path: &Path) -> Result<SkillResourceIndex> {
         let skill_root = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        let entry_prompt_path = fs::canonicalize(entry_prompt_path)
-            .unwrap_or_else(|_| entry_prompt_path.to_path_buf());
+        let entry_prompt_path =
+            fs::canonicalize(entry_prompt_path).unwrap_or_else(|_| entry_prompt_path.to_path_buf());
         let mut files_by_relpath = HashMap::new();
         let mut dirs_by_relpath = HashMap::new();
 
@@ -811,7 +845,8 @@ impl SkillRegistry {
         let mut near_matches = Vec::new();
 
         for path in &referenced_paths {
-            if index.files_by_relpath.contains_key(path) || index.dirs_by_relpath.contains_key(path) {
+            if index.files_by_relpath.contains_key(path) || index.dirs_by_relpath.contains_key(path)
+            {
                 resolved_paths.push(path.clone());
                 continue;
             }
@@ -836,9 +871,29 @@ impl SkillRegistry {
         let mut result = Vec::new();
         for raw in body.split_whitespace() {
             let candidate = raw
-                .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' ))
+                .trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        '`' | '"'
+                            | '\''
+                            | ','
+                            | '.'
+                            | ';'
+                            | ':'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '<'
+                            | '>'
+                    )
+                })
                 .trim();
-            if Self::looks_like_skill_path(candidate) && !result.iter().any(|existing| existing == candidate) {
+            if Self::looks_like_skill_path(candidate)
+                && !result.iter().any(|existing| existing == candidate)
+            {
                 result.push(candidate.to_string());
             }
         }
@@ -904,10 +959,8 @@ impl SkillRegistry {
             curr[0] = i + 1;
             for (j, b_char) in b_chars.iter().enumerate() {
                 let cost = usize::from(a_char != *b_char);
-                curr[j + 1] = std::cmp::min(
-                    std::cmp::min(curr[j] + 1, prev[j + 1] + 1),
-                    prev[j] + cost,
-                );
+                curr[j + 1] =
+                    std::cmp::min(std::cmp::min(curr[j] + 1, prev[j + 1] + 1), prev[j] + cost);
             }
             prev.clone_from_slice(&curr);
         }
@@ -925,7 +978,12 @@ impl SkillRegistry {
     fn is_ignored_skill_entry(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
-            .map(|name| matches!(name, ".git" | "target" | "node_modules" | "dist" | "__pycache__"))
+            .map(|name| {
+                matches!(
+                    name,
+                    ".git" | "target" | "node_modules" | "dist" | "__pycache__"
+                )
+            })
             .unwrap_or(false)
     }
 }

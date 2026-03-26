@@ -136,7 +136,11 @@ impl HeadlessRuntime {
             permissions.set_permission_ui(ui);
         }
 
-        let tools = Arc::new(ToolRegistry::new(workspace_root.clone(), memory.clone()));
+        let tools = Arc::new(ToolRegistry::new(
+            workspace_root.clone(),
+            memory.clone(),
+            skill_registry.clone(),
+        ));
         tools.set_context_limit(crate::agents::alpha::infer_context_limit_for_model(
             &llm_client.model_name(),
         ));

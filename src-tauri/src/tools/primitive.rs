@@ -56,7 +56,11 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 impl ToolRegistry {
-    pub fn new(workspace_root: PathBuf, memory: Arc<MemorySystem>, skill_registry: SkillRegistry) -> Self {
+    pub fn new(
+        workspace_root: PathBuf,
+        memory: Arc<MemorySystem>,
+        skill_registry: SkillRegistry,
+    ) -> Self {
         Self {
             workspace_root,
             memory,
@@ -212,19 +216,19 @@ impl ToolRegistry {
 
         if perms.network {
             tools.push(serde_json::json!({
-        "type": "function",
-        "function": {
-          "name": "http_get",
-          "description": "Perform an HTTP GET request and return the response body.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "url": { "type": "string", "description": "URL to fetch" }
-            },
-            "required": ["url"]
-          }
-        }
-      }));
+              "type": "function",
+              "function": {
+                "name": "http_get",
+                "description": "Perform an HTTP GET request and return the response body.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "URL to fetch" }
+                  },
+                  "required": ["url"]
+                }
+              }
+            }));
             tools.push(serde_json::json!({
         "type": "function",
         "function": {
@@ -417,12 +421,19 @@ impl ToolRegistry {
             .await
             .map_err(|e| anyhow!("shell_exec failed to spawn: {e}"))?;
 
-        Ok(self.format_process_output(output.stdout, output.stderr, output.status.code(), false, None))
+        Ok(self.format_process_output(
+            output.stdout,
+            output.stderr,
+            output.status.code(),
+            false,
+            None,
+        ))
     }
 
     async fn sandbox_shell_exec(&self, command: &str, timeout_ms: u64) -> Result<String> {
         let timeout_ms = timeout_ms.clamp(1_000, 30_000);
-        let sandbox_dir = tempfile::tempdir().map_err(|e| anyhow!("sandbox_shell_exec tempdir: {e}"))?;
+        let sandbox_dir =
+            tempfile::tempdir().map_err(|e| anyhow!("sandbox_shell_exec tempdir: {e}"))?;
         let sandbox_path = sandbox_dir.path().to_path_buf();
         debug!(
             "[tool/sandbox_shell_exec] {} in {}",
@@ -446,7 +457,9 @@ impl ToolRegistry {
             .spawn()
             .map_err(|e| anyhow!("sandbox_shell_exec failed to spawn: {e}"))?;
 
-        match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+        match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
+            .await
+        {
             Ok(Ok(output)) => Ok(self.format_process_output(
                 output.stdout,
                 output.stderr,
@@ -496,7 +509,10 @@ impl ToolRegistry {
 
     async fn skill_list_resources(&self, skill_name: &str, limit: usize) -> Result<String> {
         debug!("[tool/skill_list_resources] {} limit={}", skill_name, limit);
-        let listing = self.skill_registry.list_skill_resources(skill_name, limit).await?;
+        let listing = self
+            .skill_registry
+            .list_skill_resources(skill_name, limit)
+            .await?;
         Ok(self.dynamic_truncate(&listing))
     }
 
@@ -569,14 +585,15 @@ impl ToolRegistry {
             .trim()
             .to_string();
         let text = document.root_element().text().collect::<Vec<_>>().join(" ");
-        let normalized = text
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let result = format!(
             "final_url: {final_url}\ntitle: {}\ncontent:\n{}",
-            if title.is_empty() { "(untitled)" } else { &title },
+            if title.is_empty() {
+                "(untitled)"
+            } else {
+                &title
+            },
             normalized
         );
         Ok(self.dynamic_truncate(&result))
@@ -593,7 +610,12 @@ impl ToolRegistry {
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
         let mut sections = Vec::new();
-        sections.push(format!("exit_code: {}", exit_code.map(|c| c.to_string()).unwrap_or_else(|| "terminated".to_string())));
+        sections.push(format!(
+            "exit_code: {}",
+            exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "terminated".to_string())
+        ));
         sections.push(format!("timed_out: {timed_out}"));
         if let Some(path) = sandbox_dir {
             sections.push(format!("sandbox_dir: {}", path.display()));
