@@ -644,6 +644,20 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        // ── Message feedback (v0.1.13) ─────────────────────────────────────────
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS message_feedback (
+        message_id TEXT PRIMARY KEY,
+        channel_id TEXT,
+        feedback   TEXT NOT NULL CHECK(feedback IN ('up','down')),
+        created_at INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -723,6 +737,36 @@ impl MemorySystem {
         .bind(Utc::now().timestamp())
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    // ── Message feedback ───────────────────────────────────────────────────
+
+    pub async fn upsert_message_feedback(
+        &self,
+        message_id: &str,
+        channel_id: Option<&str>,
+        feedback: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO message_feedback (message_id, channel_id, feedback, created_at)
+               VALUES (?1, ?2, ?3, ?4)
+               ON CONFLICT(message_id) DO UPDATE SET feedback = ?3, created_at = ?4"#,
+        )
+        .bind(message_id)
+        .bind(channel_id)
+        .bind(feedback)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_message_feedback(&self, message_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM message_feedback WHERE message_id = ?1")
+            .bind(message_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

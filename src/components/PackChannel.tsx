@@ -1,5 +1,6 @@
 import React from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { MessageActions } from './MessageActions';
 import { ContextInspector } from './ContextInspector';
 import type { ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan } from '../types/channel';
 import { useLang, type Lang, t } from '../i18n';
@@ -337,7 +338,7 @@ const TextMessage: React.FC<TextMessageProps & { pupMetaByKey?: PupMetaByKey }> 
   const { lang } = useLang();
   const accent = pupAccent(msg.sender, pupMetaByKey);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+    <div className="msg-bubble" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{
           fontSize: '11px', fontWeight: 500,
@@ -359,6 +360,11 @@ const TextMessage: React.FC<TextMessageProps & { pupMetaByKey?: PupMetaByKey }> 
       }}>
         <MarkdownRenderer>{msg.content}</MarkdownRenderer>
       </div>
+      <MessageActions
+        messageId={msg.id}
+        channelId={msg.channel_id}
+        content={msg.content}
+      />
     </div>
   );
 };
@@ -553,7 +559,7 @@ const ArtifactMessage: React.FC<ArtifactMessageProps & { pupMetaByKey?: PupMetaB
   const lines = msg.content.split('\n').slice(0, 2);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+    <div className="msg-bubble" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{
           fontSize: '11px', fontWeight: 500,
@@ -590,6 +596,13 @@ const ArtifactMessage: React.FC<ArtifactMessageProps & { pupMetaByKey?: PupMetaB
           <div style={{ color: 'var(--color-text-tertiary)', marginTop: '2px' }}>…</div>
         )}
       </div>
+      <MessageActions
+        messageId={msg.id}
+        channelId={msg.channel_id}
+        content={msg.content}
+        isArtifact
+        artifactName={msg.artifact_name ?? undefined}
+      />
     </div>
   );
 };

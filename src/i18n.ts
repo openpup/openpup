@@ -291,6 +291,11 @@ Alex
     token_label: 'tokens',
     token_input: '输入',
     token_output: '输出',
+    msg_feedback_up: '有用',
+    msg_feedback_down: '没用',
+    msg_copy: '复制',
+    msg_copied: '已复制',
+    msg_download: '下载',
   },
   en: {
     app_name: 'openpup',
@@ -581,6 +586,11 @@ Triaging issues, writing weekly updates...`,
     token_label: 'tokens',
     token_input: 'Input',
     token_output: 'Output',
+    msg_feedback_up: 'Helpful',
+    msg_feedback_down: 'Not helpful',
+    msg_copy: 'Copy',
+    msg_copied: 'Copied',
+    msg_download: 'Download',
   },
 } as const;
 

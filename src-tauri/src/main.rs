@@ -387,6 +387,9 @@ fn main() {
             commands::kb_get_auto_ingest,
             commands::kb_set_auto_ingest,
             commands::kg_list_entities,
+            // Message feedback & artifact download
+            commands::submit_message_feedback,
+            commands::save_artifact_to_file,
         ])
         .setup(move |app| {
             // On Windows, the Overlay titlebar style may not work correctly,

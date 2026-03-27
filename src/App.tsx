@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
+import { MessageActions } from './components/MessageActions';
 import { Onboarding } from './components/Onboarding';
 import { SkillClaw } from './components/SkillClaw';
 import { MemoryManager } from './components/MemoryManager';
@@ -1175,7 +1176,7 @@ const AppInner: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <div key={m.id} className={isNew ? 'animate-msg-in' : ''} style={{ maxWidth: '80%' }}>
+                      <div key={m.id} className={`msg-bubble ${isNew ? 'animate-msg-in' : ''}`} style={{ maxWidth: '80%' }}>
                         {m.pup_name && (
                           <span style={{
                             display: 'inline-block', marginBottom: '4px',
@@ -1199,6 +1200,10 @@ const AppInner: React.FC = () => {
                             <MarkdownRenderer>{m.content}</MarkdownRenderer>
                           </div>
                         </div>
+                        <MessageActions
+                          messageId={m.id}
+                          content={m.content}
+                        />
                       </div>
                     );
                   })}
