@@ -4,7 +4,7 @@
 
 # OpenPup
 
-**一只记得你是谁的本地汪 · The local Pup that remembers who you are**
+**一只记得你是谁的小狗狗 · The local Pup that remembers who you are**
 
 > Not another ChatGPT wrapper.
 > Its memory files are yours to edit. Its skills run on your machine.

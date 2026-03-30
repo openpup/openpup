@@ -914,7 +914,7 @@ const AppInner: React.FC = () => {
         </div>
       ) : (
         /* Expanded 176px sidebar */
-        <div className="flex flex-col shrink-0 overflow-y-auto" style={{ width: '188px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+        <div className="flex flex-col shrink-0" style={{ width: '188px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)', overflow: 'hidden' }}>
           {/* Primary mode switch */}
           <div className="px-3 py-3" style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}>
             <div style={{
@@ -979,7 +979,7 @@ const AppInner: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex flex-col flex-1 px-2 pt-3 pb-3 gap-4">
+          <div className="flex flex-col flex-1 overflow-y-auto px-2 pt-3 pb-3 gap-4">
             {/* 狗群 section */}
             <div style={{ display: isPrimaryView ? 'block' : 'none' }}>
               <div className="px-2 pb-1.5" style={{ fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -1056,9 +1056,10 @@ const AppInner: React.FC = () => {
               )}
             </div>
 
-            <div className="flex-1" />
+          </div>
 
-            {/* Mode pill + utilities */}
+          {/* Mode pill + utilities — fixed bottom */}
+          <div className="px-2 pb-3 pt-2" style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <button
                 onClick={async () => {

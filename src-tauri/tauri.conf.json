@@ -16,11 +16,12 @@
     "windows": [
       {
         "title": "openpup",
-        "width": 1100,
+        "width": 1120,
         "height": 750,
         "minWidth": 860,
         "minHeight": 620,
         "resizable": true,
+        "center": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }
