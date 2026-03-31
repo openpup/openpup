@@ -392,7 +392,7 @@ impl LlmClient {
             return Err(anyhow!("API error {status}: {body}"));
         }
 
-        debug!("[llm] stream opened, reading SSE…");
+        debug!("[llm] stream opened, reading SSE...");
         let mut byte_stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
@@ -680,7 +680,7 @@ impl LlmClient {
             return Err(anyhow!("API error {status}: {body}"));
         }
 
-        debug!("[llm] chat_with_tools_stream opened, reading SSE…");
+        debug!("[llm] chat_with_tools_stream opened, reading SSE...");
         let mut byte_stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full_content = String::new();

@@ -83,7 +83,7 @@ jobs:
           - platform: darwin-aarch64
             os: macos-14
           - platform: darwin-x86_64
-            os: macos-14
+            os: macos-15-intel
           - platform: windows-x86_64
             os: windows-latest
     steps:
