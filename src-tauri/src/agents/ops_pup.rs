@@ -1,5 +1,4 @@
-use crate::agents::specialist::{PupToolPermissions, SpecialistPup, Task};
-use crate::agents::truncate_utf8;
+use crate::agents::specialist::{build_prompt_with_template, PupToolPermissions, SpecialistPup, Task};
 
 pub struct OpsPup;
 
@@ -8,6 +7,10 @@ impl OpsPup {
         Self
     }
 }
+
+const DEFAULT_PROMPT: &str = "You are Ops Pup 🐾, an operations and automation specialist. \
+You help with scheduling, reminders, automation scripts, system monitoring, and workflow optimisation. \
+Be structured and action-oriented. Respect the user's work schedule and do-not-disturb windows.";
 
 impl SpecialistPup for OpsPup {
     fn name(&self) -> &str {
@@ -24,34 +27,10 @@ impl SpecialistPup for OpsPup {
     }
 
     fn build_system_prompt(&self, task: &Task) -> String {
-        let base = task
-      .system_prompt_override
-      .as_deref()
-      .filter(|s| !s.is_empty())
-      .unwrap_or(
-        "You are Ops Pup 🐾, an operations and automation specialist. \
-         You help with scheduling, reminders, automation scripts, system monitoring, and workflow optimisation. \
-         Be structured and action-oriented. Respect the user's work schedule and do-not-disturb windows.",
-      );
-
-        let mut system = base.to_string();
-        if task.owner_context.contains("## Boundaries") {
-            system.push_str(&format!("\n\nOwner profile:\n{}", task.owner_context));
-        }
-        if !task.relevant_memories.is_empty() {
-            let bullets: String = task
-                .relevant_memories
-                .iter()
-                .map(|m| format!("- {}", truncate_utf8(m, 200)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            system.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
-        }
-        system
+        build_prompt_with_template("ops", DEFAULT_PROMPT, task)
     }
 
     fn tool_permissions(&self) -> PupToolPermissions {
-        // Ops gets full tool access — running commands, automation, and fetching resources.
         PupToolPermissions {
             shell: true,
             sandbox_shell: true,

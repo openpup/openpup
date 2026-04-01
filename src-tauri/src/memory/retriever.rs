@@ -68,14 +68,32 @@ impl MemoryRetriever {
     }
 
     /// Main retrieval: vector + FTS5 + RRF fusion + Weibull strength weighting.
+    ///
+    /// Graceful degradation: if embedding fails (model unavailable, API timeout,
+    /// etc.), falls back to FTS5-only retrieval rather than returning empty results.
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<MemorySearchResult>> {
         // Step 1: parallel vector + FTS5 retrieval
         let (vec_res, fts_res) = tokio::join!(
             self.vector_search(query, limit * 3),
             self.fts_search(query, limit * 3),
         );
+        let vec_failed = vec_res.is_err();
         let vec_res = vec_res.unwrap_or_default();
         let fts_res = fts_res.unwrap_or_default();
+
+        // If both are empty and vector search failed, try a broader FTS5 query
+        // by splitting into individual keywords (OR semantics)
+        let fts_res = if fts_res.is_empty() && vec_failed {
+            let keywords: Vec<&str> = query.split_whitespace().collect();
+            if keywords.len() > 1 {
+                let or_query = keywords.join(" OR ");
+                self.fts_search(&or_query, limit * 3).await.unwrap_or_default()
+            } else {
+                fts_res
+            }
+        } else {
+            fts_res
+        };
 
         // Step 2: RRF fusion
         let mut rrf: HashMap<String, f32> = HashMap::new();

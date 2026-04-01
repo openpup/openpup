@@ -920,6 +920,22 @@ impl AlphaPup {
         }
     }
 
+    /// Format a tool error as structured JSON so the LLM can reason about
+    /// recoverability and decide whether to retry, use an alternative, or report.
+    fn format_structured_error(tool: &str, message: &str, recoverable: bool) -> String {
+        serde_json::json!({
+            "error": true,
+            "tool": tool,
+            "message": message,
+            "recoverable": recoverable,
+            "hint": if recoverable {
+                "You may retry with different arguments, try an alternative approach, or report the error to the user."
+            } else {
+                "This error is not recoverable. Inform the user and suggest an alternative."
+            }
+        }).to_string()
+    }
+
     /// Compute the dynamic truncation limit for tool results, proportional to context window.
     /// Returns max chars = 30% of context window × 4 chars/token, clamped to [2_000, 32_768].
     fn tool_result_max_chars(&self) -> usize {
@@ -928,16 +944,22 @@ impl AlphaPup {
         max.clamp(2_000, 32_768)
     }
 
-    /// Truncate a tool result string to a dynamic limit based on the context window.
+    /// Truncate a tool result using head+tail strategy so that error messages
+    /// at the end (e.g. stderr) are preserved. Keeps ~70% head + ~30% tail.
     fn truncate_tool_result(&self, text: &str) -> String {
         let max = self.tool_result_max_chars();
         let count = text.chars().count();
-        if count > max {
-            let truncated: String = text.chars().take(max).collect();
-            format!("{truncated}\n… [truncated, {count} chars total]")
-        } else {
-            text.to_string()
+        if count <= max {
+            return text.to_string();
         }
+        let tail_budget = max * 3 / 10; // 30% for tail
+        let head_budget = max.saturating_sub(tail_budget).saturating_sub(80); // room for marker
+        let head: String = text.chars().take(head_budget).collect();
+        let tail: String = text.chars().skip(count - tail_budget).collect();
+        let omitted = count - head_budget - tail_budget;
+        format!(
+            "{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}"
+        )
     }
 
     async fn run_agent_with_tools(
@@ -1251,15 +1273,23 @@ impl AlphaPup {
                             .call_tool(&server, &tool, &tc.arguments)
                             .await
                             .map(|v| v.to_string())
-                            .unwrap_or_else(|e| format!("MCP error: {e}")),
-                        None => format!("Unknown MCP tool: '{}'", tc.name),
+                            .unwrap_or_else(|e| Self::format_structured_error(
+                                &tc.name, &e.to_string(), true,
+                            )),
+                        None => Self::format_structured_error(
+                            &tc.name,
+                            &format!("Unknown MCP tool: '{}'", tc.name),
+                            false,
+                        ),
                     }
                 } else {
                     self.skill_executor
                         .tools
                         .execute(&tc.name, &tc.arguments, &primitive_perms)
                         .await
-                        .unwrap_or_else(|e| format!("Error: {e}"))
+                        .unwrap_or_else(|e| Self::format_structured_error(
+                            &tc.name, &e.to_string(), true,
+                        ))
                 };
 
                 // Priority 3: Dynamic tool result truncation proportional to context window.
@@ -1290,9 +1320,26 @@ impl AlphaPup {
             }
         }
 
-        Err(anyhow!(
-            "[{agent_name}] exceeded maximum tool-call iterations ({MAX_ITER})"
-        ))
+        // Soft limit: inject a system message asking the LLM to wrap up,
+        // rather than hard-failing. This lets the model produce a partial answer.
+        debug!("[{agent_name}] reached MAX_ITER ({MAX_ITER}), requesting wrap-up");
+        msgs.push(serde_json::json!({
+            "role": "system",
+            "content": format!(
+                "You have reached the maximum number of tool-call iterations ({MAX_ITER}). \
+                 You MUST now produce a final text response. Summarise what you have accomplished \
+                 so far and note any remaining steps the user should complete manually."
+            )
+        }));
+        // One final LLM call without tools to get a wrap-up response
+        match self
+            .llm_client
+            .chat_with_tools_stream(msgs, vec![], |tok| on_token(tok.to_string()), abort)
+            .await?
+        {
+            Some(r) => Ok(AgentRunResult::FinalText(r.content.unwrap_or_default())),
+            None => Ok(AgentRunResult::FinalText(String::new())),
+        }
     }
 
     // ── Parallel pack dispatch ────────────────────────────────────────────────

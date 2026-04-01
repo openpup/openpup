@@ -1,5 +1,4 @@
-use crate::agents::specialist::{SpecialistPup, Task};
-use crate::agents::truncate_utf8;
+use crate::agents::specialist::{build_prompt_with_template, SpecialistPup, Task};
 
 pub struct WriterPup;
 
@@ -8,6 +7,10 @@ impl WriterPup {
         Self
     }
 }
+
+const DEFAULT_PROMPT: &str = "You are Writer Pup 🐾, a writing and language specialist. \
+You help with drafting, editing, translation, summarisation, and content creation. \
+Match the user's tone and style. Respond in the user's preferred language.";
 
 impl SpecialistPup for WriterPup {
     fn name(&self) -> &str {
@@ -24,29 +27,6 @@ impl SpecialistPup for WriterPup {
     }
 
     fn build_system_prompt(&self, task: &Task) -> String {
-        let base = task
-            .system_prompt_override
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(
-                "You are Writer Pup 🐾, a writing and language specialist. \
-         You help with drafting, editing, translation, summarisation, and content creation. \
-         Match the user's tone and style. Respond in the user's preferred language.",
-            );
-
-        let mut system = base.to_string();
-        if task.owner_context.contains("## Boundaries") {
-            system.push_str(&format!("\n\nOwner profile:\n{}", task.owner_context));
-        }
-        if !task.relevant_memories.is_empty() {
-            let bullets: String = task
-                .relevant_memories
-                .iter()
-                .map(|m| format!("- {}", truncate_utf8(m, 200)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            system.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
-        }
-        system
+        build_prompt_with_template("writer", DEFAULT_PROMPT, task)
     }
 }

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::agents::truncate_utf8;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
     Pending,
@@ -29,6 +31,91 @@ pub struct Task {
     pub system_prompt_override: Option<String>,
     pub assigned_pup: Option<String>,
     pub status: TaskStatus,
+}
+
+/// Parse `PUPS.md` and extract the prompt section for a specific pup.
+///
+/// Expected format in PUPS.md:
+/// ```markdown
+/// ## dev
+/// Your custom prompt for Dev Pup...
+///
+/// ## writer
+/// Your custom prompt for Writer Pup...
+/// ```
+///
+/// Returns `None` if the file doesn't exist, the pup has no section, or the
+/// section is empty.
+fn load_pup_prompt_from_pups_md(pup_name: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
+    let path = home.join(".openpup").join("PUPS.md");
+    let content = std::fs::read_to_string(&path).ok()?;
+
+    // Find `## {pup_name}` header (case-insensitive match on pup name)
+    let target = format!("## {}", pup_name);
+    let mut in_section = false;
+    let mut lines: Vec<&str> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case(&target) {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            // Stop at next h2 header
+            if trimmed.starts_with("## ") {
+                break;
+            }
+            lines.push(line);
+        }
+    }
+
+    let text = lines.join("\n").trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// Shared prompt builder used by all specialist pups.
+///
+/// Resolution order:
+///   1. `PupConfig.system_prompt_override` (from pup_configs.json — set via UI)
+///   2. `PUPS.md` section `## {pup_name}` (hand-edited Markdown file)
+///   3. Hardcoded `default_prompt` compiled into the binary
+///
+/// After resolving the base prompt, appends owner profile and relevant memories.
+pub fn build_prompt_with_template(
+    pup_name: &str,
+    default_prompt: &str,
+    task: &Task,
+) -> String {
+    // 1. Resolve base prompt: pup_configs.json > PUPS.md > hardcoded default
+    let base = task
+        .system_prompt_override
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| load_pup_prompt_from_pups_md(pup_name))
+        .unwrap_or_else(|| default_prompt.to_string());
+
+    let mut system = base;
+
+    // 2. Owner profile
+    if task.owner_context.contains("## Boundaries") {
+        system.push_str(&format!("\n\nOwner profile:\n{}", task.owner_context));
+    }
+
+    // 3. Relevant memories
+    if !task.relevant_memories.is_empty() {
+        let bullets: String = task
+            .relevant_memories
+            .iter()
+            .map(|m| format!("- {}", truncate_utf8(m, 200)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        system.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
+    }
+
+    system
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
