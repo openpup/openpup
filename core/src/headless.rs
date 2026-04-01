@@ -103,13 +103,13 @@ impl HeadlessRuntime {
         let skills_state_path = skills_state_dir.join("installed_skills.json");
         let skill_registry = SkillRegistry::new(skills_state_path);
         skill_registry
-            .register_builtin(include_str!("../../skills/daily_summary.toml"))
+            .register_builtin(include_str!("../../skills/daily_summary.skill.toml"))
             .await;
         skill_registry
-            .register_builtin(include_str!("../../skills/weekly_summary.toml"))
+            .register_builtin(include_str!("../../skills/weekly_summary.skill.toml"))
             .await;
         skill_registry
-            .register_builtin(include_str!("../../skills/task_manager.toml"))
+            .register_builtin(include_str!("../../skills/task_manager.skill.toml"))
             .await;
         let cfg = crate::config::load_with_env();
         for search_path in &cfg.skills.search_paths {

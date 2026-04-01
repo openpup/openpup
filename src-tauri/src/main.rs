@@ -167,13 +167,13 @@ fn main() {
 
             // Register built-in skills (always available, user can disable but not uninstall)
             skill_registry
-                .register_builtin(include_str!("../../skills/daily_summary.toml"))
+                .register_builtin(include_str!("../../skills/daily_summary.skill.toml"))
                 .await;
             skill_registry
-                .register_builtin(include_str!("../../skills/weekly_summary.toml"))
+                .register_builtin(include_str!("../../skills/weekly_summary.skill.toml"))
                 .await;
             skill_registry
-                .register_builtin(include_str!("../../skills/task_manager.toml"))
+                .register_builtin(include_str!("../../skills/task_manager.skill.toml"))
                 .await;
 
             // Load user-configured skill search paths from config.toml

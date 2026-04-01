@@ -355,6 +355,17 @@ impl SkillRegistry {
         .await;
     }
 
+    /// Check if a path is a skill TOML file.
+    ///
+    /// Only files matching `*.skill.toml` are recognised as skill manifests.
+    /// This avoids false positives from pyproject.toml, Cargo.toml, config.toml, etc.
+    fn is_skill_toml(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .map(|name| name.ends_with(".skill.toml"))
+            .unwrap_or(false)
+    }
+
     pub async fn add_scan_root(&self, path: PathBuf, source: impl Into<String>) {
         let source = source.into();
         let mut roots = self.scan_roots.write().await;
@@ -421,7 +432,7 @@ impl SkillRegistry {
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+            if Self::is_skill_toml(path) {
                 self.load_one(path).await?;
             }
         }
@@ -443,7 +454,7 @@ impl SkillRegistry {
         {
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+            if Self::is_skill_toml(path) {
                 let text = match fs::read_to_string(path) {
                     Ok(t) => t,
                     Err(e) => {

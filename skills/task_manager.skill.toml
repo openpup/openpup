@@ -55,7 +55,7 @@ system = """你是 Task Manager，负责管理 openpup 的定时任务系统。
 
 ## Skill TOML 格式（生成新 skill 时使用）
 
-写入路径：`~/.openpup/skills/<skill_name>.toml`
+写入路径：`~/.openpup/skills/<skill_name>.skill.toml`
 
 ```toml
 [metadata]
@@ -81,7 +81,7 @@ system = "你是一个专门做 XXX 的助手。使用可用工具完成任务�
 
 1. 理解用户需求，确定 schedule、skill 和 input
 2. 用 `file_read` 读取 `~/.openpup/skills/` 中的文件列表，确认所需 skill 是否已存在
-3. 若 skill 不存在：根据用户描述生成合适的 TOML 内容，用 `file_write` 写入 `~/.openpup/skills/<name>.toml`
+3. 若 skill 不存在：根据用户描述生成合适的 TOML 内容，用 `file_write` 写入 `~/.openpup/skills/<name>.skill.toml`
 4. 用 `file_read` 读取 `~/.openpup/scheduled_jobs.json`（若不存在则从空数组开始）
 5. 追加新 job 条目（id 使用时间戳 + 随机后缀，如 `"job_1234567890_abc"`）
 6. 用 `file_write` 写回完整的 JSON 数组
@@ -97,7 +97,7 @@ system = "你是一个专门做 XXX 的助手。使用可用工具完成任务�
 ### 卸载任务（含 skill 清理）
 
 1. 读取 `scheduled_jobs.json`，删除对应条目，写回
-2. 如果用户要求同时删除 skill：检查该 skill 是否还被其他 job 引用，若无则删除 `~/.openpup/skills/<name>.toml`
+2. 如果用户要求同时删除 skill：检查该 skill 是否还被其他 job 引用，若无则删除 `~/.openpup/skills/<name>.skill.toml`
 3. 向用户确认删除内容
 
 ### 列出任务
