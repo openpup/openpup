@@ -50,6 +50,42 @@ If you want deterministic workspace placement during mobile development:
 export OPENPUP_MOBILE_WORKSPACE_ROOT="$PWD/.openpup-mobile"
 ```
 
+## Android CI build and signing
+
+The Android GitHub Actions workflow lives at `.github/workflows/android-test.yml`.
+
+It supports two manual build modes:
+
+- `debug`: builds a debug APK for device testing
+- `release`: builds a release APK/AAB and expects signing secrets to be configured
+
+Release builds require these GitHub Actions secrets:
+
+- `ANDROID_KEYSTORE_BASE64`: base64-encoded `.jks` or `.keystore` file
+- `ANDROID_KEYSTORE_PASSWORD`: keystore password
+- `ANDROID_KEY_ALIAS`: signing key alias
+- `ANDROID_KEY_PASSWORD`: signing key password
+
+You can prepare the base64 secret locally with:
+
+```bash
+base64 -i release.keystore | pbcopy
+```
+
+On Linux, use:
+
+```bash
+base64 -w 0 release.keystore
+```
+
+In CI, the workflow will:
+
+- decode the keystore into `src-tauri/gen/android/keystores/upload-keystore.jks`
+- write `src-tauri/gen/android/keystore.properties`
+- patch `src-tauri/gen/android/app/build.gradle.kts` to attach the release signing config
+
+This keeps Android host generation ephemeral while still allowing signed release builds in CI.
+
 ## Recommended next step
 
 After native host generation succeeds, wire the file-backed mobile queues to native services:
