@@ -11,7 +11,10 @@ impl ToolRegistry {
     pub(crate) async fn file_read(&self, path: &str) -> Result<String> {
         let resolved = self.resolve_path(path);
         debug!("[tool/file_read] {}", resolved.display());
-        let content = tokio::fs::read_to_string(&resolved)
+        let content = self
+            .capabilities
+            .fs
+            .read_to_string(&resolved)
             .await
             .map_err(|e| anyhow!("file_read '{}': {e}", resolved.display()))?;
         Ok(self.dynamic_truncate(&content))
@@ -25,11 +28,15 @@ impl ToolRegistry {
             content.len()
         );
         if let Some(parent) = resolved.parent() {
-            tokio::fs::create_dir_all(parent)
+            self.capabilities
+                .fs
+                .create_dir_all(parent)
                 .await
                 .map_err(|e| anyhow!("file_write mkdir '{}': {e}", parent.display()))?;
         }
-        tokio::fs::write(&resolved, content)
+        self.capabilities
+            .fs
+            .write_string(&resolved, content)
             .await
             .map_err(|e| anyhow!("file_write '{}': {e}", resolved.display()))?;
         Ok(format!(
@@ -59,7 +66,10 @@ impl ToolRegistry {
             relpath,
             resolved.display()
         );
-        let metadata = tokio::fs::metadata(&resolved)
+        let metadata = self
+            .capabilities
+            .fs
+            .metadata(&resolved)
             .await
             .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
         if metadata.is_dir() {
@@ -69,7 +79,10 @@ impl ToolRegistry {
                 relpath
             ));
         }
-        let content = tokio::fs::read_to_string(&resolved)
+        let content = self
+            .capabilities
+            .fs
+            .read_to_string(&resolved)
             .await
             .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
         Ok(self.dynamic_truncate(&content))

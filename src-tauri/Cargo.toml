@@ -22,6 +22,10 @@ tempfile = "3"
 futures-util = "0.3"
 async-trait = "0.1"
 dirs = "5"
+openpup-core = { path = "../core" }
+openpup-runtime-android = { path = "../runtime-android" }
+openpup-runtime-desktop = { path = "../runtime-desktop" }
+openpup-runtime-ios = { path = "../runtime-ios" }
 walkdir = "2"
 tar = "0.4"
 flate2 = "1"
@@ -43,5 +47,3 @@ tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
-
-

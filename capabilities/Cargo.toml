@@ -1,0 +1,12 @@
+[package]
+name = "openpup-capabilities"
+version = "0.1.12"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

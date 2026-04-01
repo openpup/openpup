@@ -12,6 +12,7 @@ use openpup_core::ipc::{
 };
 use openpup_core::runtime::EventSink;
 use openpup_core::skills::scheduler::SkillScheduler;
+use openpup_runtime_desktop::DesktopRuntimeFactory;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
@@ -127,7 +128,7 @@ async fn serve() -> Result<()> {
     write_pid_file(&pid_path)?;
     let listener = bind_listener(&socket_path).await?;
 
-    let runtime = HeadlessRuntime::new(None).await?;
+    let runtime = DesktopRuntimeFactory::build_headless(None).await?;
     let bridge_config = bridge_control::get_bridge_config();
     let weixin_service = Arc::new(openpup_core::bridge::weixin::WeixinService::new());
     let bridge_manager = Arc::new(BridgeManager::new(

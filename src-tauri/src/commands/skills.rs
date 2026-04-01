@@ -6,13 +6,9 @@ use crate::skills::registry::InstalledSkill;
 
 use super::AppState;
 
-fn registry<'a>(state: &'a State<'_, AppState>) -> &'a crate::skills::registry::SkillRegistry {
-    &state.alpha.skill_executor.registry
-}
-
 #[tauri::command]
 pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<InstalledSkill>, String> {
-    Ok(registry(&state).list_installed().await)
+    Ok(state.app.list_skills().await)
 }
 
 #[tauri::command]
@@ -21,8 +17,9 @@ pub async fn set_skill_enabled(
     name: String,
     enabled: bool,
 ) -> Result<(), String> {
-    registry(&state)
-        .set_enabled(&name, enabled)
+    state
+        .app
+        .set_skill_enabled(&name, enabled)
         .await
         .map_err(|e| e.to_string())
 }
@@ -33,12 +30,7 @@ pub async fn run_skill(
     name: String,
     input: String,
 ) -> Result<String, String> {
-    state
-        .alpha
-        .skill_executor
-        .execute_skill(&name, &input)
-        .await
-        .map_err(|e| e.to_string())
+    state.app.run_skill(&name, &input).await.map_err(|e| e.to_string())
 }
 
 // ─── Skill run history ────────────────────────────────────────────────────────
@@ -73,8 +65,8 @@ pub async fn list_skill_runs(
     state: State<'_, AppState>,
     limit: i64,
 ) -> Result<Vec<SkillRunItem>, String> {
-    let memory = state.alpha.memory.clone();
-    let rows = memory
+    let rows = state
+        .app
         .list_skill_runs(limit)
         .await
         .map_err(|e| e.to_string())?;
@@ -85,18 +77,12 @@ pub async fn list_skill_runs(
 
 #[tauri::command]
 pub async fn list_scheduled_jobs(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<crate::skills::job_registry::ScheduledJob>, String> {
-    let home_dir = dirs::home_dir().ok_or("cannot determine home directory")?;
-    let jobs_path = home_dir.join(".openpup").join("scheduled_jobs.json");
-    let registry = crate::skills::job_registry::JobRegistry::new(jobs_path);
-    Ok(registry.load())
+    Ok(state.app.list_scheduled_jobs())
 }
 
 #[tauri::command]
-pub async fn delete_scheduled_job(_state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let home_dir = dirs::home_dir().ok_or("cannot determine home directory")?;
-    let jobs_path = home_dir.join(".openpup").join("scheduled_jobs.json");
-    let registry = crate::skills::job_registry::JobRegistry::new(jobs_path);
-    registry.delete(&id).map_err(|e| e.to_string())
+pub async fn delete_scheduled_job(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.app.delete_scheduled_job(&id).map_err(|e| e.to_string())
 }

@@ -17,9 +17,9 @@ pub async fn list_timeline_events(
     state: State<'_, AppState>,
     limit: i64,
 ) -> Result<Vec<TimelineEvent>, String> {
-    let memory = state.alpha.memory.clone();
-    let rows = memory
-        .list_conversations_for_timeline(limit)
+    let rows = state
+        .app
+        .timeline_events(limit)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -45,13 +45,10 @@ pub async fn list_timeline_events(
 
 #[tauri::command]
 pub async fn list_diary_dates(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(state.file_layer.list_diary_dates())
+    Ok(state.app.list_diary_dates())
 }
 
 #[tauri::command]
 pub async fn read_diary_entry(state: State<'_, AppState>, date: String) -> Result<String, String> {
-    state
-        .file_layer
-        .read_diary(&date)
-        .map_err(|e| e.to_string())
+    state.app.read_diary(&date).map_err(|e| e.to_string())
 }

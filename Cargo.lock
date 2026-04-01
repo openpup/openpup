@@ -3031,10 +3031,22 @@ dependencies = [
  "clap",
  "colored",
  "openpup-core",
+ "openpup-runtime-desktop",
  "rustyline",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "openpup-capabilities"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3048,8 +3060,10 @@ dependencies = [
  "chrono",
  "cron",
  "dirs 5.0.1",
+ "flate2",
  "futures-util",
  "libloading 0.8.9",
+ "openpup-capabilities",
  "petgraph",
  "qrcode",
  "rand 0.8.5",
@@ -3060,6 +3074,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sqlx",
+ "tar",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -3077,11 +3092,65 @@ dependencies = [
  "chrono",
  "clap",
  "openpup-core",
+ "openpup-runtime-desktop",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "openpup-runtime-android"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "openpup-capabilities",
+ "openpup-core",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "openpup-runtime-desktop"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "libloading 0.8.9",
+ "openpup-capabilities",
+ "openpup-core",
+ "reqwest 0.11.27",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "openpup-runtime-ios"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "openpup-capabilities",
+ "openpup-core",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3100,6 +3169,10 @@ dependencies = [
  "futures-util",
  "libloading 0.8.9",
  "open",
+ "openpup-core",
+ "openpup-runtime-android",
+ "openpup-runtime-desktop",
+ "openpup-runtime-ios",
  "petgraph",
  "qrcode",
  "rand 0.8.5",

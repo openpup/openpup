@@ -1143,10 +1143,11 @@ impl AlphaPup {
             let tool_count = iter_tools.len();
             let non_skill_tool_count = tool_count.saturating_sub(skill_tool_count);
             debug!(
-                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} (base={} skill={}) est_tokens={} limit={}",
+                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} tool_chars={} (base={} skill={}) est_tokens={} limit={}",
                     msgs.len(),
                     msg_chars,
                     tool_count,
+                    tool_chars,
                     non_skill_tool_count,
                     skill_tool_count,
                     estimated_tokens,

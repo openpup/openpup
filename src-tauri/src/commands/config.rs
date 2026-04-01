@@ -7,12 +7,7 @@ use super::AppState;
 
 #[tauri::command]
 pub async fn get_llm_provider(state: State<'_, AppState>) -> Result<String, String> {
-    let provider = state.alpha.llm_client.provider();
-    let name = match provider {
-        Provider::OpenAI => "openai",
-        Provider::Ollama => "ollama",
-    };
-    Ok(name.to_string())
+    Ok(state.app.llm_provider_name())
 }
 
 #[derive(Serialize)]
@@ -27,7 +22,7 @@ pub struct LlmConfigInfo {
 #[tauri::command]
 pub async fn get_llm_config(state: State<'_, AppState>) -> Result<LlmConfigInfo, String> {
     let (provider, model, mini_model, embed_model, _api_key, api_base) =
-        state.alpha.llm_client.current_config();
+        state.app.current_llm_config();
     let provider_str = match provider {
         Provider::OpenAI => "openai".to_string(),
         Provider::Ollama => "ollama".to_string(),
@@ -77,7 +72,7 @@ pub async fn set_llm_provider(
         "ollama" => Provider::Ollama,
         _ => Provider::OpenAI,
     };
-    state.alpha.llm_client.reconfigure(
+    state.app.reconfigure_llm(
         p,
         model.clone(),
         mini_model.clone(),
@@ -110,8 +105,8 @@ pub async fn set_llm_provider(
 #[tauri::command]
 pub async fn quick_set_model(state: State<'_, AppState>, model: String) -> Result<(), String> {
     let (provider, _old_model, mini_model, embed_model, api_key, api_base) =
-        state.alpha.llm_client.current_config();
-    state.alpha.llm_client.reconfigure(
+        state.app.current_llm_config_with_secret();
+    state.app.reconfigure_llm(
         provider,
         model.clone(),
         Some(mini_model),

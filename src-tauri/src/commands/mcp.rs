@@ -1,15 +1,9 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry, McpToolInfo};
+use crate::mcp::orchestrator::{McpServerEntry, McpToolInfo};
 
 use super::AppState;
-
-fn mcp<'a>(state: &'a State<'_, AppState>) -> &'a Arc<MCPOrchestrator> {
-    &state.alpha.mcp_orchestrator
-}
 
 #[derive(Serialize)]
 pub struct McpServerInfo {
@@ -21,7 +15,7 @@ pub struct McpServerInfo {
 
 #[tauri::command]
 pub async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<McpServerInfo>, String> {
-    let servers = mcp(&state).list_servers().await;
+    let servers = state.app.list_mcp_servers().await;
     Ok(servers
         .into_iter()
         .map(|e| McpServerInfo {
@@ -46,8 +40,9 @@ pub async fn add_mcp_server(
     state: State<'_, AppState>,
     entry: AddMcpServerInput,
 ) -> Result<(), String> {
-    mcp(&state)
-        .add_server(McpServerEntry {
+    state
+        .app
+        .add_mcp_server(McpServerEntry {
             name: entry.name,
             base_url: entry.base_url,
             token: entry.token,
@@ -60,10 +55,7 @@ pub async fn add_mcp_server(
 
 #[tauri::command]
 pub async fn remove_mcp_server(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    mcp(&state)
-        .remove_server(&name)
-        .await
-        .map_err(|e| e.to_string())
+    state.app.remove_mcp_server(&name).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -72,19 +64,19 @@ pub async fn toggle_mcp_server(
     name: String,
     enabled: bool,
 ) -> Result<(), String> {
-    mcp(&state)
-        .toggle_server(&name, enabled)
+    state
+        .app
+        .toggle_mcp_server(&name, enabled)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn list_mcp_tools(state: State<'_, AppState>) -> Result<Vec<McpToolInfo>, String> {
-    Ok(state.alpha.mcp_orchestrator.list_all_tools().await)
+    Ok(state.app.list_mcp_tools().await)
 }
 
 #[tauri::command]
 pub async fn refresh_mcp_tools(state: State<'_, AppState>) -> Result<Vec<McpToolInfo>, String> {
-    state.alpha.mcp_orchestrator.refresh_all_tools().await;
-    Ok(state.alpha.mcp_orchestrator.list_all_tools().await)
+    Ok(state.app.refresh_mcp_tools().await)
 }

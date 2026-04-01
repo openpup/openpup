@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// Shared abort flag passed into `chat_stream`.
 pub type AbortFlag = Arc<AtomicBool>;

@@ -1,6 +1,7 @@
 /// Network tool implementations for ToolRegistry.
 
 use anyhow::{anyhow, Result};
+use openpup_capabilities::HttpRequest;
 use scraper::{Html, Selector};
 use tracing::debug;
 
@@ -10,37 +11,36 @@ impl ToolRegistry {
     pub(crate) async fn http_get(&self, url: &str) -> Result<String> {
         debug!("[tool/http_get] {}", truncate_chars(url, 120));
         let resp = self
-            .http
-            .get(url)
-            .header("User-Agent", "openpup/0.1")
-            .send()
+            .capabilities
+            .net
+            .get(HttpRequest {
+                url: url.to_string(),
+                user_agent: Some("openpup/0.1".to_string()),
+            })
             .await
             .map_err(|e| anyhow!("http_get '{url}': {e}"))?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!("http_get '{url}': HTTP {status}"));
+        if !(200..300).contains(&resp.status) {
+            return Err(anyhow!("http_get '{url}': HTTP {}", resp.status));
         }
-        Ok(self.dynamic_truncate(&body))
+        Ok(self.dynamic_truncate(&resp.body))
     }
 
     pub(crate) async fn web_fetch(&self, url: &str) -> Result<String> {
         debug!("[tool/web_fetch] {}", truncate_chars(url, 120));
         let resp = self
-            .http
-            .get(url)
-            .header("User-Agent", "openpup/0.1")
-            .send()
+            .capabilities
+            .net
+            .get(HttpRequest {
+                url: url.to_string(),
+                user_agent: Some("openpup/0.1".to_string()),
+            })
             .await
             .map_err(|e| anyhow!("web_fetch '{url}': {e}"))?;
-        let status = resp.status();
-        let final_url = resp.url().to_string();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!("web_fetch '{url}': HTTP {status}"));
+        if !(200..300).contains(&resp.status) {
+            return Err(anyhow!("web_fetch '{url}': HTTP {}", resp.status));
         }
 
-        let document = Html::parse_document(&body);
+        let document = Html::parse_document(&resp.body);
         let title = Selector::parse("title")
             .ok()
             .and_then(|selector| document.select(&selector).next())
@@ -52,13 +52,14 @@ impl ToolRegistry {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let result = format!(
-            "final_url: {final_url}\ntitle: {}\ncontent:\n{}",
-            if title.is_empty() {
+            "final_url: {final_url}\ntitle: {title}\ncontent:\n{content}",
+            final_url = resp.final_url,
+            title = if title.is_empty() {
                 "(untitled)"
             } else {
                 &title
             },
-            normalized
+            content = normalized,
         );
         Ok(self.dynamic_truncate(&result))
     }

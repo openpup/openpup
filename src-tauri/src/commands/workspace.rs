@@ -38,8 +38,8 @@ pub async fn search_conversations(
     query: String,
     limit: i64,
 ) -> Result<Vec<ConversationSearchResult>, String> {
-    let memory = state.alpha.memory.clone();
-    let rows = memory
+    let rows = state
+        .app
         .search_conversations(&query, limit)
         .await
         .map_err(|e| e.to_string())?;

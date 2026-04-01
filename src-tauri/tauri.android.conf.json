@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 1012,
+      "autoIncrementVersionCode": false
+    }
+  },
+  "app": {
+    "windows": []
+  }
+}

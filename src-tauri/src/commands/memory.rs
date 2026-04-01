@@ -1,9 +1,5 @@
-use std::sync::Arc;
-
 use serde::Serialize;
 use tauri::State;
-
-use crate::memory::system::MemorySystem;
 
 use super::AppState;
 
@@ -17,10 +13,6 @@ pub struct LongTermMemoryItem {
     pub superseded_by: Option<String>,
 }
 
-fn memory_system(state: &State<'_, AppState>) -> Arc<MemorySystem> {
-    state.alpha.memory.clone()
-}
-
 #[tauri::command]
 pub async fn list_long_term_memories(
     state: State<'_, AppState>,
@@ -28,8 +20,8 @@ pub async fn list_long_term_memories(
     limit: i64,
     query: Option<String>,
 ) -> Result<Vec<LongTermMemoryItem>, String> {
-    let memory = memory_system(&state);
-    let rows = memory
+    let rows = state
+        .app
         .list_long_term_memories(offset, limit, query.as_deref())
         .await
         .map_err(|e| e.to_string())?;
@@ -59,8 +51,8 @@ pub async fn update_long_term_memory(
     memory_type: String,
     importance: f32,
 ) -> Result<(), String> {
-    let memory = memory_system(&state);
-    memory
+    state
+        .app
         .update_long_term_memory(&id, &content, &memory_type, importance)
         .await
         .map_err(|e| e.to_string())
@@ -68,8 +60,8 @@ pub async fn update_long_term_memory(
 
 #[tauri::command]
 pub async fn delete_long_term_memory(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let memory = memory_system(&state);
-    memory
+    state
+        .app
         .delete_long_term_memory(&id)
         .await
         .map_err(|e| e.to_string())
@@ -88,9 +80,9 @@ pub async fn get_top_memories(
     state: State<'_, AppState>,
     limit: i64,
 ) -> Result<Vec<MemoryChip>, String> {
-    let memory = memory_system(&state);
-    let rows = memory
-        .get_top_memories(limit)
+    let rows = state
+        .app
+        .top_memories(limit)
         .await
         .map_err(|e| e.to_string())?;
     Ok(rows

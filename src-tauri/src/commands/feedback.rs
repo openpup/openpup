@@ -10,13 +10,16 @@ pub async fn submit_message_feedback(
     channel_id: Option<String>,
     feedback: Option<String>,
 ) -> Result<(), String> {
-    let mem = &state.alpha.memory;
     match feedback.as_deref() {
-        Some(f @ ("up" | "down")) => mem
+        Some(f @ ("up" | "down")) => state
+            .app
+            .memory
             .upsert_message_feedback(&message_id, channel_id.as_deref(), f)
             .await
             .map_err(|e| e.to_string()),
-        None => mem
+        None => state
+            .app
+            .memory
             .delete_message_feedback(&message_id)
             .await
             .map_err(|e| e.to_string()),

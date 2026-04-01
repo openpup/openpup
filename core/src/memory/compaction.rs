@@ -8,7 +8,7 @@
 //! The compaction engine decides which strategy to apply based on the context pressure level.
 
 use anyhow::Result;
-use sqlx::{Pool, Row, Sqlite};
+use sqlx::{Pool, Sqlite};
 use std::sync::Arc;
 use tracing::debug;
 

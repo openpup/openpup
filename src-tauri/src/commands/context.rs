@@ -22,9 +22,8 @@ pub async fn get_pup_conversation(
 ) -> Result<Vec<ConvMessage>, String> {
     let limit = limit.unwrap_or(100);
     let rows = state
-        .alpha
-        .memory
-        .get_pup_conversation_display(&pup_key, limit, before_timestamp)
+        .app
+        .pup_conversation_display(&pup_key, limit, before_timestamp)
         .await
         .map_err(|e| e.to_string())?;
     Ok(rows
@@ -43,23 +42,13 @@ pub async fn get_pup_message_count(
     state: State<'_, AppState>,
     pup_key: String,
 ) -> Result<i64, String> {
-    state
-        .alpha
-        .memory
-        .get_pup_message_count(&pup_key)
-        .await
-        .map_err(|e| e.to_string())
+    state.app.pup_message_count(&pup_key).await.map_err(|e| e.to_string())
 }
 
 /// Clear all conversation history for a pup (context reset).
 #[tauri::command]
 pub async fn clear_pup_history(state: State<'_, AppState>, pup_key: String) -> Result<(), String> {
-    state
-        .alpha
-        .memory
-        .clear_pup_conversation(&pup_key)
-        .await
-        .map_err(|e| e.to_string())
+    state.app.clear_pup_history(&pup_key).await.map_err(|e| e.to_string())
 }
 
 /// Manually trigger context compression for a pup.
@@ -68,11 +57,7 @@ pub async fn compress_pup_context(
     state: State<'_, AppState>,
     pup_key: String,
 ) -> Result<(), String> {
-    state
-        .alpha
-        .compress_pup_context_now(&pup_key)
-        .await
-        .map_err(|e| e.to_string())
+    state.app.compress_pup_context(&pup_key).await.map_err(|e| e.to_string())
 }
 
 /// Compression status for a pup's context.
@@ -100,20 +85,20 @@ pub async fn get_context_stats(
     state: State<'_, AppState>,
     pup_key: String,
 ) -> Result<ContextStats, String> {
-    let memory = state.alpha.memory.clone();
-
-    let message_count = memory
-        .get_pup_message_count(&pup_key)
+    let message_count = state
+        .app
+        .pup_message_count(&pup_key)
         .await
         .map_err(|e| e.to_string())?;
 
-    let (is_compressed, last_compression_row) = memory
-        .get_compression_status(&pup_key)
+    let (is_compressed, last_compression_row) = state
+        .app
+        .compression_status(&pup_key)
         .await
         .map_err(|e| e.to_string())?;
 
-    let context_tokens = state.alpha.get_context_tokens(&pup_key).await.unwrap_or(0);
-    let context_limit = state.alpha.get_context_limit();
+    let context_tokens = state.app.context_tokens(&pup_key).await;
+    let context_limit = state.app.context_limit();
 
     Ok(ContextStats {
         pup_key,
@@ -134,12 +119,8 @@ pub async fn compact_pup_context(
     pup_key: String,
     force_level: Option<String>,
 ) -> Result<Vec<CompactionResultInfo>, String> {
-    let context_limit = state.alpha.get_context_limit();
-    let current_tokens = state
-        .alpha
-        .get_context_tokens(&pup_key)
-        .await
-        .unwrap_or(0);
+    let context_limit = state.app.context_limit();
+    let current_tokens = state.app.context_tokens(&pup_key).await;
 
     // Allow forcing a specific pressure level for debugging
     let simulated_tokens = match force_level.as_deref() {
@@ -149,9 +130,9 @@ pub async fn compact_pup_context(
         _ => current_tokens.max((context_limit as f64 * 0.70) as u64),
     };
 
-    let engine = &state.alpha.compaction_engine;
-    let results = engine
-        .compact(&pup_key, simulated_tokens, context_limit)
+    let results = state
+        .app
+        .compact_pup_context(&pup_key, simulated_tokens)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -181,12 +162,12 @@ pub struct CompactionResultInfo {
 pub async fn get_token_usage(
     state: State<'_, AppState>,
 ) -> Result<crate::llm::client::TokenUsage, String> {
-    Ok(state.alpha.llm_client.usage.snapshot())
+    Ok(state.app.token_usage_snapshot())
 }
 
 /// Reset the cumulative session token counters.
 #[tauri::command]
 pub async fn reset_token_usage(state: State<'_, AppState>) -> Result<(), String> {
-    state.alpha.llm_client.usage.reset();
+    state.app.reset_token_usage();
     Ok(())
 }

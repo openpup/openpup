@@ -9,12 +9,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use openpup_capabilities::Capabilities;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::memory::system::MemorySystem;
 use crate::skills::registry::SkillRegistry;
 use super::risk::{assess_command_risk, format_risk_warning};
+use crate::memory::system::MemorySystem;
 
 // Re-export risk types for external consumers
 pub use super::risk::{CommandRiskLevel, assess_command_risk as assess_risk, format_risk_warning as format_risk};
@@ -50,7 +51,7 @@ pub struct ToolRegistry {
     pub workspace_root: PathBuf,
     pub memory: Arc<MemorySystem>,
     pub skill_registry: SkillRegistry,
-    pub(crate) http: reqwest::Client,
+    pub capabilities: Arc<Capabilities>,
     /// Context window limit in tokens — tool results are truncated proportionally.
     pub(crate) context_limit: std::sync::atomic::AtomicU64,
 }
@@ -64,15 +65,13 @@ impl ToolRegistry {
         workspace_root: PathBuf,
         memory: Arc<MemorySystem>,
         skill_registry: SkillRegistry,
+        capabilities: Arc<Capabilities>,
     ) -> Self {
         Self {
             workspace_root,
             memory,
             skill_registry,
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
+            capabilities,
             context_limit: std::sync::atomic::AtomicU64::new(128_000),
         }
     }

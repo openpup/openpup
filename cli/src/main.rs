@@ -8,6 +8,7 @@ use openpup_core::headless::HeadlessRuntime;
 use openpup_core::ipc::{ChannelDetails, DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus};
 use openpup_core::runtime::EventSink;
 use openpup_core::skills::permissions::{PermissionRequestPayload, PermissionUi};
+use openpup_runtime_desktop::DesktopRuntimeFactory;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde_json::Value;
@@ -546,7 +547,9 @@ async fn run_chat(
 
 async fn ensure_local_runtime(runtime: &mut Option<HeadlessRuntime>) -> Result<HeadlessRuntime> {
     if runtime.is_none() {
-        *runtime = Some(HeadlessRuntime::new(Some(Arc::new(StdioPermissionUi))).await?);
+        *runtime = Some(
+            DesktopRuntimeFactory::build_headless(Some(Arc::new(StdioPermissionUi))).await?,
+        );
     }
     runtime
         .clone()
@@ -681,7 +684,6 @@ async fn skill_run(
     }
 
     println!("→ 运行技能 {} …", name.cyan());
-    let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = runtime
         .skill_executor
         .execute_skill(name, input.unwrap_or(""))

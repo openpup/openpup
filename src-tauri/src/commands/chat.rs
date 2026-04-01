@@ -16,9 +16,8 @@ pub async fn send_message(
     input: String,
     forced_pup: Option<String>,
 ) -> Result<(), String> {
-    // Guard: require API key before any LLM call
     let (_, model, mini_model, _embed_model, api_key, api_base) =
-        state.alpha.llm_client.current_config();
+        state.app.current_llm_config_with_secret();
     debug!(
         "[cmd] send_message: model={model:?} mini={mini_model:?} base={api_base:?} has_key={}",
         api_key.is_some()
@@ -31,12 +30,10 @@ pub async fn send_message(
         return Ok(());
     }
 
-    let alpha = state.alpha.clone();
     let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(app_handle));
+    let app = state.app.clone();
     tauri::async_runtime::spawn(async move {
-        alpha
-            .process_user_message_stream(input, forced_pup, event_sink)
-            .await;
+        app.process_user_message_stream(input, forced_pup, event_sink).await;
     });
     Ok(())
 }
@@ -44,7 +41,6 @@ pub async fn send_message(
 /// Cancel the current in-progress streaming response.
 #[tauri::command]
 pub async fn abort_message(state: State<'_, AppState>) -> Result<(), String> {
-    use std::sync::atomic::Ordering;
-    state.alpha.abort_flag.store(true, Ordering::Relaxed);
+    state.app.abort_current_message();
     Ok(())
 }

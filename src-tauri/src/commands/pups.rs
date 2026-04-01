@@ -6,7 +6,7 @@ use super::AppState;
 
 #[tauri::command]
 pub async fn list_pups(state: State<'_, AppState>) -> Result<Vec<PupConfig>, String> {
-    Ok(state.alpha.list_pup_configs().await)
+    Ok(state.app.list_pups().await)
 }
 
 #[tauri::command]

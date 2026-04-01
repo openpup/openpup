@@ -1,16 +1,12 @@
-use std::sync::Arc;
-
 use serde::Deserialize;
 use tauri::State;
 use tracing::warn;
-
-use crate::memory::system::MemorySystem;
 
 use super::AppState;
 
 #[tauri::command]
 pub async fn check_onboarding_completed(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.file_layer.is_onboarding_completed())
+    Ok(state.app.onboarding_completed())
 }
 
 #[derive(Deserialize)]
@@ -44,7 +40,7 @@ pub async fn save_onboarding_data(
         data.tools.trim(),
     );
     state
-        .file_layer
+        .app
         .write_owner_profile(&content)
         .map_err(|e| e.to_string())?;
 
@@ -63,17 +59,14 @@ pub async fn save_onboarding_data(
     }
 
     // Seed long-term memory DB with the key facts from onboarding
-    let memory: Arc<MemorySystem> = state.alpha.memory.clone();
-    let _ = memory
-        .add_long_term_memory(
-            &format!("行为边界：{}", data.boundaries.trim()),
-            "rule",
-            0.99,
-        )
+    state
+        .app
+        .add_memory(&format!("行为边界：{}", data.boundaries.trim()), "rule", 0.99)
         .await;
     if !data.pain_points.trim().is_empty() {
-        let _ = memory
-            .add_long_term_memory(
+        state
+            .app
+            .add_memory(
                 &format!("常见痛点/重复工作：{}", data.pain_points.trim()),
                 "fact",
                 0.85,
@@ -81,8 +74,9 @@ pub async fn save_onboarding_data(
             .await;
     }
     if !data.language.trim().is_empty() {
-        let _ = memory
-            .add_long_term_memory(
+        state
+            .app
+            .add_memory(
                 &format!("语言偏好：{}", data.language.trim()),
                 "preference",
                 0.95,
@@ -90,8 +84,9 @@ pub async fn save_onboarding_data(
             .await;
     }
     if !data.name.trim().is_empty() {
-        let _ = memory
-            .add_long_term_memory(
+        state
+            .app
+            .add_memory(
                 &format!("用户名字/称呼：{}", data.name.trim()),
                 "preference",
                 0.99,
@@ -104,8 +99,5 @@ pub async fn save_onboarding_data(
 
 #[tauri::command]
 pub async fn get_owner_profile(state: State<'_, AppState>) -> Result<String, String> {
-    state
-        .file_layer
-        .read_owner_profile()
-        .map_err(|e| e.to_string())
+    state.app.owner_profile().map_err(|e| e.to_string())
 }

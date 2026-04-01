@@ -11,14 +11,10 @@ pub async fn kb_ingest_file(
     title: Option<String>,
     tags: Vec<String>,
 ) -> Result<String, String> {
-    let memory = state.alpha.memory.clone();
-    let llm = state.alpha.llm_client.clone();
-    let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(memory, llm);
-    let req = crate::knowledge::types::IngestRequest { path, title, tags };
-
     let handle = app_handle.clone();
-    let source_id = ingestor
-        .ingest(&req, move |evt| {
+    let source_id = state
+        .app
+        .ingest_knowledge_file(path, title, tags, move |evt| {
             let _ = tauri::Emitter::emit(&handle, "kb_ingest_progress", &evt);
         })
         .await
@@ -31,19 +27,13 @@ pub async fn kb_ingest_file(
 pub async fn kb_list_sources(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::knowledge::types::KnowledgeSource>, String> {
-    state
-        .alpha
-        .memory
-        .list_knowledge_sources()
-        .await
-        .map_err(|e| e.to_string())
+    state.app.list_knowledge_sources().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn kb_delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
     state
-        .alpha
-        .memory
+        .app
         .delete_knowledge_source(&source_id)
         .await
         .map_err(|e| e.to_string())
@@ -55,27 +45,21 @@ pub async fn kb_search(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<crate::knowledge::types::KbSearchResult>, String> {
-    let retriever = crate::knowledge::retriever::KbRetriever::new(state.alpha.memory.clone());
-    retriever
-        .search(&query, limit.unwrap_or(10), None)
+    state
+        .app
+        .kb_search(&query, limit.unwrap_or(10))
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn kb_get_auto_ingest(state: State<'_, AppState>) -> bool {
-    state
-        .alpha
-        .kb_auto_ingest
-        .load(std::sync::atomic::Ordering::Relaxed)
+    state.app.kb_auto_ingest()
 }
 
 #[tauri::command]
 pub fn kb_set_auto_ingest(state: State<'_, AppState>, enabled: bool) {
-    state
-        .alpha
-        .kb_auto_ingest
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state.app.set_kb_auto_ingest(enabled);
 }
 
 // ─── Knowledge Graph ────────────────────────────────────────────────────────
@@ -104,8 +88,7 @@ pub async fn kg_list_entities(
     entity_type: Option<String>,
 ) -> Result<Vec<KgEntityInfo>, String> {
     let entities = state
-        .alpha
-        .memory
+        .app
         .list_kg_entities(entity_type.as_deref())
         .await
         .map_err(|e| e.to_string())?;
@@ -113,8 +96,7 @@ pub async fn kg_list_entities(
     let mut result = Vec::new();
     for (id, name, etype, desc) in entities {
         let rels = state
-            .alpha
-            .memory
+            .app
             .kg_entity_relations(&id)
             .await
             .unwrap_or_default();

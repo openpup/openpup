@@ -6,6 +6,7 @@ use libloading::Library;
 
 use crate::agents::specialist::SpecialistPup;
 
+#[allow(improper_ctypes_definitions)]
 type CreatePupFn = unsafe extern "C" fn() -> *mut dyn SpecialistPup;
 
 fn plugins_root() -> PathBuf {

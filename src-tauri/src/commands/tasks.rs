@@ -36,8 +36,8 @@ pub async fn create_task(
     description: String,
     assigned_pup: Option<String>,
 ) -> Result<String, String> {
-    let memory = state.alpha.memory.clone();
-    memory
+    state
+        .app
         .create_task(&description, assigned_pup.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -45,8 +45,7 @@ pub async fn create_task(
 
 #[tauri::command]
 pub async fn list_tasks(state: State<'_, AppState>, limit: i64) -> Result<Vec<TaskItem>, String> {
-    let memory = state.alpha.memory.clone();
-    let rows = memory.list_tasks(limit).await.map_err(|e| e.to_string())?;
+    let rows = state.app.list_tasks(limit).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(TaskItem::from).collect())
 }
 
@@ -57,8 +56,8 @@ pub async fn update_task_status(
     status: String,
     result: Option<String>,
 ) -> Result<(), String> {
-    let memory = state.alpha.memory.clone();
-    memory
+    state
+        .app
         .update_task_status(&id, &status, result.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -66,6 +65,5 @@ pub async fn update_task_status(
 
 #[tauri::command]
 pub async fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let memory = state.alpha.memory.clone();
-    memory.delete_task(&id).await.map_err(|e| e.to_string())
+    state.app.delete_task(&id).await.map_err(|e| e.to_string())
 }
