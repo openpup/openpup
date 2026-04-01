@@ -1,147 +1,23 @@
 /// Primitive tool registry — the only LLM-callable operations.
 ///
-/// Skills declare which permission flags they need; only the corresponding
-/// tool schemas are included in the API request so the LLM cannot exceed
-/// the declared capability surface.
+/// Tool implementations are split across sibling modules:
+/// - `risk.rs`    — command risk assessment
+/// - `shell.rs`   — shell_exec, sandbox_shell_exec
+/// - `file.rs`    — file_read, file_write, skill resource access
+/// - `network.rs` — http_get, web_fetch
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use scraper::{Html, Selector};
-use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
 
 use crate::memory::system::MemorySystem;
 use crate::skills::registry::SkillRegistry;
+use super::risk::{assess_command_risk, format_risk_warning};
 
-// ── Command risk assessment ──────────────────────────────────────────────────
-
-/// Risk level for a shell command, used to decide whether to auto-approve
-/// in leashed mode or require explicit confirmation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum CommandRiskLevel {
-    /// Read-only, no side effects (ls, cat, git status, pwd, echo, etc.)
-    Low,
-    /// Writes files, installs packages, or modifies local state
-    Medium,
-    /// Destructive, irreversible, or affects remote systems
-    High,
-}
-
-impl std::fmt::Display for CommandRiskLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Low => write!(f, "low"),
-            Self::Medium => write!(f, "medium"),
-            Self::High => write!(f, "high"),
-        }
-    }
-}
-
-/// High-risk patterns that warrant blocking or explicit user confirmation.
-const HIGH_RISK_PATTERNS: &[&str] = &[
-    "rm -rf /",
-    "rm -rf ~",
-    "rm -rf .",
-    "rmdir /s",
-    "mkfs",
-    "dd if=",
-    ":(){ :|:",             // fork bomb
-    "> /dev/sd",
-    "chmod -R 777 /",
-    "git push --force",
-    "git push -f",
-    "git reset --hard",
-    "git clean -fd",
-    "DROP TABLE",
-    "DROP DATABASE",
-    "TRUNCATE TABLE",
-    "shutdown",
-    "reboot",
-    "halt",
-    "init 0",
-    "kill -9 1",
-    "pkill -9",
-    "curl | sh",
-    "curl | bash",
-    "wget | sh",
-    "wget | bash",
-    "> /etc/",
-    "sudo rm",
-];
-
-/// Read-only command prefixes that are safe to auto-approve.
-const LOW_RISK_PREFIXES: &[&str] = &[
-    "ls", "dir", "cat", "head", "tail", "less", "more",
-    "pwd", "echo", "printf", "wc", "which", "where",
-    "whoami", "hostname", "uname", "date", "cal",
-    "git status", "git log", "git diff", "git branch", "git show",
-    "git remote -v", "git tag", "git stash list",
-    "env", "printenv", "set",
-    "ps", "top", "htop", "df", "du", "free", "uptime",
-    "file", "stat", "md5sum", "sha256sum", "shasum",
-    "find", "locate", "grep", "rg", "ag", "ack",
-    "tree", "realpath", "readlink", "basename", "dirname",
-    "jq", "yq", "python -c", "python3 -c", "node -e",
-    "cargo --version", "rustc --version", "npm --version",
-    "go version", "java -version",
-];
-
-/// Assess the risk level of a shell command.
-pub fn assess_command_risk(command: &str) -> CommandRiskLevel {
-    let trimmed = command.trim();
-    let lower = trimmed.to_lowercase();
-
-    // Check high-risk patterns first
-    for pat in HIGH_RISK_PATTERNS {
-        if lower.contains(&pat.to_lowercase()) {
-            return CommandRiskLevel::High;
-        }
-    }
-
-    // Pipe into shell is high risk
-    if (lower.contains("curl ") || lower.contains("wget "))
-        && (lower.contains("| sh") || lower.contains("| bash") || lower.contains("| zsh"))
-    {
-        return CommandRiskLevel::High;
-    }
-
-    // Check if it's a known read-only command
-    for prefix in LOW_RISK_PREFIXES {
-        // Match: command starts with prefix, and next char is whitespace, pipe, end, or semicolon
-        if lower.starts_with(prefix) {
-            let rest = &lower[prefix.len()..];
-            if rest.is_empty()
-                || rest.starts_with(' ')
-                || rest.starts_with('\t')
-                || rest.starts_with('|')
-                || rest.starts_with(';')
-            {
-                // But if it's piped into something destructive, bump to medium
-                if lower.contains("| rm") || lower.contains("| xargs rm") {
-                    return CommandRiskLevel::High;
-                }
-                return CommandRiskLevel::Low;
-            }
-        }
-    }
-
-    // Default: medium risk for unknown commands
-    CommandRiskLevel::Medium
-}
-
-/// Format a structured warning for high-risk commands.
-pub fn format_risk_warning(command: &str, risk: CommandRiskLevel) -> Option<String> {
-    if risk != CommandRiskLevel::High {
-        return None;
-    }
-    Some(format!(
-        "{{\"risk_level\":\"high\",\"command\":{},\"warning\":\"This command is potentially destructive or irreversible. It was blocked for safety. Use sandbox_shell_exec to test, or ask the user for explicit confirmation.\"}}",
-        serde_json::to_string(command).unwrap_or_else(|_| format!("\"{}\"", command.replace('\"', "\\\"")))
-    ))
-}
+// Re-export risk types for external consumers
+pub use super::risk::{CommandRiskLevel, assess_command_risk as assess_risk, format_risk_warning as format_risk};
 
 // ── Permission surface ────────────────────────────────────────────────────────
 
@@ -174,12 +50,12 @@ pub struct ToolRegistry {
     pub workspace_root: PathBuf,
     pub memory: Arc<MemorySystem>,
     pub skill_registry: SkillRegistry,
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     /// Context window limit in tokens — tool results are truncated proportionally.
-    context_limit: std::sync::atomic::AtomicU64,
+    pub(crate) context_limit: std::sync::atomic::AtomicU64,
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
@@ -208,7 +84,7 @@ impl ToolRegistry {
     }
 
     /// Dynamic max chars for tool results: 30% of context window × 4 chars/token, clamped.
-    fn tool_result_max_chars(&self) -> usize {
+    pub(crate) fn tool_result_max_chars(&self) -> usize {
         let limit = self
             .context_limit
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -218,7 +94,7 @@ impl ToolRegistry {
 
     /// Truncate tool results using head+tail strategy: keep the first ~70% and
     /// last ~30% of the budget so that error messages at the end aren't lost.
-    fn dynamic_truncate(&self, text: &str) -> String {
+    pub(crate) fn dynamic_truncate(&self, text: &str) -> String {
         let max = self.tool_result_max_chars();
         let count = text.chars().count();
         if count <= max {
@@ -684,364 +560,5 @@ impl ToolRegistry {
         }
     }
 
-    // ── Tool implementations ───────────────────────────────────────────────────
-
-    /// Maximum execution time for shell_exec (2 minutes).
-    const SHELL_EXEC_TIMEOUT_MS: u64 = 120_000;
-
-    /// Build a platform-appropriate shell command.
-    /// - Unix: `sh -c <command>`
-    /// - Windows: `cmd /d /s /c "<command>"` — `/d` disables AutoRun, `/s` preserves quotes
-    fn build_shell_command(command: &str) -> tokio::process::Command {
-        #[cfg(windows)]
-        {
-            let mut cmd = tokio::process::Command::new("cmd");
-            cmd.args(["/d", "/s", "/c", command]);
-            cmd
-        }
-        #[cfg(not(windows))]
-        {
-            let mut cmd = tokio::process::Command::new("sh");
-            cmd.args(["-c", command]);
-            cmd
-        }
-    }
-
-    /// Validate a command for sandbox execution. Rejects destructive patterns.
-    fn validate_sandbox_command(command: &str) -> Result<()> {
-        // Block commands that escape the sandbox or are destructive
-        let blocked_patterns = [
-            "rm -rf /",
-            "mkfs",
-            "dd if=",
-            ":(){ :|:", // fork bomb
-            "> /dev/sd",
-            "chmod -R 777 /",
-        ];
-        let lower = command.to_lowercase();
-        for pat in &blocked_patterns {
-            if lower.contains(pat) {
-                return Err(anyhow!(
-                    "sandbox_shell_exec: blocked dangerous command pattern: '{pat}'"
-                ));
-            }
-        }
-
-        // On Windows, additionally block cmd.exe metacharacters that could escape the sandbox
-        #[cfg(windows)]
-        {
-            // Reject commands trying to chain via & or | into system-level ops
-            if command.contains("&&") && (lower.contains("del /") || lower.contains("rmdir /s")) {
-                return Err(anyhow!(
-                    "sandbox_shell_exec: blocked potentially destructive chained command"
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Kill a child process and its descendants.
-    #[cfg(not(windows))]
-    async fn kill_process_tree(pid: u32) {
-        use tokio::process::Command;
-        // Send SIGTERM to the process group
-        let _ = Command::new("kill")
-            .args(["-TERM", &format!("-{pid}")])
-            .output()
-            .await;
-        // Grace period, then SIGKILL
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let _ = Command::new("kill")
-            .args(["-9", &format!("-{pid}")])
-            .output()
-            .await;
-    }
-
-    #[cfg(windows)]
-    async fn kill_process_tree(pid: u32) {
-        use tokio::process::Command;
-        // taskkill /T kills the process tree, /F forces termination
-        let _ = Command::new("taskkill")
-            .args(["/T", "/PID", &pid.to_string()])
-            .output()
-            .await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .output()
-            .await;
-    }
-
-    async fn shell_exec(&self, command: &str) -> Result<String> {
-        debug!("[tool/shell_exec] $ {}", truncate_chars(command, 120));
-
-        let mut child = Self::build_shell_command(command)
-            .current_dir(&self.workspace_root)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| anyhow!("shell_exec failed to spawn: {e}"))?;
-
-        let pid = child.id();
-
-        match tokio::time::timeout(
-            Duration::from_millis(Self::SHELL_EXEC_TIMEOUT_MS),
-            child.wait_with_output(),
-        )
-        .await
-        {
-            Ok(Ok(output)) => Ok(self.format_process_output(
-                output.stdout,
-                output.stderr,
-                output.status.code(),
-                false,
-                None,
-            )),
-            Ok(Err(e)) => Err(anyhow!("shell_exec failed: {e}")),
-            Err(_) => {
-                // Timeout — kill the process tree
-                if let Some(pid) = pid {
-                    Self::kill_process_tree(pid).await;
-                }
-                Ok(self.dynamic_truncate(&format!(
-                    "shell_exec timed out after {} ms (process killed)",
-                    Self::SHELL_EXEC_TIMEOUT_MS
-                )))
-            }
-        }
-    }
-
-    async fn sandbox_shell_exec(&self, command: &str, timeout_ms: u64) -> Result<String> {
-        Self::validate_sandbox_command(command)?;
-
-        let timeout_ms = timeout_ms.clamp(1_000, 30_000);
-        let sandbox_dir =
-            tempfile::tempdir().map_err(|e| anyhow!("sandbox_shell_exec tempdir: {e}"))?;
-        let sandbox_path = sandbox_dir.path().to_path_buf();
-        debug!(
-            "[tool/sandbox_shell_exec] {} in {}",
-            truncate_chars(command, 120),
-            sandbox_path.display()
-        );
-
-        let mut cmd = Self::build_shell_command(command);
-        cmd.current_dir(&sandbox_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        // Platform-specific sandbox environment
-        #[cfg(windows)]
-        {
-            cmd.env_clear()
-                .env("PATH", std::env::var("PATH").unwrap_or_default())
-                .env(
-                    "SYSTEMROOT",
-                    std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into()),
-                )
-                .env("TEMP", &sandbox_path)
-                .env("TMP", &sandbox_path)
-                .env("USERPROFILE", &sandbox_path);
-        }
-        #[cfg(not(windows))]
-        {
-            cmd.env_clear()
-                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-                .env("HOME", &sandbox_path)
-                .env("TMPDIR", &sandbox_path);
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| anyhow!("sandbox_shell_exec failed to spawn: {e}"))?;
-
-        let pid = child.id();
-
-        match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
-            .await
-        {
-            Ok(Ok(output)) => Ok(self.format_process_output(
-                output.stdout,
-                output.stderr,
-                output.status.code(),
-                false,
-                Some(&sandbox_path),
-            )),
-            Ok(Err(e)) => Err(anyhow!("sandbox_shell_exec failed: {e}")),
-            Err(_) => {
-                // Timeout — kill the process tree
-                if let Some(pid) = pid {
-                    Self::kill_process_tree(pid).await;
-                }
-                Ok(self.dynamic_truncate(&format!(
-                    "sandbox_shell_exec timed out after {} ms (process killed)\nsandbox_dir: {}",
-                    timeout_ms,
-                    sandbox_path.display()
-                )))
-            }
-        }
-    }
-
-    async fn file_read(&self, path: &str) -> Result<String> {
-        let resolved = self.resolve_path(path);
-        debug!("[tool/file_read] {}", resolved.display());
-        let content = tokio::fs::read_to_string(&resolved)
-            .await
-            .map_err(|e| anyhow!("file_read '{}': {e}", resolved.display()))?;
-        Ok(self.dynamic_truncate(&content))
-    }
-
-    async fn file_write(&self, path: &str, content: &str) -> Result<String> {
-        let resolved = self.resolve_path(path);
-        debug!(
-            "[tool/file_write] {} ({} bytes)",
-            resolved.display(),
-            content.len()
-        );
-        if let Some(parent) = resolved.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| anyhow!("file_write mkdir '{}': {e}", parent.display()))?;
-        }
-        tokio::fs::write(&resolved, content)
-            .await
-            .map_err(|e| anyhow!("file_write '{}': {e}", resolved.display()))?;
-        Ok(format!(
-            "Written {} bytes to '{}'",
-            content.len(),
-            resolved.display()
-        ))
-    }
-
-    async fn skill_list_resources(&self, skill_name: &str, limit: usize) -> Result<String> {
-        debug!("[tool/skill_list_resources] {} limit={}", skill_name, limit);
-        let listing = self
-            .skill_registry
-            .list_skill_resources(skill_name, limit)
-            .await?;
-        Ok(self.dynamic_truncate(&listing))
-    }
-
-    async fn skill_read_resource(&self, skill_name: &str, relpath: &str) -> Result<String> {
-        let resolved = self
-            .skill_registry
-            .resolve_skill_resource_path(skill_name, relpath)
-            .await?;
-        debug!(
-            "[tool/skill_read_resource] {}:{} -> {}",
-            skill_name,
-            relpath,
-            resolved.display()
-        );
-        let metadata = tokio::fs::metadata(&resolved)
-            .await
-            .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
-        if metadata.is_dir() {
-            return Err(anyhow!(
-                "skill_read_resource '{}:{}' resolved to a directory, not a file",
-                skill_name,
-                relpath
-            ));
-        }
-        let content = tokio::fs::read_to_string(&resolved)
-            .await
-            .map_err(|e| anyhow!("skill_read_resource '{}:{}': {e}", skill_name, relpath))?;
-        Ok(self.dynamic_truncate(&content))
-    }
-
-    async fn http_get(&self, url: &str) -> Result<String> {
-        debug!("[tool/http_get] {}", truncate_chars(url, 120));
-        let resp = self
-            .http
-            .get(url)
-            .header("User-Agent", "openpup/0.1")
-            .send()
-            .await
-            .map_err(|e| anyhow!("http_get '{url}': {e}"))?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!("http_get '{url}': HTTP {status}"));
-        }
-        Ok(self.dynamic_truncate(&body))
-    }
-
-    async fn web_fetch(&self, url: &str) -> Result<String> {
-        debug!("[tool/web_fetch] {}", truncate_chars(url, 120));
-        let resp = self
-            .http
-            .get(url)
-            .header("User-Agent", "openpup/0.1")
-            .send()
-            .await
-            .map_err(|e| anyhow!("web_fetch '{url}': {e}"))?;
-        let status = resp.status();
-        let final_url = resp.url().to_string();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!("web_fetch '{url}': HTTP {status}"));
-        }
-
-        let document = Html::parse_document(&body);
-        let title = Selector::parse("title")
-            .ok()
-            .and_then(|selector| document.select(&selector).next())
-            .map(|node| node.text().collect::<Vec<_>>().join(" "))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let text = document.root_element().text().collect::<Vec<_>>().join(" ");
-        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-
-        let result = format!(
-            "final_url: {final_url}\ntitle: {}\ncontent:\n{}",
-            if title.is_empty() {
-                "(untitled)"
-            } else {
-                &title
-            },
-            normalized
-        );
-        Ok(self.dynamic_truncate(&result))
-    }
-
-    fn format_process_output(
-        &self,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-        exit_code: Option<i32>,
-        timed_out: bool,
-        sandbox_dir: Option<&std::path::Path>,
-    ) -> String {
-        let stdout = String::from_utf8_lossy(&stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&stderr).into_owned();
-        let mut sections = Vec::new();
-        sections.push(format!(
-            "exit_code: {}",
-            exit_code
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "terminated".to_string())
-        ));
-        sections.push(format!("timed_out: {timed_out}"));
-        if let Some(path) = sandbox_dir {
-            sections.push(format!("sandbox_dir: {}", path.display()));
-        }
-        if !stdout.trim().is_empty() {
-            sections.push(format!("stdout:\n{}", stdout.trim()));
-        }
-        if !stderr.trim().is_empty() {
-            sections.push(format!("stderr:\n{}", stderr.trim()));
-        }
-        self.dynamic_truncate(&sections.join("\n\n"))
-    }
-
-    fn resolve_path(&self, path: &str) -> PathBuf {
-        let p = std::path::Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.workspace_root.join(path)
-        }
-    }
+    // Tool implementations are in sibling modules: shell.rs, file.rs, network.rs
 }

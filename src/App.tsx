@@ -12,49 +12,25 @@ import { DiaryViewer } from './components/DiaryViewer';
 import { McpSettings } from './components/McpSettings';
 import { PupManager } from './components/PupManager';
 import { TaskManager } from './components/TaskManager';
-import { PermissionDialog, PermissionRequest } from './components/PermissionDialog';
+import { PermissionDialog } from './components/PermissionDialog';
 import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
 import { KnowledgeBase } from './components/KnowledgeBase';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
 import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  pup_key?: string;
-  pup_name?: string;
-  timestamp?: number;
-}
+import { useChatStore } from './stores/chatStore';
+import { useUIStore } from './stores/uiStore';
+import { useAppStore } from './stores/appStore';
+import type { ChatMessage, StreamingPupState, ActivityStep, TokenUsage } from './stores/chatStore';
+import type { NavItem } from './stores/uiStore';
+import type { PupConfig, MemoryChip, ContextStats } from './stores/appStore';
+import type { PermissionRequest } from './components/PermissionDialog';
 
 interface StreamDonePayload {
   pup_key: string;
   pup_name: string;
   content: string;
-}
-
-interface StreamingPupState {
-  key: string;
-  name: string;
-}
-
-interface MemoryChip {
-  content: string;
-  memory_type: string;
-  importance: number;
-}
-
-interface ActivityStep {
-  kind: 'routing' | 'skill' | 'shell' | 'file_read' | 'file_write' | 'http' | 'memory' | 'task' | 'mcp' | 'tool_call' | string;
-  label: string;
-}
-
-interface TokenUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
 }
 
 const ACTIVITY_ICON: Record<string, string> = {
@@ -85,26 +61,7 @@ const ACTIVITY_COLOR: Record<string, string> = {
 
 
 
-interface PupConfig {
-  key: string;
-  display_name: string;
-  description: string;
-  enabled: boolean;
-  is_custom: boolean;
-}
-
-interface ContextStats {
-  pup_key: string;
-  message_count: number;
-  context_tokens: number;
-  context_limit: number;
-  compression_status: {
-    is_compressed: boolean;
-    last_compression_row: number;
-  };
-}
-
-type NavItem = 'chat' | 'channel' | 'memories' | 'timeline' | 'skills' | 'pups' | 'tasks' | 'mcp' | 'bridge' | 'settings' | 'knowledge';
+// Types are now in stores/ — see stores/appStore.ts, stores/uiStore.ts, stores/chatStore.ts
 
 // ─── LLM Config Panel ────────────────────────────────────────────────────────
 
@@ -257,21 +214,33 @@ const detectPlatform = (): 'macos' | 'windows' | 'linux' => {
 const AppInner: React.FC = () => {
   const { lang, setLang } = useLang();
   const platform = useMemo(detectPlatform, []);
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [theme, setTheme] = React.useState<'dark' | 'light'>(() => {
-    const saved = localStorage.getItem('openpup_theme');
-    return (saved === 'light' ? 'light' : 'dark');
-  });
-  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [streamingReasoningContent, setStreamingReasoningContent] = useState('');
-  const [streamingPupName, setStreamingPupName] = useState<StreamingPupState | null>(null);
-  const [streamingSteps, setStreamingSteps] = useState<ActivityStep[]>([]);
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const [activeNav, setActiveNav] = useState<NavItem>('chat');
-  const [channelDetailMode, setChannelDetailMode] = useState(false);
+
+  // ── Zustand stores ──────────────────────────────────────────────────────────
+  const {
+    messages, setMessages, streamingContent, setStreamingContent,
+    streamingReasoningContent, setStreamingReasoningContent,
+    streamingPup: streamingPupName, setStreamingPup: setStreamingPupName,
+    streamingSteps, setStreamingSteps, input, setInput, sending, setSending,
+    tokenUsage, setTokenUsage, resetStreaming,
+  } = useChatStore();
+
+  const {
+    theme, setTheme, activeNav, setActiveNav, channelDetailMode, setChannelDetailMode,
+    sidebarCollapsed, setSidebarCollapsed, membersExpanded, setMembersExpanded,
+    toolsExpanded, setToolsExpanded, configExpanded, setConfigExpanded,
+    isMaximized, setIsMaximized, selectedPupKey, setSelectedPupKey,
+    memoriesTab, setMemoriesTab,
+  } = useUIStore();
+
+  const {
+    onboardingDone, setOnboardingDone, pups, setPups,
+    memoryChips, setMemoryChips, kbSourceCount, setKbSourceCount,
+    kbAutoIngest, setKbAutoIngest, permissionRequest, setPermissionRequest,
+    contextStats, setContextStats, execMode, setExecMode,
+    exporting, setExporting, importing, setImporting,
+    importPath, setImportPath, settingsMsg, setSettingsMsg,
+    settingsErr, setSettingsErr,
+  } = useAppStore();
   const activeNavRef = useRef<string>('chat');
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
   // Auto-expand sidebar section when an item inside it becomes active
@@ -281,12 +250,7 @@ const AppInner: React.FC = () => {
     if (toolsItems.includes(activeNav)) setToolsExpanded(true);
     if (configItems.includes(activeNav)) setConfigExpanded(true);
   }, [activeNav]);
-  const [kbSourceCount, setKbSourceCount] = useState(0);
-  const [memoryChips, setMemoryChips] = useState<MemoryChip[]>([]);
-  const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
-  const [pups, setPups] = useState<PupConfig[]>([]);
-  const [selectedPupKey, setSelectedPupKey] = useState<string>('alpha');
-  const [memoriesTab, setMemoriesTab] = useState<'long_term' | 'diary'>('long_term');
+  // pups, memoryChips, permissionRequest, kbSourceCount, selectedPupKey, memoriesTab → appStore/uiStore
   const {
     channels,
     activeChannelId,
@@ -325,22 +289,7 @@ const AppInner: React.FC = () => {
     setChannelDetailMode(false);
     setActiveNav('chat');
   }, [completionEventCount]);
-  // Context stats
-  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
-  // Token usage monitoring
-  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
-  // Settings state
-  const [exporting, setExporting] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importPath, setImportPath] = useState('');
-  const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
-  const [settingsErr, setSettingsErr] = useState<string | null>(null);
-  const [kbAutoIngest, setKbAutoIngest] = useState(true);
-  const [execMode, setExecMode] = useState<'leashed' | 'free_run'>('leashed');
-  const [membersExpanded, setMembersExpanded] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const [configExpanded, setConfigExpanded] = useState(false);
+  // contextStats, tokenUsage, settings state, layout state → stores
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1020,7 +969,7 @@ const AppInner: React.FC = () => {
             {/* 工具 section — collapsible */}
             <div>
               <button
-                onClick={() => setToolsExpanded(v => !v)}
+                onClick={() => setToolsExpanded(!toolsExpanded)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
               >
                 <span>{t('sidebar_tools', lang)}</span>
@@ -1039,7 +988,7 @@ const AppInner: React.FC = () => {
             {/* Config section — collapsible */}
             <div>
               <button
-                onClick={() => setConfigExpanded(v => !v)}
+                onClick={() => setConfigExpanded(!configExpanded)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 8px 6px', fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'none', border: 'none', cursor: 'pointer' }}
               >
                 <span>{t('sidebar_config', lang)}</span>

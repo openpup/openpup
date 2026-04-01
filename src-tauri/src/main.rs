@@ -379,6 +379,7 @@ fn main() {
             commands::get_context_stats,
             commands::get_token_usage,
             commands::reset_token_usage,
+            commands::compact_pup_context,
             // Knowledge Base
             commands::kb_ingest_file,
             commands::kb_list_sources,

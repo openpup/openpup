@@ -9,15 +9,18 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use tracing::{debug, Level};
+use tracing::debug;
 
+use crate::agents::context_builder::ContextBuilder;
 use crate::agents::custom_pup::CustomPup;
+use crate::agents::router::Router;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
 use crate::channel::dag::build_execution_layers;
 use crate::channel::manager::{ChannelManager, ReviewDecision};
 use crate::channel::types::{DelegationPlan, Subtask};
 use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
+use crate::memory::compaction::CompactionEngine;
 use crate::memory::extractor::MemoryExtractor;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::injector::{MemoryBudget, MemoryInjector};
@@ -194,8 +197,6 @@ pub struct AlphaPup {
     /// Per-pup real context token counts (prompt_tokens from the last API call for each pup).
     per_pup_context_tokens: Arc<RwLock<HashMap<String, u64>>>,
     pup_config_path: Option<PathBuf>,
-    /// Cached summarised OWNER.md with TTL.
-    owner_summary_cache: Arc<RwLock<Option<(String, std::time::Instant)>>>,
     msg_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
     layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
@@ -204,6 +205,12 @@ pub struct AlphaPup {
     /// v0.1.12 memory subsystems
     memory_injector: Arc<MemoryInjector>,
     memory_extractor: Arc<MemoryExtractor>,
+    /// Multi-layer context compaction engine
+    pub compaction_engine: Arc<CompactionEngine>,
+    /// Intent classification and @mention routing.
+    router: Arc<Router>,
+    /// Context assembly: owner summary caching, per-pup history, memory injection.
+    context_builder: Arc<ContextBuilder>,
 }
 
 impl AlphaPup {
@@ -239,6 +246,26 @@ impl AlphaPup {
             memory.pool().clone(),
             llm_client.clone(),
         ));
+        let compaction_engine = Arc::new(CompactionEngine::new(
+            memory.pool().clone(),
+            llm_client.clone(),
+            extractor.clone(),
+        ));
+
+        let pup_configs = Arc::new(RwLock::new(configs));
+
+        let context_builder = Arc::new(ContextBuilder::new(
+            memory.clone(),
+            llm_client.clone(),
+            injector.clone(),
+        ));
+
+        let router = Arc::new(Router {
+            llm_client: llm_client.clone(),
+            pup_configs: pup_configs.clone(),
+            skill_executor: skill_executor.clone(),
+            memory: memory.clone(),
+        });
 
         Self {
             memory,
@@ -248,16 +275,18 @@ impl AlphaPup {
             file_layer,
             skill_executor,
             abort_flag: Arc::new(AtomicBool::new(false)),
-            pup_configs: Arc::new(RwLock::new(configs)),
+            pup_configs,
             per_pup_context_tokens: Arc::new(RwLock::new(HashMap::new())),
             pup_config_path,
-            owner_summary_cache: Arc::new(RwLock::new(None)),
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             channel_manager,
             layer_hook: Arc::new(RwLock::new(None)),
             kb_auto_ingest: Arc::new(AtomicBool::new(true)),
             memory_injector: injector,
             memory_extractor: extractor,
+            compaction_engine,
+            router,
+            context_builder,
         }
     }
 
@@ -281,17 +310,6 @@ impl AlphaPup {
 
     async fn configured_pup(&self, key: &str) -> Option<PupConfig> {
         self.pup_configs.read().await.get(key).cloned()
-    }
-
-    async fn enabled_configured_pup_keys(&self) -> Vec<String> {
-        let guard = self.pup_configs.read().await;
-        let mut keys: Vec<String> = guard
-            .values()
-            .filter(|cfg| cfg.enabled)
-            .map(|cfg| cfg.key.clone())
-            .collect();
-        keys.sort();
-        keys
     }
 
     async fn resolve_pup(&self, key: &str) -> Result<Arc<dyn SpecialistPup>> {
@@ -412,7 +430,7 @@ impl AlphaPup {
         events: SharedEventSink,
     ) -> Result<(String, String)> {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
-        let owner_summary = self.get_owner_summary(&owner_md).await;
+        let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
         // v0.1.12: hybrid retrieval with rule force-injection + Weibull decay
         let memory_context = self
             .memory_injector
@@ -426,7 +444,7 @@ impl AlphaPup {
             vec![memories_str]
         };
         // Brief global history for intent classification (last 4 turns, all pups)
-        let classify_history = self.build_classify_history().await;
+        let classify_history = self.router.build_classify_history().await;
         // Load pending tasks for context injection
         let pending_tasks: Vec<TaskRecord> = self
             .memory
@@ -439,10 +457,10 @@ impl AlphaPup {
 
         let pup_key = if let Some(forced) = forced_pup {
             forced
-        } else if let Some(mention) = Self::extract_at_mention(msg, &self.pup_configs).await {
+        } else if let Some(mention) = self.router.extract_at_mention(msg).await {
             mention
         } else {
-            self.classify_intent(msg, &owner_summary, &classify_history)
+            self.router.classify_intent(msg, &owner_summary, &classify_history)
                 .await
         };
         debug!("[alpha] do_stream: pup_key={pup_key:?}");
@@ -499,7 +517,7 @@ impl AlphaPup {
                  {skill_prompt}"
             );
 
-            let pup_history = self.build_history("alpha").await;
+            let pup_history = self.context_builder.build_history("alpha").await;
             let mut msgs: Vec<serde_json::Value> =
                 vec![serde_json::json!({ "role": "system", "content": system_prompt })];
             for m in &pup_history {
@@ -576,7 +594,7 @@ impl AlphaPup {
         }
 
         if pup_key == "alpha" {
-            let pup_history = self.build_history("alpha").await;
+            let pup_history = self.context_builder.build_history("alpha").await;
             let reply = self
                 .alpha_reply_stream(
                     msg,
@@ -608,7 +626,7 @@ impl AlphaPup {
                     "当前待处理任务（用 task_update 工具更新状态）：{task_lines}"
                 ));
             }
-            let pup_history = self.build_history(&pup_key).await;
+            let pup_history = self.context_builder.build_history(&pup_key).await;
             let task = Task {
                 id: Uuid::new_v4().to_string(),
                 intent: msg.to_string(),
@@ -676,7 +694,7 @@ impl AlphaPup {
         }
 
         // Fallback to alpha
-        let fallback_history = self.build_history("alpha").await;
+        let fallback_history = self.context_builder.build_history("alpha").await;
         let reply = self
             .alpha_reply_stream(
                 msg,
@@ -1035,6 +1053,8 @@ impl AlphaPup {
             }));
         }
 
+        // Track whether we're using deferred MCP loading (single fetch_mcp_tool instead of all schemas)
+        let mut mcp_deferred = false;
         if tool_perms.mcp {
             // Extract the task from the last user message to drive tool selection
             let task_hint = messages
@@ -1043,15 +1063,32 @@ impl AlphaPup {
                 .find(|m| m["role"] == "user")
                 .and_then(|m| m["content"].as_str())
                 .unwrap_or("");
-            let mcp_specs = self
-                .mcp_orchestrator
-                .tools_for_task(task_hint, Self::MAX_MCP_TOOLS)
-                .await;
-            debug!(
-                "[{agent_name}] injecting {} MCP tools (filtered)",
-                mcp_specs.len()
-            );
-            available_tools.extend(mcp_specs);
+            let all_mcp = self.mcp_orchestrator.tools_as_openai_specs().await;
+            if all_mcp.len() > Self::MAX_MCP_TOOLS {
+                // Deferred pattern: inject a lightweight catalog tool instead of all schemas.
+                // Saves ~100-200 tokens per tool × (total - MAX_MCP_TOOLS) tools.
+                let catalog = self
+                    .mcp_orchestrator
+                    .deferred_tool_catalog(task_hint, Self::MAX_MCP_TOOLS * 2)
+                    .await;
+                debug!(
+                    "[{agent_name}] deferred MCP: {} total tools → catalog with {} entries",
+                    all_mcp.len(),
+                    Self::MAX_MCP_TOOLS * 2,
+                );
+                available_tools.extend(catalog);
+                mcp_deferred = true;
+            } else {
+                let mcp_specs = self
+                    .mcp_orchestrator
+                    .tools_for_task(task_hint, Self::MAX_MCP_TOOLS)
+                    .await;
+                debug!(
+                    "[{agent_name}] injecting {} MCP tools (all fit)",
+                    mcp_specs.len()
+                );
+                available_tools.extend(mcp_specs);
+            }
         }
 
         let mut msgs = messages;
@@ -1266,6 +1303,29 @@ impl AlphaPup {
                             }
                         }
                     }
+                } else if tc.name == "fetch_mcp_tool" && mcp_deferred {
+                    // Deferred tool pattern: LLM requested the full schema for an MCP tool.
+                    // Return the schema and also inject it into available_tools for the next iteration.
+                    let requested = tc.arguments["tool_name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    match self.mcp_orchestrator.deferred_tool_schema(&requested).await {
+                        Ok(schema) => {
+                            // Inject the full tool so the LLM can call it in subsequent iterations
+                            if !available_tools.iter().any(|t| {
+                                t["function"]["name"].as_str() == Some(&requested)
+                            }) {
+                                available_tools.push(schema.clone());
+                            }
+                            format!(
+                                "Tool schema loaded. You can now call `{requested}` directly with the following parameters:\n{}",
+                                serde_json::to_string_pretty(&schema["function"]["parameters"]).unwrap_or_default()
+                            )
+                        }
+                        Err(e) => format!("Error: MCP tool '{}' not found: {e}", requested),
+                    }
                 } else if tc.name.starts_with("mcp__") {
                     match self.mcp_orchestrator.resolve_fn_name(&tc.name).await {
                         Some((server, tool)) => self
@@ -1369,7 +1429,7 @@ impl AlphaPup {
         );
 
         let owner_summary = self
-            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut join_handles = Vec::new();
@@ -1852,7 +1912,7 @@ impl AlphaPup {
 
         // 7. Execute layers sequentially, pups within a layer in parallel
         let owner_summary = self
-            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut all_results: HashMap<String, String> = HashMap::new();
@@ -2209,7 +2269,7 @@ impl AlphaPup {
         });
 
         let owner_summary = self
-            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut all_results: Vec<(String, String)> = Vec::new();
@@ -2384,10 +2444,10 @@ impl AlphaPup {
     ) -> anyhow::Result<String> {
         self.abort_flag.store(false, Ordering::Relaxed);
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
-        let owner_summary = self.get_owner_summary(&owner_md).await;
-        let classify_history = self.build_classify_history().await;
+        let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
+        let classify_history = self.router.build_classify_history().await;
         let pup_key = self
-            .classify_intent(&msg, &owner_summary, &classify_history)
+            .router.classify_intent(&msg, &owner_summary, &classify_history)
             .await;
 
         if let Some(pups_str) = pup_key.strip_prefix("channel:") {
@@ -2432,7 +2492,7 @@ impl AlphaPup {
         }
 
         // Alpha fallback — use non-streaming chat
-        let pup_history = self.build_history("alpha").await;
+        let pup_history = self.context_builder.build_history("alpha").await;
         // v0.1.12: hybrid retrieval for bridge fallback path
         let memory_ctx = self
             .memory_injector
@@ -2544,17 +2604,38 @@ impl AlphaPup {
             let _ = self.maybe_ingest_conversation_summary(pup_key).await;
         }
 
-        // Priority 5: Token-based compression trigger.
-        // Compress when real prompt_tokens exceed 50% of context window, OR fallback
-        // to message-count based trigger every 10 turns.
+        // Priority 5: Multi-layer context compaction.
+        // Uses pressure-based strategy selection: micro-compact at 40%, full compact
+        // at 65%, emergency persist+compact at 85%. Falls back to message-count
+        // trigger every 10 turns when real token counts aren't available.
         let context_limit = self.get_context_limit();
-        let should_compress = if let Some(tokens) = self.get_context_tokens(pup_key).await {
-            tokens > context_limit / 2
+        let should_compact = if let Some(tokens) = self.get_context_tokens(pup_key).await {
+            tokens > context_limit * 2 / 5 // 40% threshold for any compaction
         } else {
             count % 10 == 0
         };
-        if should_compress {
-            let _ = self.maybe_compress_context(pup_key).await;
+        if should_compact {
+            let current_tokens = self
+                .get_context_tokens(pup_key)
+                .await
+                .unwrap_or(context_limit / 2); // conservative estimate if unknown
+            let engine = self.compaction_engine.clone();
+            let pup_owned = pup_key.to_string();
+            tokio::spawn(async move {
+                match engine.compact(&pup_owned, current_tokens, context_limit).await {
+                    Ok(results) => {
+                        for r in &results {
+                            if r.estimated_tokens_saved > 0 {
+                                debug!(
+                                    "[alpha] compaction({}) {}: saved ~{} tokens",
+                                    pup_owned, r.strategy, r.estimated_tokens_saved
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => debug!("[alpha] compaction error for {pup_owned}: {e}"),
+                }
+            });
         }
 
         self.maybe_create_task(msg, pup_key).await;
@@ -2564,7 +2645,7 @@ impl AlphaPup {
     /// Run multiple pups and collect results without channel overhead (bridge path).
     async fn run_pups_for_results(&self, msg: &str, pup_keys: &[String]) -> Vec<(String, String)> {
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
-        let owner_summary = self.get_owner_summary(&owner_md).await;
+        let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
         let handles: Vec<_> = pup_keys
             .iter()
             .map(|key| {
@@ -2706,173 +2787,6 @@ impl AlphaPup {
             .await
     }
 
-    // ── Intent classification ──────────────────────────────────────────────────
-
-    async fn classify_intent(
-        &self,
-        msg: &str,
-        owner_summary: &str,
-        history: &[LlmMessage],
-    ) -> String {
-        let trimmed = msg.trim();
-        if trimmed.len() < 8 {
-            debug!("[alpha] classify_intent: short msg → alpha");
-            return "alpha".to_string();
-        }
-
-        let enabled_pups = self.enabled_configured_pup_keys().await;
-        let skill_entries = self
-            .skill_executor
-            .registry
-            .enabled_skill_names_and_triggers()
-            .await;
-
-        let _pup_options: String = enabled_pups.iter().map(|k| format!(" | {k}")).collect();
-        let _skill_options: String = skill_entries
-            .iter()
-            .map(|(n, _)| format!(" | skill:{n}"))
-            .collect();
-        let skill_lines: Vec<String> = skill_entries
-            .iter()
-            .map(|(name, triggers)| {
-                if triggers.is_empty() {
-                    format!("  - skill:{name}")
-                } else {
-                    format!("  - skill:{name} → {}", triggers.join(", "))
-                }
-            })
-            .collect();
-        let skills_block = if skill_lines.is_empty() {
-            String::new()
-        } else {
-            format!("\nInstalled skills:\n{}", skill_lines.join("\n"))
-        };
-
-        let snippet = if owner_summary.chars().count() > 400 {
-            owner_summary.chars().take(400).collect::<String>()
-        } else {
-            owner_summary.to_string()
-        };
-        let pup_hints: String = {
-            let cfgs = self.pup_configs.read().await;
-            enabled_pups
-                .iter()
-                .filter_map(|k| cfgs.get(k))
-                .map(|c| format!("  - {} → {}", c.key, c.description))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        let channel_hint = if enabled_pups.len() >= 2 {
-            format!(
-        "\n- channel:<pup1>,<pup2> → 任务同时需要多个专业 pup 并行协作完成（输出一个 token，例如 channel:research,writer）\
-         \n  适用场景举例：\
-         \n    · 「调研 XX 并写成报告」→ channel:research,writer\
-         \n    · 「分析财报数据并写摘要」→ channel:finance,writer\
-         \n    · 「写一个爬虫脚本并附使用文档」→ channel:dev,writer\
-         \n  pup 列表（只能用已有 key）：{}\
-         \n  注意：channel 本身是一个 token，不含空格。",
-        enabled_pups.join(", ")
-      )
-        } else {
-            String::new()
-        };
-
-        let system_prompt = format!(
-            "Owner profile (excerpt):\n{snippet}\n\n\
-       你是任务路由器。根据用户消息，输出以下选项之一（单个 token，无多余内容）：\
-       \n- alpha → 闲聊、问答、或其他\
-       \n{pup_hints}\n\
-       {skills_block}{channel_hint}\n\
-       直接输出 token，不要解释。"
-        );
-
-        let mut classifier_msgs = vec![LlmMessage {
-            role: "system".into(),
-            content: system_prompt,
-        }];
-        if let Some(last) = history.last() {
-            classifier_msgs.push(last.clone());
-        }
-        classifier_msgs.push(LlmMessage {
-            role: "user".into(),
-            content: format!("Message to classify: \"{msg}\""),
-        });
-
-        let raw = match self.llm_client.chat_mini(classifier_msgs).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("[alpha] classify_intent chat_mini error: {e}");
-                return "alpha".to_string();
-            }
-        };
-        let key = raw.trim().to_lowercase();
-        let key = key.split_whitespace().next().unwrap_or("alpha");
-        debug!("[alpha] classify_intent: raw={raw:?} → key={key:?}");
-
-        if key == "alpha" || enabled_pups.iter().any(|p| p == key) {
-            return key.to_string();
-        }
-        if key.starts_with("skill:") {
-            let skill_name = &key["skill:".len()..];
-            if skill_entries.iter().any(|(n, _)| n == skill_name) {
-                return key.to_string();
-            }
-        }
-        if key.starts_with("channel:") {
-            let pups_str = &key["channel:".len()..];
-            let valid_pups: Vec<String> = pups_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|p| enabled_pups.contains(p))
-                .collect();
-            if valid_pups.len() >= 2 {
-                let canonical = format!("channel:{}", valid_pups.join(","));
-                debug!("[alpha] classify_intent: multi-pup channel → {canonical}");
-                return canonical;
-            }
-        }
-        debug!("[alpha] classify_intent: unrecognised key {key:?} → alpha");
-        "alpha".to_string()
-    }
-
-    // ── Owner summary cache ────────────────────────────────────────────────────
-
-    async fn get_owner_summary(&self, owner_md: &str) -> String {
-        {
-            let guard = self.owner_summary_cache.read().await;
-            if let Some((ref cached, ref instant)) = *guard {
-                if instant.elapsed().as_secs() < 300 {
-                    return cached.clone();
-                }
-            }
-        }
-        let summary = if owner_md.len() <= 800 {
-            owner_md.to_string()
-        } else {
-            let prompt = format!(
-        "Summarize this OWNER.md in under 150 words, keeping: name, key boundaries/forbidden actions, \
-         language preference, work schedule, top pain points.\n\n{owner_md}"
-      );
-            match self
-                .llm_client
-                .chat_mini(vec![LlmMessage {
-                    role: "user".into(),
-                    content: prompt,
-                }])
-                .await
-            {
-                Ok(s) => s,
-                Err(_) => format!("{}…", owner_md.chars().take(800).collect::<String>()),
-            }
-        };
-        {
-            let mut guard = self.owner_summary_cache.write().await;
-            *guard = Some((summary.clone(), std::time::Instant::now()));
-        }
-        summary
-    }
-
     // ── Per-pup context token tracking ──────────────────────────────────────────
 
     /// Record prompt_tokens from the last API call for a pup.
@@ -2896,132 +2810,6 @@ impl AlphaPup {
     pub fn get_context_limit(&self) -> u64 {
         let model = self.llm_client.model_name();
         infer_context_limit_for_model(&model)
-    }
-
-    // ── History & memory extraction ────────────────────────────────────────────
-
-    /// How many recent turns to keep verbatim (each turn = 2 rows: user + assistant).
-    const VERBATIM_ROWS: i64 = 20;
-    /// Compress when uncovered rows exceed this threshold.
-    const COMPRESS_THRESHOLD: i64 = 40;
-
-    /// Per-pup history: rolling summary + last VERBATIM_ROWS turns for this pup only.
-    async fn build_history(&self, pup: &str) -> Vec<LlmMessage> {
-        let mut msgs: Vec<LlmMessage> = Vec::new();
-
-        // Prepend this pup's rolling compressed summary
-        if let Ok(Some((summary, _))) = self.memory.get_context_summary(pup).await {
-            msgs.push(LlmMessage {
-                role: "system".into(),
-                content: format!("## Earlier conversation summary\n{summary}"),
-            });
-        }
-
-        // Then append the most recent verbatim turns for this pup
-        let recent = self
-            .memory
-            .recent_conversations(pup, Self::VERBATIM_ROWS)
-            .await
-            .unwrap_or_default();
-        msgs.extend(
-            recent
-                .into_iter()
-                .rev()
-                .map(|(role, content)| LlmMessage { role, content }),
-        );
-        msgs
-    }
-
-    /// Brief global history (last 4 turns across all pups) — used only for intent classification.
-    async fn build_classify_history(&self) -> Vec<LlmMessage> {
-        let recent = self
-            .memory
-            .recent_conversations_global(4)
-            .await
-            .unwrap_or_default();
-        recent
-            .into_iter()
-            .rev()
-            .map(|(role, content)| LlmMessage { role, content })
-            .collect()
-    }
-
-    /// Compress older conversation history into a rolling summary.
-    ///
-    /// Called in the background every 10 exchanges.  Reads all rows NOT yet
-    /// covered by the existing summary (excluding the latest VERBATIM_ROWS so
-    /// those stay verbatim), summarises them with the LLM, and persists the
-    /// result.  No-ops if there aren't enough new rows to warrant compression.
-    async fn maybe_compress_context(&self, pup: &str) -> Result<()> {
-        let max_row = self.memory.max_conversation_row(pup).await?;
-        let (existing_summary, covers_through) = self
-            .memory
-            .get_context_summary(pup)
-            .await?
-            .unwrap_or_default();
-
-        // Rows available for compression (everything except the last VERBATIM_ROWS)
-        let compressible_ceiling = max_row - Self::VERBATIM_ROWS;
-        let uncovered_rows = compressible_ceiling - covers_through;
-
-        if uncovered_rows < Self::COMPRESS_THRESHOLD {
-            return Ok(()); // Not enough new content to compress
-        }
-
-        debug!(
-      "[{pup}] compress_context: {uncovered_rows} uncovered rows (covers_through={covers_through} max={max_row})"
-    );
-
-        // Load the uncovered rows (up to 200 to cap LLM input)
-        let rows = self
-            .memory
-            .conversations_after_row(pup, covers_through, 200)
-            .await?
-            .into_iter()
-            .filter(|(id, _, _)| *id <= compressible_ceiling)
-            .collect::<Vec<_>>();
-
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        let last_row_id = rows.last().map(|(id, _, _)| *id).unwrap_or(covers_through);
-
-        let transcript = rows
-            .iter()
-            .map(|(_, role, content)| {
-                let snippet: String = content.chars().take(300).collect();
-                format!("{role}: {snippet}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let prior_context = if existing_summary.is_empty() {
-            String::new()
-        } else {
-            format!("Prior summary:\n{existing_summary}\n\nNew exchanges to merge:\n")
-        };
-
-        let prompt = format!(
-            "{prior_context}{transcript}\n\n\
-       Produce a concise summary (≤300 words) of the above conversation exchanges. \
-       Preserve: key facts, decisions, user preferences, ongoing tasks, and any commitments made. \
-       Write in third-person neutral style."
-        );
-
-        let new_summary = self
-            .llm_client
-            .chat_mini(vec![LlmMessage {
-                role: "user".into(),
-                content: prompt,
-            }])
-            .await?;
-
-        self.memory
-            .save_context_summary(pup, &new_summary, last_row_id)
-            .await?;
-        debug!("[{pup}] compress_context: saved summary covering through row {last_row_id}");
-        Ok(())
     }
 
     async fn maybe_extract_memories(&self, pup: &str) -> Result<()> {
@@ -3175,34 +2963,25 @@ impl AlphaPup {
         }
     }
 
-    // ── @mention routing helper ───────────────────────────────────────────────
-
-    async fn extract_at_mention(
-        msg: &str,
-        pup_configs: &Arc<RwLock<HashMap<String, PupConfig>>>,
-    ) -> Option<String> {
-        let trimmed = msg.trim_start();
-        if !trimmed.starts_with('@') {
-            return None;
-        }
-        let rest = &trimmed[1..];
-        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
-        if end == 0 {
-            return None;
-        }
-        let candidate = rest[..end].to_lowercase();
-        let cfgs = pup_configs.read().await;
-        if cfgs.get(&candidate).map(|c| c.enabled).unwrap_or(false) {
-            Some(candidate)
-        } else {
-            None
-        }
-    }
-
     /// Manually trigger context compression for a pup (exposed for the Pack UI).
-    /// No-ops if there is nothing compressible yet.
+    /// Uses the multi-layer compaction engine with High pressure to force compaction.
     pub async fn compress_pup_context_now(&self, pup: &str) -> Result<()> {
-        self.maybe_compress_context(pup).await
+        let context_limit = self.get_context_limit();
+        // Use High pressure (70%) to force both micro and full compaction
+        let simulated_tokens = (context_limit as f64 * 0.70) as u64;
+        let results = self
+            .compaction_engine
+            .compact(pup, simulated_tokens, context_limit)
+            .await?;
+        for r in &results {
+            if r.estimated_tokens_saved > 0 {
+                debug!(
+                    "[alpha] manual compaction({}) {}: saved ~{} tokens",
+                    pup, r.strategy, r.estimated_tokens_saved
+                );
+            }
+        }
+        Ok(())
     }
 
     // ── Pup management ────────────────────────────────────────────────────────
@@ -3331,6 +3110,10 @@ pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, Stri
         "activate_skill" => {
             let skill = args["name"].as_str().unwrap_or("");
             ("skill".into(), format!("activate: {skill}"))
+        }
+        "fetch_mcp_tool" => {
+            let tool = args["tool_name"].as_str().unwrap_or("");
+            ("mcp".into(), format!("fetch: {tool}"))
         }
         _ if name.starts_with("mcp__") => {
             // mcp__server__tool → "[server] tool"

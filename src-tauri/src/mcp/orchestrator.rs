@@ -258,6 +258,89 @@ impl MCPOrchestrator {
         tools
     }
 
+    // ── Deferred tool pattern ──────────────────────────────────────────────────
+
+    /// Return a lightweight catalog of MCP tools: just name + one-line description.
+    /// This costs ~10-20 tokens per tool instead of ~100-200 for full schemas.
+    /// Use with `deferred_tool_schema()` to fetch the full schema on demand.
+    pub async fn deferred_tool_catalog(&self, task: &str, max: usize) -> Vec<serde_json::Value> {
+        let all_tools = self.list_all_tools().await;
+        if all_tools.is_empty() {
+            return vec![];
+        }
+
+        // Score tools by task relevance (same as tools_for_task)
+        let task_words: std::collections::HashSet<String> = task
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+
+        let mut scored: Vec<(usize, &McpToolInfo)> = all_tools
+            .iter()
+            .map(|t| {
+                let haystack = format!("{} {}", t.name, t.description).to_lowercase();
+                let score = task_words
+                    .iter()
+                    .filter(|w| haystack.contains(w.as_str()))
+                    .count();
+                (score, t)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let selected: Vec<&McpToolInfo> = scored.into_iter().take(max).map(|(_, t)| t).collect();
+        if selected.is_empty() {
+            return vec![];
+        }
+
+        // Build catalog lines: "mcp__server__tool — description"
+        let catalog_lines: Vec<String> = selected
+            .iter()
+            .map(|t| {
+                let fn_name = format!(
+                    "mcp__{}__{}",
+                    sanitize_tool_name(&t.server),
+                    sanitize_tool_name(&t.name)
+                );
+                let desc: String = t.description.chars().take(80).collect();
+                format!("- {fn_name}: {desc}")
+            })
+            .collect();
+        let catalog = catalog_lines.join("\n");
+
+        // Return a single "fetch_mcp_tool" tool that the LLM calls to load the full schema
+        vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "fetch_mcp_tool",
+                "description": format!(
+                    "Load the full schema of an MCP tool so you can call it. Available MCP tools:\n{catalog}\n\nCall this with the tool name to get the full parameter schema, then call the tool directly."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "The MCP tool function name (e.g. mcp__server__tool) from the catalog above"
+                        }
+                    },
+                    "required": ["tool_name"]
+                }
+            }
+        })]
+    }
+
+    /// Fetch the full OpenAI-compatible schema for a specific MCP tool.
+    /// Called when the LLM uses the `fetch_mcp_tool` tool.
+    pub async fn deferred_tool_schema(&self, fn_name: &str) -> Result<serde_json::Value> {
+        let all_specs = self.tools_as_openai_specs().await;
+        all_specs
+            .into_iter()
+            .find(|s| s["function"]["name"].as_str() == Some(fn_name))
+            .ok_or_else(|| anyhow!("MCP tool not found: '{fn_name}'"))
+    }
+
     /// Return MCP tools filtered by relevance to `task`.
     ///
     /// When the total tool count is below `max`, all tools are returned.
