@@ -203,17 +203,26 @@ function memoryTypeIcon(type: string): string {
 }
 
 // Inner app that uses lang context
+type HostPlatform = 'macos' | 'windows' | 'linux' | 'android' | 'ios';
+
 /** Detect the host platform once — used for titlebar layout. */
-const detectPlatform = (): 'macos' | 'windows' | 'linux' => {
+const detectPlatform = (): HostPlatform => {
   const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('android')) return 'android';
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod')) return 'ios';
   if (ua.includes('macintosh') || ua.includes('mac os')) return 'macos';
   if (ua.includes('windows')) return 'windows';
   return 'linux';
 };
 
+const isMobilePlatform = (p: HostPlatform) => p === 'android' || p === 'ios';
+
 const AppInner: React.FC = () => {
   const { lang, setLang } = useLang();
   const platform = useMemo(detectPlatform, []);
+  const isMobile = isMobilePlatform(platform);
+  const showDesktopControls = platform === 'windows' || platform === 'linux';
+  const showDesktopTitlebar = !isMobile;
 
   // ── Zustand stores ──────────────────────────────────────────────────────────
   const {
@@ -322,14 +331,14 @@ const AppInner: React.FC = () => {
 
   // Track window maximized state for custom titlebar button icon (Windows & Linux)
   useEffect(() => {
-    if (platform === 'macos') return;
+    if (!showDesktopControls) return;
     const win = getCurrentWindow();
     win.isMaximized().then(setIsMaximized).catch(() => {});
     const unlisten = win.onResized(() => {
       win.isMaximized().then(setIsMaximized).catch(() => {});
     });
     return () => { unlisten.then((f) => f()); };
-  }, [platform]);
+  }, [showDesktopControls, setIsMaximized]);
 
   // Apply theme on first render
   React.useEffect(() => {
@@ -538,7 +547,7 @@ const AppInner: React.FC = () => {
   // Minimal titlebar rendered for loading / onboarding screens so the window
   // remains draggable and closeable (especially on Windows where native
   // decorations are disabled).
-  const minimalTitleBar = (
+  const minimalTitleBar = showDesktopTitlebar ? (
     <div
       data-tauri-drag-region
       style={{
@@ -557,7 +566,7 @@ const AppInner: React.FC = () => {
       <span data-tauri-drag-region style={{ fontSize: '13px', fontWeight: 500, color: 'var(--color-text-secondary)' }}>
         open<span style={{ color: '#1D9E75' }}>pup</span>
       </span>
-      {platform !== 'macos' && (
+      {showDesktopControls && (
         <div style={{ display: 'flex', alignItems: 'stretch', height: '100%', marginLeft: '8px', flexShrink: 0 }}>
           <button
             aria-label="Minimize"
@@ -593,7 +602,7 @@ const AppInner: React.FC = () => {
         </div>
       )}
     </div>
-  );
+  ) : null;
 
   if (onboardingDone === null) return (
     <div className="h-screen flex flex-col" style={{ background: 'var(--color-background-secondary)' }}>
@@ -693,7 +702,8 @@ const AppInner: React.FC = () => {
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
 
-      {/* ── Custom overlay titlebar — adapts to macOS / Windows / Linux ── */}
+      {/* ── Custom overlay titlebar — desktop only ── */}
+      {showDesktopTitlebar && (
       <div
         data-tauri-drag-region
         style={{
@@ -777,7 +787,7 @@ const AppInner: React.FC = () => {
           )}
         </div>
         {/* ── Custom window control buttons for Windows & Linux (macOS uses native traffic lights) ── */}
-        {platform !== 'macos' && (
+        {showDesktopControls && (
           <div style={{ display: 'flex', alignItems: 'stretch', height: '100%', marginLeft: '8px', flexShrink: 0 }}>
             <button
               aria-label="Minimize"
@@ -833,6 +843,7 @@ const AppInner: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
 
