@@ -19,16 +19,29 @@ pub struct AndroidRuntimeFactory;
 
 impl AndroidRuntimeFactory {
     pub fn workspace_root() -> Result<PathBuf> {
+        let mut candidates = Vec::new();
         if let Ok(path) = std::env::var("OPENPUP_MOBILE_WORKSPACE_ROOT") {
-            return Ok(PathBuf::from(path));
+            candidates.push(PathBuf::from(path));
         }
         if let Some(root) = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .or_else(|| Some(std::env::temp_dir()))
         {
-            return Ok(root.join("openpup-mobile"));
+            candidates.push(root.join("openpup-mobile"));
         }
-        Err(anyhow!("cannot determine Android workspace root"))
+
+        let mut errors = Vec::new();
+        for candidate in candidates {
+            match ensure_writable_dir(&candidate) {
+                Ok(()) => return Ok(candidate),
+                Err(err) => errors.push(format!("{}: {}", candidate.display(), err)),
+            }
+        }
+
+        Err(anyhow!(
+            "cannot determine writable Android workspace root: {}",
+            errors.join("; ")
+        ))
     }
 
     pub fn build_capabilities(workspace_root: PathBuf) -> Arc<Capabilities> {
@@ -53,6 +66,14 @@ impl AndroidRuntimeFactory {
         let capabilities = Self::build_capabilities(workspace_root.clone());
         build_app(workspace_root, capabilities, permission_ui, Vec::new()).await
     }
+}
+
+fn ensure_writable_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)?;
+    let probe = path.join(".write_test");
+    std::fs::write(&probe, b"ok")?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 struct MobileFileSystem;
