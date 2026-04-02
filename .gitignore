@@ -11,10 +11,13 @@ cli/target/
 # Env and local config
 .env
 .env.*.local
+.local/
+*.jks
+*.keystore
+*.p12
 
 # Editor / OS
 .DS_Store
 .idea/
 .vscode/
 .claude/
-
