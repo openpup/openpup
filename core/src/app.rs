@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use openpup_capabilities::{Capabilities, CapabilityProfile};
 
 use crate::agents::alpha::AlphaPup;
@@ -458,7 +458,9 @@ pub async fn build_app(
     let db_path = workspace_root.join("database.db");
 
     let file_layer = Arc::new(FileLayer::new(&workspace_root));
-    file_layer.ensure_workspace_initialized()?;
+    file_layer
+        .ensure_workspace_initialized()
+        .with_context(|| format!("initialize workspace at {}", workspace_root.display()))?;
 
     let llm_client = Arc::new(LlmClient::new_from_env());
     {
@@ -498,7 +500,8 @@ pub async fn build_app(
                 .ok_or_else(|| anyhow!("invalid db path: {}", db_path.display()))?,
             llm_client.clone(),
         )
-        .await?,
+        .await
+        .with_context(|| format!("initialize database at {}", db_path.display()))?,
     );
 
     let mcp_config_path = workspace_root.join("mcp_servers.json");

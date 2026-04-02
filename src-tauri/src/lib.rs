@@ -78,14 +78,18 @@ fn init_logging(workspace_root: &std::path::Path) {
 pub fn run() {
     let _ = dotenvy::dotenv();
 
-    let workspace_root = platform_workspace_root().expect("cannot determine app workspace root");
+    if let Err(err) = run_inner() {
+        eprintln!("openpup startup failed: {err:#}");
+    }
+}
+
+fn run_inner() -> anyhow::Result<()> {
+    let workspace_root = platform_workspace_root()?;
     std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
     init_logging(&workspace_root);
 
-    let rt = Runtime::new().expect("failed to create tokio runtime");
-    let app = Arc::new(
-        rt.block_on(async { build_platform_app(None).await }).expect("failed to build app"),
-    );
+    let rt = Runtime::new()?;
+    let app = Arc::new(rt.block_on(async { build_platform_app(None).await })?);
 
     let permission_checker = app.permissions.clone();
     let channel_manager_for_setup = app.channel_manager.clone();
@@ -218,7 +222,9 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running openpup tauri application");
+        .map_err(|err| anyhow::anyhow!("error while running openpup tauri application: {err}"))?;
+
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
