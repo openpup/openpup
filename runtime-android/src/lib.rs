@@ -17,21 +17,37 @@ use tokio::sync::Mutex;
 
 pub struct AndroidRuntimeFactory;
 
+const ANDROID_APP_ID: &str = "com.openpup.app";
+
 impl AndroidRuntimeFactory {
     pub fn workspace_root() -> Result<PathBuf> {
         let mut candidates = Vec::new();
         if let Ok(path) = std::env::var("OPENPUP_MOBILE_WORKSPACE_ROOT") {
             candidates.push(PathBuf::from(path));
         }
-        if let Some(root) = dirs::data_local_dir()
-            .or_else(dirs::home_dir)
-            .or_else(|| Some(std::env::temp_dir()))
-        {
+        // Derive the correct app files directory from the process UID.
+        // On Android the Linux UID encodes the multi-user ID as uid / 100_000,
+        // so we can construct /data/user/<user_id>/<pkg>/files/ without
+        // hardcoding user 0.
+        if let Some(files_dir) = android_files_dir(ANDROID_APP_ID) {
+            candidates.push(files_dir.join("openpup-mobile"));
+        }
+        // Legacy hardcoded fallback (symlink, works on single-user devices).
+        candidates
+            .push(PathBuf::from(format!("/data/data/{ANDROID_APP_ID}/files")).join("openpup-mobile"));
+        if let Some(root) = dirs::data_local_dir().or_else(dirs::home_dir) {
             candidates.push(root.join("openpup-mobile"));
         }
+        // NOTE: we intentionally do NOT fall back to std::env::temp_dir()
+        // because on Android it resolves to /data/local/tmp which is not
+        // writable by regular apps.
 
         let mut errors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for candidate in candidates {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
             match ensure_writable_dir(&candidate) {
                 Ok(()) => return Ok(candidate),
                 Err(err) => errors.push(format!("{}: {}", candidate.display(), err)),
@@ -61,11 +77,37 @@ impl AndroidRuntimeFactory {
         })
     }
 
+    /// Build the app using an externally-provided workspace root (e.g. from
+    /// Tauri's path resolver which calls Context.getFilesDir() via JNI).
+    pub async fn build_app_with_root(
+        workspace_root: PathBuf,
+        permission_ui: Option<Arc<dyn PermissionUi>>,
+    ) -> Result<OpenPupApp> {
+        ensure_writable_dir(&workspace_root)?;
+        let capabilities = Self::build_capabilities(workspace_root.clone());
+        build_app(workspace_root, capabilities, permission_ui, Vec::new()).await
+    }
+
     pub async fn build_app(permission_ui: Option<Arc<dyn PermissionUi>>) -> Result<OpenPupApp> {
         let workspace_root = Self::workspace_root()?;
         let capabilities = Self::build_capabilities(workspace_root.clone());
         build_app(workspace_root, capabilities, permission_ui, Vec::new()).await
     }
+}
+
+/// Derive the app's internal files directory from the Linux process UID.
+///
+/// On Android the UID encodes the multi-user ID as `uid / 100_000`.
+/// This avoids hardcoding user-id 0 which breaks on multi-user devices
+/// and work profiles.
+fn android_files_dir(app_id: &str) -> Option<PathBuf> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let uid_line = status.lines().find(|l| l.starts_with("Uid:"))?;
+    let uid: u32 = uid_line.split_whitespace().nth(1)?.parse().ok()?;
+    let android_user_id = uid / 100_000;
+    Some(PathBuf::from(format!(
+        "/data/user/{android_user_id}/{app_id}/files"
+    )))
 }
 
 fn ensure_writable_dir(path: &Path) -> Result<()> {

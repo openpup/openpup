@@ -23,10 +23,7 @@ impl IosRuntimeFactory {
         if let Ok(path) = std::env::var("OPENPUP_MOBILE_WORKSPACE_ROOT") {
             candidates.push(PathBuf::from(path));
         }
-        if let Some(root) = dirs::data_local_dir()
-            .or_else(dirs::home_dir)
-            .or_else(|| Some(std::env::temp_dir()))
-        {
+        if let Some(root) = dirs::data_local_dir().or_else(dirs::home_dir) {
             candidates.push(root.join("openpup-mobile"));
         }
 
@@ -59,6 +56,17 @@ impl IosRuntimeFactory {
             env: Arc::new(IosEnvironment),
             clock: Arc::new(SystemClock),
         })
+    }
+
+    /// Build the app using an externally-provided workspace root (e.g. from
+    /// Tauri's path resolver).
+    pub async fn build_app_with_root(
+        workspace_root: PathBuf,
+        permission_ui: Option<Arc<dyn PermissionUi>>,
+    ) -> Result<OpenPupApp> {
+        ensure_writable_dir(&workspace_root)?;
+        let capabilities = Self::build_capabilities(workspace_root.clone());
+        build_app(workspace_root, capabilities, permission_ui, Vec::new()).await
     }
 
     pub async fn build_app(permission_ui: Option<Arc<dyn PermissionUi>>) -> Result<OpenPupApp> {

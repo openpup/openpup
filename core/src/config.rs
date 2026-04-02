@@ -131,9 +131,13 @@ impl Default for PupsConfig {
 }
 
 /// Expand `~` in a path string to the home directory.
+/// Falls back to `OPENPUP_APP_ROOT` on platforms where `dirs::home_dir()`
+/// is unavailable (e.g. Android / iOS).
 pub fn expand_tilde(path: &str) -> PathBuf {
     if path.starts_with("~/") {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = dirs::home_dir()
+            .or_else(|| std::env::var("OPENPUP_APP_ROOT").ok().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
         home.join(&path[2..])
     } else {
         PathBuf::from(path)
@@ -146,8 +150,34 @@ pub fn app_root() -> Result<PathBuf> {
     if let Ok(root) = std::env::var("OPENPUP_APP_ROOT") {
         return Ok(PathBuf::from(root));
     }
-    let home = dirs::home_dir().context("cannot determine home directory")?;
-    Ok(home.join(".openpup"))
+    if let Some(home) = dirs::home_dir() {
+        return Ok(home.join(".openpup"));
+    }
+    // Fallback for mobile platforms where neither OPENPUP_APP_ROOT nor
+    // home_dir() is available.  Derive the app-private files directory
+    // from the process UID on Android; on other platforms give up.
+    #[cfg(target_os = "android")]
+    {
+        if let Some(dir) = android_app_root_fallback() {
+            return Ok(dir);
+        }
+    }
+    anyhow::bail!("cannot determine app root: set OPENPUP_APP_ROOT or ensure a home directory exists")
+}
+
+/// Last-resort app root on Android: read the process UID from
+/// `/proc/self/status` and construct the canonical data path.
+#[cfg(target_os = "android")]
+fn android_app_root_fallback() -> Option<PathBuf> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let uid_line = status.lines().find(|l| l.starts_with("Uid:"))?;
+    let uid: u32 = uid_line.split_whitespace().nth(1)?.parse().ok()?;
+    let android_user_id = uid / 100_000;
+    // com.openpup.app is the only consumer; hardcode is acceptable as
+    // a last-ditch fallback.
+    Some(PathBuf::from(format!(
+        "/data/user/{android_user_id}/com.openpup.app/files/openpup-mobile"
+    )))
 }
 
 pub fn config_path() -> Result<PathBuf> {

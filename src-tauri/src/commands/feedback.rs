@@ -29,6 +29,13 @@ pub async fn submit_message_feedback(
 
 /// Save artifact content to a file on disk.
 #[tauri::command]
-pub async fn save_artifact_to_file(path: String, content: String) -> Result<(), String> {
+pub async fn save_artifact_to_file(
+    state: State<'_, AppState>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    if state.is_mobile_runtime() {
+        return Err("save_artifact_to_file is not supported on mobile".to_string());
+    }
     std::fs::write(&path, &content).map_err(|e| e.to_string())
 }

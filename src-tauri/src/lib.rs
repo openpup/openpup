@@ -17,10 +17,13 @@ pub use openpup_core::workspace;
 use std::sync::Arc;
 
 use commands::AppState;
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use openpup_core::app::OpenPupApp;
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use openpup_core::skills::permissions::PermissionUi;
 #[cfg(target_os = "android")]
 use openpup_runtime_android::AndroidRuntimeFactory;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use openpup_runtime_desktop::DesktopRuntimeFactory;
 #[cfg(target_os = "ios")]
 use openpup_runtime_ios::IosRuntimeFactory;
@@ -83,42 +86,9 @@ pub fn run() {
     }
 }
 
-fn run_inner() -> anyhow::Result<()> {
-    let workspace_root = platform_workspace_root()?;
-    std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
-    init_logging(&workspace_root);
-
-    let rt = Runtime::new()?;
-    let app = Arc::new(rt.block_on(async { build_platform_app(None).await })?);
-
-    let permission_checker = app.permissions.clone();
-    let channel_manager_for_setup = app.channel_manager.clone();
-    let scheduler_for_setup = SkillScheduler {
-        executor: app.skill_executor.clone(),
-        memory: app.memory.clone(),
-        permissions: app.permissions.clone(),
-        file_layer: app.file_layer.clone(),
-        jobs_path: app.workspace_root.join("scheduled_jobs.json"),
-    };
-
-    let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
-    let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
-    let bridge_manager = Arc::new(bridge::BridgeManager::new(
-        bridge_cfg,
-        app.alpha.clone(),
-        weixin_service,
-    ));
-
-    let app_state = AppState {
-        app: app.clone(),
-        bridge_manager: bridge_manager.clone(),
-    };
-
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .manage(app_state)
-        .manage(permission_checker.clone())
-        .invoke_handler(tauri::generate_handler![
+macro_rules! all_commands {
+    () => {
+        tauri::generate_handler![
             commands::send_message,
             commands::abort_message,
             commands::check_onboarding_completed,
@@ -200,7 +170,59 @@ fn run_inner() -> anyhow::Result<()> {
             commands::kg_list_entities,
             commands::submit_message_feedback,
             commands::save_artifact_to_file,
-        ])
+        ]
+    };
+}
+
+fn run_inner() -> anyhow::Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return run_mobile();
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return run_desktop();
+}
+
+/// Desktop startup: resolve workspace root up-front (dirs crate works fine),
+/// build the OpenPupApp, then launch Tauri.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn run_desktop() -> anyhow::Result<()> {
+    let workspace_root = DesktopRuntimeFactory::workspace_root()?;
+    std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
+    init_logging(&workspace_root);
+
+    let rt = Runtime::new()?;
+    let app = Arc::new(
+        rt.block_on(async { DesktopRuntimeFactory::build_app(None).await })?,
+    );
+
+    let permission_checker = app.permissions.clone();
+    let channel_manager_for_setup = app.channel_manager.clone();
+    let scheduler_for_setup = SkillScheduler {
+        executor: app.skill_executor.clone(),
+        memory: app.memory.clone(),
+        permissions: app.permissions.clone(),
+        file_layer: app.file_layer.clone(),
+        jobs_path: app.workspace_root.join("scheduled_jobs.json"),
+    };
+
+    let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
+    let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+    let bridge_manager = Arc::new(bridge::BridgeManager::new(
+        bridge_cfg,
+        app.alpha.clone(),
+        weixin_service,
+    ));
+
+    let app_state = AppState {
+        app: app.clone(),
+        bridge_manager: bridge_manager.clone(),
+    };
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(app_state)
+        .manage(permission_checker.clone())
+        .invoke_handler(all_commands!())
         .setup(move |app| {
             #[cfg(target_os = "windows")]
             {
@@ -227,38 +249,109 @@ fn run_inner() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn build_platform_app(
-    permission_ui: Option<Arc<dyn PermissionUi>>,
-) -> anyhow::Result<OpenPupApp> {
-    DesktopRuntimeFactory::build_app(permission_ui).await
-}
+/// Mobile startup: Tauri must be built first so we can use its path resolver
+/// (backed by Context.getFilesDir() on Android / NSSearchPathForDirectories
+/// on iOS) to obtain the correct sandbox-writable workspace root.  The
+/// OpenPupApp and managed state are created inside the setup closure.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn run_mobile() -> anyhow::Result<()> {
+    // On mobile, init_logging only writes to stderr (no file appender),
+    // so it does not need the workspace root.
+    init_logging(std::path::Path::new(""));
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn platform_workspace_root() -> anyhow::Result<std::path::PathBuf> {
-    DesktopRuntimeFactory::workspace_root()
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(all_commands!())
+        .setup(move |tauri_app| {
+            use tauri::Manager;
+
+            // 1. Resolve the workspace root via Tauri's path resolver.
+            //    This calls Context.getFilesDir() on Android and the
+            //    appropriate sandbox directory on iOS — the only paths
+            //    guaranteed to be writable on modern mobile OS versions.
+            let workspace_root = tauri_app
+                .path()
+                .app_local_data_dir()
+                .map(|p| p.join("openpup-mobile"))
+                .or_else(|_| mobile_workspace_root_fallback())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
+
+            let rt = Runtime::new().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let app = Arc::new(
+                rt.block_on(async { build_mobile_app(workspace_root, None).await })
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+            );
+
+            let permission_checker = app.permissions.clone();
+            let channel_manager_for_setup = app.channel_manager.clone();
+            let scheduler_for_setup = SkillScheduler {
+                executor: app.skill_executor.clone(),
+                memory: app.memory.clone(),
+                permissions: app.permissions.clone(),
+                file_layer: app.file_layer.clone(),
+                jobs_path: app.workspace_root.join("scheduled_jobs.json"),
+            };
+
+            let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
+            let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+            let bridge_manager = Arc::new(bridge::BridgeManager::new(
+                bridge_cfg,
+                app.alpha.clone(),
+                weixin_service,
+            ));
+
+            let app_state = AppState {
+                app: app.clone(),
+                bridge_manager: bridge_manager.clone(),
+            };
+
+            // Manage state dynamically — commands access it after setup
+            // completes, so this is safe.
+            tauri_app.manage(app_state);
+            tauri_app.manage(permission_checker.clone());
+
+            let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
+                tauri_app.handle().clone(),
+            ));
+            permission_checker.set_event_sink(event_sink.clone());
+            channel_manager_for_setup.set_event_sink(event_sink.clone());
+            tauri::async_runtime::spawn(async move {
+                scheduler_for_setup.start(Some(event_sink));
+                bridge_manager.clone().start();
+            });
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .map_err(|err| anyhow::anyhow!("error while running openpup tauri application: {err}"))?;
+
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
-async fn build_platform_app(
+async fn build_mobile_app(
+    workspace_root: std::path::PathBuf,
     permission_ui: Option<Arc<dyn PermissionUi>>,
 ) -> anyhow::Result<OpenPupApp> {
-    AndroidRuntimeFactory::build_app(permission_ui).await
+    AndroidRuntimeFactory::build_app_with_root(workspace_root, permission_ui).await
 }
 
+#[cfg(target_os = "ios")]
+async fn build_mobile_app(
+    workspace_root: std::path::PathBuf,
+    permission_ui: Option<Arc<dyn PermissionUi>>,
+) -> anyhow::Result<OpenPupApp> {
+    IosRuntimeFactory::build_app_with_root(workspace_root, permission_ui).await
+}
+
+/// Fallback workspace root for mobile when Tauri's path resolver fails.
 #[cfg(target_os = "android")]
-fn platform_workspace_root() -> anyhow::Result<std::path::PathBuf> {
+fn mobile_workspace_root_fallback() -> anyhow::Result<std::path::PathBuf> {
     AndroidRuntimeFactory::workspace_root()
 }
 
 #[cfg(target_os = "ios")]
-async fn build_platform_app(
-    permission_ui: Option<Arc<dyn PermissionUi>>,
-) -> anyhow::Result<OpenPupApp> {
-    IosRuntimeFactory::build_app(permission_ui).await
-}
-
-#[cfg(target_os = "ios")]
-fn platform_workspace_root() -> anyhow::Result<std::path::PathBuf> {
+fn mobile_workspace_root_fallback() -> anyhow::Result<std::path::PathBuf> {
     IosRuntimeFactory::workspace_root()
 }
