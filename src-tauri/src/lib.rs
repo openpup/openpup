@@ -249,82 +249,85 @@ fn run_desktop() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Mobile startup: Tauri must be built first so we can use its path resolver
-/// (backed by Context.getFilesDir() on Android / NSSearchPathForDirectories
-/// on iOS) to obtain the correct sandbox-writable workspace root.  The
-/// OpenPupApp and managed state are created inside the setup closure.
+/// Mobile startup — three phases:
+///
+/// 1. `build()` — initialise the Tauri app / Android Context.  On Android
+///    this triggers `Context.getFilesDir()` internally, which **creates**
+///    the app-private `files/` directory if it doesn't already exist.
+///    Without this step our UID-based path guess may point to a directory
+///    that hasn't been created yet.
+///
+/// 2. Resolve the workspace root from Tauri's path resolver (guaranteed
+///    correct), then do heavy initialisation (SQLite, config, skills …)
+///    on the current thread.
+///
+/// 3. `app.run()` — start the event loop.  By this point all state has
+///    been managed, so the WebView can invoke commands immediately.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn run_mobile() -> anyhow::Result<()> {
-    // On mobile, init_logging only writes to stderr (no file appender),
-    // so it does not need the workspace root.
+    // On mobile, init_logging only writes to stderr — no workspace needed.
     init_logging(std::path::Path::new(""));
 
-    tauri::Builder::default()
+    // ── Phase 1: build Tauri (creates Android Context / iOS sandbox) ────
+    let tauri_app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(all_commands!())
-        .setup(move |tauri_app| {
-            use tauri::Manager;
+        .build(tauri::generate_context!())
+        .map_err(|err| anyhow::anyhow!("failed to build tauri app: {err}"))?;
 
-            // 1. Resolve the workspace root via Tauri's path resolver.
-            //    This calls Context.getFilesDir() on Android and the
-            //    appropriate sandbox directory on iOS — the only paths
-            //    guaranteed to be writable on modern mobile OS versions.
-            let workspace_root = tauri_app
-                .path()
-                .app_local_data_dir()
-                .map(|p| p.join("openpup-mobile"))
-                .or_else(|_| mobile_workspace_root_fallback())
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // ── Phase 2: resolve path & heavy init ──────────────────────────────
+    use tauri::Manager;
+    let workspace_root = tauri_app
+        .path()
+        .app_local_data_dir()
+        .map(|p| p.join("openpup-mobile"))
+        .or_else(|_| mobile_workspace_root_fallback())?;
 
-            std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
+    std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
 
-            let rt = Runtime::new().map_err(|e| anyhow::anyhow!("{e}"))?;
-            let app = Arc::new(
-                rt.block_on(async { build_mobile_app(workspace_root, None).await })
-                    .map_err(|e| anyhow::anyhow!("{e}"))?,
-            );
+    let rt = Runtime::new()?;
+    let app = Arc::new(rt.block_on(async {
+        build_mobile_app(workspace_root, None).await
+    })?);
 
-            let permission_checker = app.permissions.clone();
-            let channel_manager_for_setup = app.channel_manager.clone();
-            let scheduler_for_setup = SkillScheduler {
-                executor: app.skill_executor.clone(),
-                memory: app.memory.clone(),
-                permissions: app.permissions.clone(),
-                file_layer: app.file_layer.clone(),
-                jobs_path: app.workspace_root.join("scheduled_jobs.json"),
-            };
+    let permission_checker = app.permissions.clone();
+    let channel_manager_for_setup = app.channel_manager.clone();
+    let scheduler_for_setup = SkillScheduler {
+        executor: app.skill_executor.clone(),
+        memory: app.memory.clone(),
+        permissions: app.permissions.clone(),
+        file_layer: app.file_layer.clone(),
+        jobs_path: app.workspace_root.join("scheduled_jobs.json"),
+    };
 
-            let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
-            let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
-            let bridge_manager = Arc::new(bridge::BridgeManager::new(
-                bridge_cfg,
-                app.alpha.clone(),
-                weixin_service,
-            ));
+    let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
+    let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+    let bridge_manager = Arc::new(bridge::BridgeManager::new(
+        bridge_cfg,
+        app.alpha.clone(),
+        weixin_service,
+    ));
 
-            let app_state = AppState {
-                app: app.clone(),
-                bridge_manager: bridge_manager.clone(),
-            };
+    let app_state = AppState {
+        app: app.clone(),
+        bridge_manager: bridge_manager.clone(),
+    };
 
-            // Manage state dynamically — commands access it after setup
-            // completes, so this is safe.
-            tauri_app.manage(app_state);
-            tauri_app.manage(permission_checker.clone());
+    tauri_app.manage(app_state);
+    tauri_app.manage(permission_checker.clone());
 
-            let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
-                tauri_app.handle().clone(),
-            ));
-            permission_checker.set_event_sink(event_sink.clone());
-            channel_manager_for_setup.set_event_sink(event_sink.clone());
-            tauri::async_runtime::spawn(async move {
-                scheduler_for_setup.start(Some(event_sink));
-                bridge_manager.clone().start();
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .map_err(|err| anyhow::anyhow!("error while running openpup tauri application: {err}"))?;
+    let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
+        tauri_app.handle().clone(),
+    ));
+    permission_checker.set_event_sink(event_sink.clone());
+    channel_manager_for_setup.set_event_sink(event_sink.clone());
+    tauri::async_runtime::spawn(async move {
+        scheduler_for_setup.start(Some(event_sink));
+        bridge_manager.clone().start();
+    });
+
+    // ── Phase 3: run event loop ─────────────────────────────────────────
+    tauri_app.run(|_, _| {});
 
     Ok(())
 }
