@@ -1,4 +1,6 @@
-use crate::agents::specialist::{build_prompt_with_template, PupToolPermissions, SpecialistPup, Task};
+use crate::agents::specialist::{
+    build_prompt_with_template, PupToolPermissions, SpecialistPup, Task,
+};
 
 pub struct OpsPup;
 

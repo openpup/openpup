@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use openpup_capabilities::Capabilities;
 
-use crate::app::OpenPupApp;
 use crate::agents::alpha::AlphaPup;
+use crate::app::OpenPupApp;
 use crate::channel::manager::ChannelManager;
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::memory::file_layer::FileLayer;

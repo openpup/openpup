@@ -1,5 +1,4 @@
 /// Network tool implementations for ToolRegistry.
-
 use anyhow::{anyhow, Result};
 use openpup_capabilities::HttpRequest;
 use scraper::{Html, Selector};

@@ -50,7 +50,9 @@ impl DesktopRuntimeFactory {
         build_app(workspace_root, capabilities, permission_ui, dynamic_pups).await
     }
 
-    pub async fn build_headless(permission_ui: Option<Arc<dyn PermissionUi>>) -> Result<HeadlessRuntime> {
+    pub async fn build_headless(
+        permission_ui: Option<Arc<dyn PermissionUi>>,
+    ) -> Result<HeadlessRuntime> {
         let app = Self::build_app(permission_ui).await?;
         Ok(HeadlessRuntime::from_app(app))
     }
@@ -187,9 +189,15 @@ impl ProcessExecutor for DesktopProcessExecutor {
             }
         }
 
-        let child = cmd.spawn().map_err(|e| anyhow!("process spawn failed: {e}"))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| anyhow!("process spawn failed: {e}"))?;
         let pid = child.id();
-        let output = tokio::time::timeout(Duration::from_millis(req.timeout_ms), child.wait_with_output()).await;
+        let output = tokio::time::timeout(
+            Duration::from_millis(req.timeout_ms),
+            child.wait_with_output(),
+        )
+        .await;
 
         match output {
             Ok(Ok(output)) => Ok(ExecResult {

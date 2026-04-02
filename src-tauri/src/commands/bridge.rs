@@ -51,13 +51,13 @@ pub async fn start_weixin_qr_login(
     }
     state
         .start_weixin_qr_login(
-        base_url,
-        proxy_url,
-        route_tag,
-        account_id,
-        bot_type,
-        force.unwrap_or(false),
-    )
+            base_url,
+            proxy_url,
+            route_tag,
+            account_id,
+            bot_type,
+            force.unwrap_or(false),
+        )
         .await
         .map_err(|e| e.to_string())
 }
@@ -77,13 +77,13 @@ pub async fn wait_weixin_qr_login(
     }
     state
         .wait_weixin_qr_login(
-        base_url,
-        proxy_url,
-        route_tag,
-        session_key,
-        bot_type,
-        timeout_ms,
-    )
+            base_url,
+            proxy_url,
+            route_tag,
+            session_key,
+            bot_type,
+            timeout_ms,
+        )
         .await
         .map_err(|e| e.to_string())
 }

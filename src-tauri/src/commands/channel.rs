@@ -13,7 +13,11 @@ pub async fn list_channels(
 /// Get the number of currently active Pack Channels.
 #[tauri::command]
 pub async fn get_active_channel_count(state: State<'_, AppState>) -> Result<i64, String> {
-    state.app.active_channel_count().await.map_err(|e| e.to_string())
+    state
+        .app
+        .active_channel_count()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Get all messages for a specific channel.
@@ -22,7 +26,11 @@ pub async fn get_channel_messages(
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Vec<crate::channel::types::ChannelMessageRecord>, String> {
-    state.app.channel_messages(&channel_id).await.map_err(|e| e.to_string())
+    state
+        .app
+        .channel_messages(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Get the persisted delegation plan for a specific channel.
@@ -31,7 +39,11 @@ pub async fn get_channel_plan(
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<crate::channel::types::DelegationPlan>, String> {
-    state.app.channel_plan(&channel_id).await.map_err(|e| e.to_string())
+    state
+        .app
+        .channel_plan(&channel_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Get the current workflow state for a specific Pack Channel.
@@ -136,7 +148,11 @@ pub async fn continue_channel(
 /// Delete all completed Pack Channels and their persisted messages/members.
 #[tauri::command]
 pub async fn clear_completed_channels(state: State<'_, AppState>) -> Result<i64, String> {
-    state.app.clear_completed_channels().await.map_err(|e| e.to_string())
+    state
+        .app
+        .clear_completed_channels()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Delete active Pack Channels that have not updated for longer than max_age_seconds.

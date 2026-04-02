@@ -162,7 +162,9 @@ pub fn app_root() -> Result<PathBuf> {
             return Ok(dir);
         }
     }
-    anyhow::bail!("cannot determine app root: set OPENPUP_APP_ROOT or ensure a home directory exists")
+    anyhow::bail!(
+        "cannot determine app root: set OPENPUP_APP_ROOT or ensure a home directory exists"
+    )
 }
 
 /// Last-resort app root on Android: read the process UID from

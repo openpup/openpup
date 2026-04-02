@@ -16,16 +16,16 @@ use crate::channel::types::{
     ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
 };
 use crate::llm::client::{LlmClient, Provider};
-use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use crate::mcp::orchestrator::McpToolInfo;
+use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::{MemorySystem, SkillRunRecord, TaskRecord};
+use crate::runtime::SharedEventSink;
 use crate::skills::executor::SkillExecutor;
 use crate::skills::job_registry::{JobRegistry, ScheduledJob};
 use crate::skills::permissions::{ExecutionMode, PermissionChecker, PermissionUi};
 use crate::skills::registry::{InstalledSkill, SkillRegistry};
 use crate::tools::primitive::ToolRegistry;
-use crate::runtime::SharedEventSink;
 
 #[derive(Clone)]
 pub struct OpenPupApp {
@@ -62,7 +62,14 @@ impl OpenPupApp {
 
     pub fn current_llm_config(
         &self,
-    ) -> (Provider, String, String, String, Option<String>, Option<String>) {
+    ) -> (
+        Provider,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) {
         let (provider, model, mini_model, embed_model, _api_key, api_base) =
             self.alpha.llm_client.current_config();
         (provider, model, mini_model, embed_model, None, api_base)
@@ -70,7 +77,14 @@ impl OpenPupApp {
 
     pub fn current_llm_config_with_secret(
         &self,
-    ) -> (Provider, String, String, String, Option<String>, Option<String>) {
+    ) -> (
+        Provider,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) {
         self.alpha.llm_client.current_config()
     }
 
@@ -151,7 +165,9 @@ impl OpenPupApp {
         limit: i64,
         query: Option<&str>,
     ) -> Result<Vec<(String, String, String, f32, i64, Option<String>)>> {
-        self.memory.list_long_term_memories(offset, limit, query).await
+        self.memory
+            .list_long_term_memories(offset, limit, query)
+            .await
     }
 
     pub async fn update_long_term_memory(
@@ -178,7 +194,11 @@ impl OpenPupApp {
         self.memory.list_skill_runs(limit).await
     }
 
-    pub async fn create_task(&self, description: &str, assigned_pup: Option<&str>) -> Result<String> {
+    pub async fn create_task(
+        &self,
+        description: &str,
+        assigned_pup: Option<&str>,
+    ) -> Result<String> {
         self.memory.create_task(description, assigned_pup).await
     }
 
@@ -186,7 +206,12 @@ impl OpenPupApp {
         self.memory.list_tasks(limit).await
     }
 
-    pub async fn update_task_status(&self, id: &str, status: &str, result: Option<&str>) -> Result<()> {
+    pub async fn update_task_status(
+        &self,
+        id: &str,
+        status: &str,
+        result: Option<&str>,
+    ) -> Result<()> {
         self.memory.update_task_status(id, status, result).await
     }
 
@@ -206,7 +231,9 @@ impl OpenPupApp {
         self.memory.list_conversations_for_timeline(limit).await
     }
 
-    pub async fn list_knowledge_sources(&self) -> Result<Vec<crate::knowledge::types::KnowledgeSource>> {
+    pub async fn list_knowledge_sources(
+        &self,
+    ) -> Result<Vec<crate::knowledge::types::KnowledgeSource>> {
         self.memory.list_knowledge_sources().await
     }
 
@@ -271,7 +298,10 @@ impl OpenPupApp {
     }
 
     pub async fn set_skill_enabled(&self, name: &str, enabled: bool) -> Result<()> {
-        self.skill_executor.registry.set_enabled(name, enabled).await
+        self.skill_executor
+            .registry
+            .set_enabled(name, enabled)
+            .await
     }
 
     pub fn scheduled_jobs_registry(&self) -> JobRegistry {
@@ -409,12 +439,7 @@ impl OpenPupApp {
             .await
     }
 
-    pub async fn abort_channel(
-        &self,
-        channel_id: &str,
-        sender: &str,
-        comment: &str,
-    ) -> Result<()> {
+    pub async fn abort_channel(&self, channel_id: &str, sender: &str, comment: &str) -> Result<()> {
         self.channel_manager
             .abort_channel(channel_id, sender, comment)
             .await
@@ -436,7 +461,9 @@ impl OpenPupApp {
     }
 
     pub async fn clear_stale_channels(&self, max_age_seconds: i64) -> Result<i64> {
-        self.memory.clear_stale_active_channels(max_age_seconds).await
+        self.memory
+            .clear_stale_active_channels(max_age_seconds)
+            .await
     }
 
     pub async fn kb_search(
@@ -535,7 +562,9 @@ pub async fn build_app(
     let cfg = crate::config::load_with_env();
     for search_path in &cfg.skills.search_paths {
         let expanded_path = crate::config::expand_tilde(search_path);
-        let _ = skill_registry.register_from_dir(&expanded_path, "local").await;
+        let _ = skill_registry
+            .register_from_dir(&expanded_path, "local")
+            .await;
         skill_registry.add_scan_root(expanded_path, "local").await;
     }
 

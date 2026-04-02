@@ -45,13 +45,21 @@ impl IosRuntimeFactory {
         let state_root = workspace_root.join("mobile_runtime");
         Arc::new(Capabilities {
             fs: Arc::new(MobileFileSystem),
-            secure_store: Arc::new(FileBackedSecureStore::new(state_root.join("secure_store.json"))),
+            secure_store: Arc::new(FileBackedSecureStore::new(
+                state_root.join("secure_store.json"),
+            )),
             process: Arc::new(UnsupportedProcessExecutor::new("process_executor")),
             net: Arc::new(MobileNetworkClient::new()),
-            scheduler: Arc::new(FileBackedScheduler::new(state_root.join("scheduled_jobs.json"))),
-            notifier: Arc::new(FileBackedNotifier::new(state_root.join("notifications.jsonl"))),
+            scheduler: Arc::new(FileBackedScheduler::new(
+                state_root.join("scheduled_jobs.json"),
+            )),
+            notifier: Arc::new(FileBackedNotifier::new(
+                state_root.join("notifications.jsonl"),
+            )),
             plugins: Arc::new(UnsupportedPluginHost::new("plugin_host")),
-            background: Arc::new(FileBackedBackgroundTasks::new(state_root.join("background_tasks.jsonl"))),
+            background: Arc::new(FileBackedBackgroundTasks::new(
+                state_root.join("background_tasks.jsonl"),
+            )),
             bridge: Arc::new(NoopAppBridge),
             env: Arc::new(IosEnvironment),
             clock: Arc::new(SystemClock),
@@ -399,7 +407,9 @@ async fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     if !path.exists() {
         return Ok(None);
     }
-    Ok(Some(serde_json::from_str(&tokio::fs::read_to_string(path).await?)?))
+    Ok(Some(serde_json::from_str(
+        &tokio::fs::read_to_string(path).await?,
+    )?))
 }
 
 async fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {

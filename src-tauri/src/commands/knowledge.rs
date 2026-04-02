@@ -27,7 +27,11 @@ pub async fn kb_ingest_file(
 pub async fn kb_list_sources(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::knowledge::types::KnowledgeSource>, String> {
-    state.app.list_knowledge_sources().await.map_err(|e| e.to_string())
+    state
+        .app
+        .list_knowledge_sources()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -95,11 +99,7 @@ pub async fn kg_list_entities(
 
     let mut result = Vec::new();
     for (id, name, etype, desc) in entities {
-        let rels = state
-            .app
-            .kg_entity_relations(&id)
-            .await
-            .unwrap_or_default();
+        let rels = state.app.kg_entity_relations(&id).await.unwrap_or_default();
         result.push(KgEntityInfo {
             id,
             name,

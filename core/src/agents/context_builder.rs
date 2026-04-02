@@ -102,10 +102,7 @@ impl ContextBuilder {
     }
 
     /// Build memory context using hybrid retrieval (rule force-injection + Weibull decay).
-    pub async fn build_memory_context(
-        &self,
-        query: &str,
-    ) -> (Vec<MemorySearchResult>, String) {
+    pub async fn build_memory_context(&self, query: &str) -> (Vec<MemorySearchResult>, String) {
         let memory_context = self
             .memory_injector
             .build_memory_context(query, &MemoryBudget::default())

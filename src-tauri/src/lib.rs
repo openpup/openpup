@@ -51,29 +51,29 @@ fn init_logging(workspace_root: &std::path::Path) {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-    let log_dir = workspace_root.join("logs");
-    let _ = std::fs::create_dir_all(&log_dir);
+        let log_dir = workspace_root.join("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
 
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "openpup.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        let file_appender = tracing_appender::rolling::daily(&log_dir, "openpup.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    #[cfg(debug_assertions)]
-    let writer = non_blocking.and(std::io::stderr);
-    #[cfg(not(debug_assertions))]
-    let writer = non_blocking;
+        #[cfg(debug_assertions)]
+        let writer = non_blocking.and(std::io::stderr);
+        #[cfg(not(debug_assertions))]
+        let writer = non_blocking;
 
-    let filter =
-        std::env::var("OPENPUP_LOG").unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
+        let filter =
+            std::env::var("OPENPUP_LOG").unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
-        .with_writer(writer)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .init();
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .with_writer(writer)
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_ids(false)
+            .init();
 
-    std::mem::forget(guard);
+        std::mem::forget(guard);
     }
 }
 
@@ -191,9 +191,7 @@ fn run_desktop() -> anyhow::Result<()> {
     init_logging(&workspace_root);
 
     let rt = Runtime::new()?;
-    let app = Arc::new(
-        rt.block_on(async { DesktopRuntimeFactory::build_app(None).await })?,
-    );
+    let app = Arc::new(rt.block_on(async { DesktopRuntimeFactory::build_app(None).await })?);
 
     let permission_checker = app.permissions.clone();
     let channel_manager_for_setup = app.channel_manager.clone();
@@ -286,9 +284,7 @@ fn run_mobile() -> anyhow::Result<()> {
     std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
 
     let rt = Runtime::new()?;
-    let app = Arc::new(rt.block_on(async {
-        build_mobile_app(workspace_root, None).await
-    })?);
+    let app = Arc::new(rt.block_on(async { build_mobile_app(workspace_root, None).await })?);
 
     let permission_checker = app.permissions.clone();
     let channel_manager_for_setup = app.channel_manager.clone();

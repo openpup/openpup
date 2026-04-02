@@ -163,7 +163,10 @@ impl CompactionEngine {
 
             // Keep first 200 chars + last 100 chars, replace middle with marker
             let head: String = content.chars().take(200).collect();
-            let tail: String = content.chars().skip(char_count.saturating_sub(100)).collect();
+            let tail: String = content
+                .chars()
+                .skip(char_count.saturating_sub(100))
+                .collect();
             let compacted = format!(
                 "{head}\n\n[… micro-compacted: {omitted} chars omitted …]\n\n{tail}",
                 omitted = char_count - 300
@@ -204,12 +207,11 @@ impl CompactionEngine {
     const COMPRESS_THRESHOLD: i64 = 30; // Lowered from 40 for more aggressive compaction
 
     async fn full_compact(&self, pup: &str) -> Result<CompactionResult> {
-        let max_row: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(id), 0) FROM conversations WHERE pup = ?",
-        )
-        .bind(pup)
-        .fetch_one(&self.pool)
-        .await?;
+        let max_row: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM conversations WHERE pup = ?")
+                .bind(pup)
+                .fetch_one(&self.pool)
+                .await?;
 
         let (existing_summary, covers_through): (String, i64) = sqlx::query_as(
             "SELECT COALESCE(summary, ''), COALESCE(covers_through_row, 0) FROM context_summaries WHERE pup = ?",
@@ -364,10 +366,7 @@ impl CompactionEngine {
             .join("\n");
 
         // Use the memory extractor to find and persist new facts
-        let _ = self
-            .extractor
-            .extract_and_resolve(&transcript, None)
-            .await;
+        let _ = self.extractor.extract_and_resolve(&transcript, None).await;
 
         debug!(
             "[compaction] persist_session_memories pup={pup}: extracted memories from {} rows",

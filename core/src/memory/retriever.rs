@@ -87,7 +87,9 @@ impl MemoryRetriever {
             let keywords: Vec<&str> = query.split_whitespace().collect();
             if keywords.len() > 1 {
                 let or_query = keywords.join(" OR ");
-                self.fts_search(&or_query, limit * 3).await.unwrap_or_default()
+                self.fts_search(&or_query, limit * 3)
+                    .await
+                    .unwrap_or_default()
             } else {
                 fts_res
             }

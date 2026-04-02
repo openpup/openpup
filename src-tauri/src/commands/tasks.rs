@@ -45,7 +45,11 @@ pub async fn create_task(
 
 #[tauri::command]
 pub async fn list_tasks(state: State<'_, AppState>, limit: i64) -> Result<Vec<TaskItem>, String> {
-    let rows = state.app.list_tasks(limit).await.map_err(|e| e.to_string())?;
+    let rows = state
+        .app
+        .list_tasks(limit)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(TaskItem::from).collect())
 }
 

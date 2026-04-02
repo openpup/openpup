@@ -71,7 +71,11 @@ fn load_pup_prompt_from_pups_md(pup_name: &str) -> Option<String> {
     }
 
     let text = lines.join("\n").trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Shared prompt builder used by all specialist pups.
@@ -82,11 +86,7 @@ fn load_pup_prompt_from_pups_md(pup_name: &str) -> Option<String> {
 ///   3. Hardcoded `default_prompt` compiled into the binary
 ///
 /// After resolving the base prompt, appends owner profile and relevant memories.
-pub fn build_prompt_with_template(
-    pup_name: &str,
-    default_prompt: &str,
-    task: &Task,
-) -> String {
+pub fn build_prompt_with_template(pup_name: &str, default_prompt: &str, task: &Task) -> String {
     // 1. Resolve base prompt: pup_configs.json > PUPS.md > hardcoded default
     let base = task
         .system_prompt_override

@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.12...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.13...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,26 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.13](https://github.com/openpup/openpup/compare/v0.1.12...v0.1.13) — 2026-04-02
+
+### Added
+- **Message actions** — add message-level actions (feedback, copy, artifact download).
+- **Signed Android build tooling** — add signing secret generation script and signed Android build workflow.
+
+### Changed
+- **Mobile/desktop runtime separation** — tighten platform capability boundaries and split runtime capabilities for safer behavior.
+- **Tauri command modularization** — refactor tauri commands/tools/state into clearer modules.
+- **Skill manifest convention** — adopt `.skill.toml` as the canonical skill manifest format.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.13`.
+
+### Fixed
+- **Mobile startup stability** — fix blank screen and resolve Android/iOS startup crashes via Tauri build/run split and hardened mobile paths.
+- **Android runtime hardening** — avoid desktop window APIs on mobile, improve startup error diagnostics, and disable file logging on mobile.
+- **Secure network layer** — switch Android reqwest TLS backend to rustls.
+- **Workspace root validation** — validate writable workspace roots before persisting runtime state.
 
 ---
 

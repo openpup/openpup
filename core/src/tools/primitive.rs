@@ -13,12 +13,14 @@ use openpup_capabilities::Capabilities;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::skills::registry::SkillRegistry;
 use super::risk::{assess_command_risk, format_risk_warning};
 use crate::memory::system::MemorySystem;
+use crate::skills::registry::SkillRegistry;
 
 // Re-export risk types for external consumers
-pub use super::risk::{CommandRiskLevel, assess_command_risk as assess_risk, format_risk_warning as format_risk};
+pub use super::risk::{
+    assess_command_risk as assess_risk, format_risk_warning as format_risk, CommandRiskLevel,
+};
 
 // ── Permission surface ────────────────────────────────────────────────────────
 
@@ -333,7 +335,10 @@ impl ToolRegistry {
                 // Dynamic risk assessment: block high-risk commands
                 let risk = assess_command_risk(cmd);
                 if let Some(warning) = format_risk_warning(cmd, risk) {
-                    debug!("[tool/shell_exec] BLOCKED high-risk command: {}", truncate_chars(cmd, 80));
+                    debug!(
+                        "[tool/shell_exec] BLOCKED high-risk command: {}",
+                        truncate_chars(cmd, 80)
+                    );
                     return Ok(warning);
                 }
                 self.shell_exec(cmd).await

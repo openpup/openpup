@@ -1,5 +1,4 @@
 /// File tool implementations for ToolRegistry.
-
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -46,7 +45,11 @@ impl ToolRegistry {
         ))
     }
 
-    pub(crate) async fn skill_list_resources(&self, skill_name: &str, limit: usize) -> Result<String> {
+    pub(crate) async fn skill_list_resources(
+        &self,
+        skill_name: &str,
+        limit: usize,
+    ) -> Result<String> {
         debug!("[tool/skill_list_resources] {} limit={}", skill_name, limit);
         let listing = self
             .skill_registry
@@ -55,7 +58,11 @@ impl ToolRegistry {
         Ok(self.dynamic_truncate(&listing))
     }
 
-    pub(crate) async fn skill_read_resource(&self, skill_name: &str, relpath: &str) -> Result<String> {
+    pub(crate) async fn skill_read_resource(
+        &self,
+        skill_name: &str,
+        relpath: &str,
+    ) -> Result<String> {
         let resolved = self
             .skill_registry
             .resolve_skill_resource_path(skill_name, relpath)

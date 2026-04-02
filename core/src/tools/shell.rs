@@ -1,5 +1,4 @@
 /// Shell tool implementations for ToolRegistry.
-
 use anyhow::{anyhow, Result};
 use openpup_capabilities::ExecRequest;
 use tracing::debug;
@@ -43,7 +42,9 @@ impl ToolRegistry {
     pub(crate) async fn shell_exec(&self, command: &str) -> Result<String> {
         debug!("[tool/shell_exec] $ {}", truncate_chars(command, 120));
         if !self.capabilities.process.is_supported() {
-            return Err(anyhow!("shell_exec is not supported by the current runtime"));
+            return Err(anyhow!(
+                "shell_exec is not supported by the current runtime"
+            ));
         }
         let output = self
             .capabilities
@@ -65,12 +66,18 @@ impl ToolRegistry {
         ))
     }
 
-    pub(crate) async fn sandbox_shell_exec(&self, command: &str, timeout_ms: u64) -> Result<String> {
+    pub(crate) async fn sandbox_shell_exec(
+        &self,
+        command: &str,
+        timeout_ms: u64,
+    ) -> Result<String> {
         Self::validate_sandbox_command(command)?;
 
         let timeout_ms = timeout_ms.clamp(1_000, 30_000);
         if !self.capabilities.process.is_supported() {
-            return Err(anyhow!("sandbox_shell_exec is not supported by the current runtime"));
+            return Err(anyhow!(
+                "sandbox_shell_exec is not supported by the current runtime"
+            ));
         }
         let output = self
             .capabilities

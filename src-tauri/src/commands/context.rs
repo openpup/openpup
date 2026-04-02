@@ -42,13 +42,21 @@ pub async fn get_pup_message_count(
     state: State<'_, AppState>,
     pup_key: String,
 ) -> Result<i64, String> {
-    state.app.pup_message_count(&pup_key).await.map_err(|e| e.to_string())
+    state
+        .app
+        .pup_message_count(&pup_key)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Clear all conversation history for a pup (context reset).
 #[tauri::command]
 pub async fn clear_pup_history(state: State<'_, AppState>, pup_key: String) -> Result<(), String> {
-    state.app.clear_pup_history(&pup_key).await.map_err(|e| e.to_string())
+    state
+        .app
+        .clear_pup_history(&pup_key)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Manually trigger context compression for a pup.
@@ -57,7 +65,11 @@ pub async fn compress_pup_context(
     state: State<'_, AppState>,
     pup_key: String,
 ) -> Result<(), String> {
-    state.app.compress_pup_context(&pup_key).await.map_err(|e| e.to_string())
+    state
+        .app
+        .compress_pup_context(&pup_key)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Compression status for a pup's context.

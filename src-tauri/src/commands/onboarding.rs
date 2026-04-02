@@ -60,7 +60,11 @@ pub async fn save_onboarding_data(
     // Seed long-term memory DB with the key facts from onboarding
     state
         .app
-        .add_memory(&format!("行为边界：{}", data.boundaries.trim()), "rule", 0.99)
+        .add_memory(
+            &format!("行为边界：{}", data.boundaries.trim()),
+            "rule",
+            0.99,
+        )
         .await;
     if !data.pain_points.trim().is_empty() {
         state

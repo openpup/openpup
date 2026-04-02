@@ -547,9 +547,8 @@ async fn run_chat(
 
 async fn ensure_local_runtime(runtime: &mut Option<HeadlessRuntime>) -> Result<HeadlessRuntime> {
     if runtime.is_none() {
-        *runtime = Some(
-            DesktopRuntimeFactory::build_headless(Some(Arc::new(StdioPermissionUi))).await?,
-        );
+        *runtime =
+            Some(DesktopRuntimeFactory::build_headless(Some(Arc::new(StdioPermissionUi))).await?);
     }
     runtime
         .clone()

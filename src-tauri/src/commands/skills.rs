@@ -30,7 +30,11 @@ pub async fn run_skill(
     name: String,
     input: String,
 ) -> Result<String, String> {
-    state.app.run_skill(&name, &input).await.map_err(|e| e.to_string())
+    state
+        .app
+        .run_skill(&name, &input)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ─── Skill run history ────────────────────────────────────────────────────────
@@ -84,5 +88,8 @@ pub async fn list_scheduled_jobs(
 
 #[tauri::command]
 pub async fn delete_scheduled_job(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.app.delete_scheduled_job(&id).map_err(|e| e.to_string())
+    state
+        .app
+        .delete_scheduled_job(&id)
+        .map_err(|e| e.to_string())
 }

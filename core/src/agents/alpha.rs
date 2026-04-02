@@ -460,7 +460,8 @@ impl AlphaPup {
         } else if let Some(mention) = self.router.extract_at_mention(msg).await {
             mention
         } else {
-            self.router.classify_intent(msg, &owner_summary, &classify_history)
+            self.router
+                .classify_intent(msg, &owner_summary, &classify_history)
                 .await
         };
         debug!("[alpha] do_stream: pup_key={pup_key:?}");
@@ -975,9 +976,7 @@ impl AlphaPup {
         let head: String = text.chars().take(head_budget).collect();
         let tail: String = text.chars().skip(count - tail_budget).collect();
         let omitted = count - head_budget - tail_budget;
-        format!(
-            "{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}"
-        )
+        format!("{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}")
     }
 
     async fn run_agent_with_tools(
@@ -1315,9 +1314,10 @@ impl AlphaPup {
                     match self.mcp_orchestrator.deferred_tool_schema(&requested).await {
                         Ok(schema) => {
                             // Inject the full tool so the LLM can call it in subsequent iterations
-                            if !available_tools.iter().any(|t| {
-                                t["function"]["name"].as_str() == Some(&requested)
-                            }) {
+                            if !available_tools
+                                .iter()
+                                .any(|t| t["function"]["name"].as_str() == Some(&requested))
+                            {
                                 available_tools.push(schema.clone());
                             }
                             format!(
@@ -1334,9 +1334,9 @@ impl AlphaPup {
                             .call_tool(&server, &tool, &tc.arguments)
                             .await
                             .map(|v| v.to_string())
-                            .unwrap_or_else(|e| Self::format_structured_error(
-                                &tc.name, &e.to_string(), true,
-                            )),
+                            .unwrap_or_else(|e| {
+                                Self::format_structured_error(&tc.name, &e.to_string(), true)
+                            }),
                         None => Self::format_structured_error(
                             &tc.name,
                             &format!("Unknown MCP tool: '{}'", tc.name),
@@ -1348,9 +1348,9 @@ impl AlphaPup {
                         .tools
                         .execute(&tc.name, &tc.arguments, &primitive_perms)
                         .await
-                        .unwrap_or_else(|e| Self::format_structured_error(
-                            &tc.name, &e.to_string(), true,
-                        ))
+                        .unwrap_or_else(|e| {
+                            Self::format_structured_error(&tc.name, &e.to_string(), true)
+                        })
                 };
 
                 // Priority 3: Dynamic tool result truncation proportional to context window.
@@ -1430,7 +1430,8 @@ impl AlphaPup {
         );
 
         let owner_summary = self
-            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut join_handles = Vec::new();
@@ -1913,7 +1914,8 @@ impl AlphaPup {
 
         // 7. Execute layers sequentially, pups within a layer in parallel
         let owner_summary = self
-            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut all_results: HashMap<String, String> = HashMap::new();
@@ -2270,7 +2272,8 @@ impl AlphaPup {
         });
 
         let owner_summary = self
-            .context_builder.get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .context_builder
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
         let mut all_results: Vec<(String, String)> = Vec::new();
@@ -2448,7 +2451,8 @@ impl AlphaPup {
         let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
         let classify_history = self.router.build_classify_history().await;
         let pup_key = self
-            .router.classify_intent(&msg, &owner_summary, &classify_history)
+            .router
+            .classify_intent(&msg, &owner_summary, &classify_history)
             .await;
 
         if let Some(pups_str) = pup_key.strip_prefix("channel:") {
@@ -2623,7 +2627,10 @@ impl AlphaPup {
             let engine = self.compaction_engine.clone();
             let pup_owned = pup_key.to_string();
             tokio::spawn(async move {
-                match engine.compact(&pup_owned, current_tokens, context_limit).await {
+                match engine
+                    .compact(&pup_owned, current_tokens, context_limit)
+                    .await
+                {
                     Ok(results) => {
                         for r in &results {
                             if r.estimated_tokens_saved > 0 {

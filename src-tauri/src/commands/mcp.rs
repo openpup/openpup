@@ -55,7 +55,11 @@ pub async fn add_mcp_server(
 
 #[tauri::command]
 pub async fn remove_mcp_server(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    state.app.remove_mcp_server(&name).await.map_err(|e| e.to_string())
+    state
+        .app
+        .remove_mcp_server(&name)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
