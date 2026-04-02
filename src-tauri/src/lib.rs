@@ -30,6 +30,24 @@ use tokio::runtime::Runtime;
 fn init_logging(workspace_root: &std::path::Path) {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let filter =
+            std::env::var("OPENPUP_LOG").unwrap_or_else(|_| "openpup_tauri=debug,warn".to_string());
+
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_ids(false)
+            .init();
+
+        return;
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
     let log_dir = workspace_root.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
 
@@ -53,6 +71,7 @@ fn init_logging(workspace_root: &std::path::Path) {
         .init();
 
     std::mem::forget(guard);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
