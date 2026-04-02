@@ -18,9 +18,8 @@ pub struct WeixinAccountData {
 }
 
 fn state_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".openpup")
+    crate::config::app_root()
+        .unwrap_or_else(|_| PathBuf::from("."))
         .join("weixin")
 }
 

@@ -30,6 +30,5 @@ base64 = "0.22"
 tracing = "0.1"
 petgraph = "0.6"
 async-trait = "0.1"
-libloading = "0.8"
 cron = "0.12"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }

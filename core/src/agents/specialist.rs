@@ -47,8 +47,7 @@ pub struct Task {
 /// Returns `None` if the file doesn't exist, the pup has no section, or the
 /// section is empty.
 fn load_pup_prompt_from_pups_md(pup_name: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
-    let path = home.join(".openpup").join("PUPS.md");
+    let path = crate::config::app_root().ok()?.join("PUPS.md");
     let content = std::fs::read_to_string(&path).ok()?;
 
     // Find `## {pup_name}` header (case-insensitive match on pup name)

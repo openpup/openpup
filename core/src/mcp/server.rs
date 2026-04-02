@@ -64,12 +64,13 @@ fn require_str<'a>(params: &'a Value, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("missing required param: {}", key))
 }
 
-/// Reject paths that escape the user's home directory.
+/// Reject paths that escape the application workspace root.
 fn safe_path(raw: &str) -> Result<PathBuf> {
+    let app_root = crate::config::app_root()?;
+
     // Expand leading ~
     let expanded = if raw.starts_with("~/") {
-        let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-        home.join(&raw[2..])
+        app_root.join(&raw[2..])
     } else {
         PathBuf::from(raw)
     };
@@ -87,11 +88,10 @@ fn safe_path(raw: &str) -> Result<PathBuf> {
 
     let resolved = resolved_parent.join(filename);
 
-    // Ensure the resolved path starts with the home directory
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-    if !resolved.starts_with(&home) {
+    // Ensure the resolved path stays within the app workspace root.
+    if !resolved.starts_with(&app_root) {
         bail!(
-            "path '{}' is outside the home directory — refusing for safety",
+            "path '{}' is outside the app workspace root — refusing for safety",
             resolved.display()
         );
     }
@@ -102,6 +102,9 @@ fn safe_path(raw: &str) -> Result<PathBuf> {
 /// Cross-platform browser opener — no shell injection risk since we pass the
 /// URL as a separate argument, not through a shell.
 fn open_url(url: &str) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    bail!("open_browser is not supported on mobile");
+
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(url).spawn()?;
 

@@ -24,8 +24,7 @@ const NONCE_LEN: usize = 12;
 // ── Keystore ──────────────────────────────────────────────────────────────────
 
 fn keystore_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("cannot determine home directory")?;
-    Ok(home.join(".openpup").join(".keystore"))
+    Ok(crate::config::app_root()?.join(".keystore"))
 }
 
 /// Load or create the 32-byte key at `~/.openpup/.keystore`.

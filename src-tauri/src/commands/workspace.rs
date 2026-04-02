@@ -6,12 +6,21 @@ use crate::workspace::backup::{export_workspace_default, import_workspace_from_p
 use super::AppState;
 
 #[tauri::command]
-pub async fn export_workspace() -> Result<String, String> {
+pub async fn export_workspace(state: State<'_, AppState>) -> Result<String, String> {
+    if state.is_mobile_runtime() {
+        return Err("workspace export is not supported on mobile yet".to_string());
+    }
     export_workspace_default().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn import_workspace(backup_path: String) -> Result<(), String> {
+pub async fn import_workspace(
+    state: State<'_, AppState>,
+    backup_path: String,
+) -> Result<(), String> {
+    if state.is_mobile_runtime() {
+        return Err("workspace import is not supported on mobile yet".to_string());
+    }
     import_workspace_from_path(&backup_path)
         .await
         .map_err(|e| e.to_string())
@@ -19,7 +28,10 @@ pub async fn import_workspace(backup_path: String) -> Result<(), String> {
 
 /// Open a URL in the system's default browser.
 #[tauri::command]
-pub fn open_url(url: String) -> Result<(), String> {
+pub fn open_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    if state.is_mobile_runtime() {
+        return Err("open_url is not supported on mobile yet".to_string());
+    }
     open::that(&url).map_err(|e| e.to_string())
 }
 

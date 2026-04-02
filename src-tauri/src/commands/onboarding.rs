@@ -48,10 +48,9 @@ pub async fn save_onboarding_data(
     {
         let mut cfg = crate::config::load();
         if cfg.skills.search_paths.is_empty() {
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            let default_skills_dir = home.join(".openpup").join("skills");
+            let default_skills_dir = state.app.workspace_root.join("skills");
             let _ = std::fs::create_dir_all(&default_skills_dir);
-            cfg.skills.search_paths = vec!["~/.openpup/skills/".to_string()];
+            cfg.skills.search_paths = vec![default_skills_dir.to_string_lossy().to_string()];
             if let Err(e) = crate::config::save(&cfg) {
                 warn!("failed to persist default skills path: {e}");
             }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use openpup_capabilities::Capabilities;
+use openpup_capabilities::{Capabilities, CapabilityProfile};
 
 use crate::agents::alpha::AlphaPup;
 use crate::agents::dev_pup::DevPup;
@@ -41,6 +41,17 @@ pub struct OpenPupApp {
 }
 
 impl OpenPupApp {
+    pub fn capability_profile(&self) -> CapabilityProfile {
+        self.capabilities.env.capability_profile()
+    }
+
+    pub fn is_mobile_runtime(&self) -> bool {
+        matches!(
+            self.capability_profile(),
+            CapabilityProfile::AndroidMobile | CapabilityProfile::IosRestricted
+        )
+    }
+
     pub fn llm_provider_name(&self) -> String {
         match self.alpha.llm_client.provider() {
             Provider::OpenAI => "openai",

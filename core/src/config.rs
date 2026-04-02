@@ -142,9 +142,16 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 
 // ── I/O ──────────────────────────────────────────────────────────────────────
 
-pub fn config_path() -> Result<PathBuf> {
+pub fn app_root() -> Result<PathBuf> {
+    if let Ok(root) = std::env::var("OPENPUP_APP_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
     let home = dirs::home_dir().context("cannot determine home directory")?;
-    Ok(home.join(".openpup").join("config.toml"))
+    Ok(home.join(".openpup"))
+}
+
+pub fn config_path() -> Result<PathBuf> {
+    Ok(app_root()?.join("config.toml"))
 }
 
 /// Load config from `~/.openpup/config.toml`.

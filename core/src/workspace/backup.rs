@@ -9,8 +9,7 @@ use tar::Builder;
 use walkdir::WalkDir;
 
 fn workspace_root() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-    Ok(home.join(".openpup"))
+    crate::config::app_root()
 }
 
 /// Export the current workspace at ~/.openpup into a tar.gz file
@@ -21,12 +20,14 @@ pub async fn export_workspace_default() -> Result<String> {
         return Err(anyhow!("workspace directory does not exist: {:?}", root));
     }
 
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-    let downloads = home.join("Downloads");
-    fs::create_dir_all(&downloads)?;
-
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
-    let target = downloads.join(format!("openpup-backup-{}.tar.gz", ts));
+    let target_dir = if let Some(home) = dirs::home_dir() {
+        home.join("Downloads")
+    } else {
+        root.join("exports")
+    };
+    fs::create_dir_all(&target_dir)?;
+    let target = target_dir.join(format!("openpup-backup-{}.tar.gz", ts));
 
     create_tar_gz(&root, &target)?;
 

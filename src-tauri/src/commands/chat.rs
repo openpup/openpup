@@ -23,9 +23,13 @@ pub async fn send_message(
         api_key.is_some()
     );
     if api_key.as_deref().unwrap_or("").trim().is_empty() {
+        let config_path = crate::config::config_path()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "the app config file".to_string());
         let _ = app_handle.emit(
       "stream_error",
-      "未配置 API Key。请编辑 ~/.openpup/config.toml，在 [llm] 下填写 api_key，然后重启应用。\n\n示例：\n[llm]\napi_key = \"sk-...\"\nmodel = \"gpt-4o\"",
+      format!("未配置 API Key。请编辑 {}，在 [llm] 下填写 api_key，然后重启应用。\n\n示例：\n[llm]\napi_key = \"sk-...\"\nmodel = \"gpt-4o\"", config_path),
     );
         return Ok(());
     }

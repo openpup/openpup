@@ -23,6 +23,10 @@ impl Deref for AppState {
 }
 
 impl AppState {
+    pub fn is_mobile_runtime(&self) -> bool {
+        self.app.is_mobile_runtime()
+    }
+
     pub async fn save_bridge_config(
         &self,
         config: crate::bridge::types::BridgeConfig,

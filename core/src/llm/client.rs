@@ -487,10 +487,14 @@ impl LlmClient {
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
             warn!("[llm] WARNING: empty response from model={model:?}");
+            let config_path = crate::config::config_path()
+                .ok()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "the app config file".to_string());
             return Err(anyhow!(
                 "LLM returned an empty response.\n\
          • Model: {model}\n\
-         • Verify the model name and api_key in ~/.openpup/config.toml"
+         • Verify the model name and api_key in {config_path}"
             ));
         }
 

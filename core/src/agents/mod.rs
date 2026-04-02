@@ -4,7 +4,6 @@ pub mod custom_pup;
 pub mod dev_pup;
 pub mod life_admin_pup;
 pub mod ops_pup;
-pub mod plugins;
 pub mod research_pup;
 pub mod router;
 pub mod specialist;

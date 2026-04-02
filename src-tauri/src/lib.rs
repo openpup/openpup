@@ -79,6 +79,7 @@ pub fn run() {
     let _ = dotenvy::dotenv();
 
     let workspace_root = platform_workspace_root().expect("cannot determine app workspace root");
+    std::env::set_var("OPENPUP_APP_ROOT", &workspace_root);
     init_logging(&workspace_root);
 
     let rt = Runtime::new().expect("failed to create tokio runtime");
