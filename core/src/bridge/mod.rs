@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::agents::alpha::AlphaPup;
 use crate::bridge::types::{
-    BridgeConfig, BridgeConnectionState, BridgeContext, BridgeStatusEvent, InboundMessage,
-    OutboundMessage, OutboundType, Platform,
+    BridgeConfig, BridgeConnectionState, BridgeContext, BridgeOutbox, BridgeStatusEvent,
+    InboundMessage, OutboundMessage, OutboundType, Platform,
 };
 
 use self::auth::OwnerAuth;
@@ -31,6 +31,7 @@ pub struct BridgeManager {
     alpha: Arc<AlphaPup>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     weixin_service: Arc<WeixinService>,
+    outbox: BridgeOutbox,
 }
 
 fn is_stop_request(text: &str) -> bool {
@@ -52,12 +53,14 @@ impl BridgeManager {
         config: BridgeConfig,
         alpha: Arc<AlphaPup>,
         weixin_service: Arc<WeixinService>,
+        outbox: BridgeOutbox,
     ) -> Self {
         Self {
             config: RwLock::new(config),
             alpha,
             tasks: Mutex::new(Vec::new()),
             weixin_service,
+            outbox,
         }
     }
 
@@ -146,6 +149,9 @@ impl BridgeManager {
         let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(128);
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<OutboundMessage>(256);
         let (status_tx, mut status_rx) = mpsc::channel::<BridgeStatusEvent>(32);
+
+        // Publish the outbound sender so tools (bridge_send) can use it.
+        *self.outbox.lock().await = Some(outbound_tx.clone());
         let mut outbound_routes: HashMap<Platform, mpsc::Sender<OutboundMessage>> = HashMap::new();
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 

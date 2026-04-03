@@ -38,6 +38,7 @@ pub struct OpenPupApp {
     pub skill_executor: Arc<SkillExecutor>,
     pub mcp_orchestrator: Arc<MCPOrchestrator>,
     pub channel_manager: Arc<ChannelManager>,
+    pub bridge_outbox: crate::bridge::types::BridgeOutbox,
 }
 
 impl OpenPupApp {
@@ -558,6 +559,9 @@ pub async fn build_app(
     skill_registry
         .register_builtin(include_str!("../../skills/task_manager.skill.toml"))
         .await;
+    skill_registry
+        .register_builtin(include_str!("../../skills/notify.skill.toml"))
+        .await;
 
     let cfg = crate::config::load_with_env();
     for search_path in &cfg.skills.search_paths {
@@ -584,11 +588,13 @@ pub async fn build_app(
         permissions.set_permission_ui(ui);
     }
 
+    let bridge_outbox = crate::bridge::types::BridgeOutbox::default();
     let tools = Arc::new(ToolRegistry::new(
         workspace_root.clone(),
         memory.clone(),
         skill_registry.clone(),
         capabilities.clone(),
+        bridge_outbox.clone(),
     ));
     tools.set_context_limit(crate::agents::alpha::infer_context_limit_for_model(
         &llm_client.model_name(),
@@ -634,5 +640,6 @@ pub async fn build_app(
         skill_executor,
         mcp_orchestrator,
         channel_manager,
+        bridge_outbox,
     })
 }

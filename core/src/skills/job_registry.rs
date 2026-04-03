@@ -38,6 +38,7 @@ pub struct ScheduledJob {
     pub schedule: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
     pub mode: JobMode,

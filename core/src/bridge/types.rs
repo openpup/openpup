@@ -1,5 +1,11 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+/// Shared slot for the bridge outbound sender.
+/// Created empty, filled by BridgeManager when it starts.
+pub type BridgeOutbox = Arc<Mutex<Option<mpsc::Sender<OutboundMessage>>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]

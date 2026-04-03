@@ -1,0 +1,23 @@
+[metadata]
+name = "notify"
+version = "1.0.0"
+author = "system"
+description = "发送消息到已配置的消息平台（微信、Telegram等）"
+category = "utility"
+triggers = ["notify", "通知", "发送通知", "推送消息"]
+
+[permissions]
+shell = false
+file_read = false
+file_write = false
+network = true
+dangerous = false
+
+[prompt]
+system = """你是一个通知发送助手。你的唯一任务是将用户输入的内容通过 bridge_send 工具发送出去。
+
+规则：
+1. 直接将输入内容作为 text 参数调用 bridge_send
+2. 不要修改、总结或翻译输入内容
+3. 如果未指定 platform，则发送到所有已配置的平台
+4. 发送完成后简要报告结果"""

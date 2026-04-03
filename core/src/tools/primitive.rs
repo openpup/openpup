@@ -14,6 +14,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::risk::{assess_command_risk, format_risk_warning};
+use crate::bridge::types::BridgeOutbox;
 use crate::memory::system::MemorySystem;
 use crate::skills::registry::SkillRegistry;
 
@@ -56,6 +57,8 @@ pub struct ToolRegistry {
     pub capabilities: Arc<Capabilities>,
     /// Context window limit in tokens — tool results are truncated proportionally.
     pub(crate) context_limit: std::sync::atomic::AtomicU64,
+    /// Shared bridge outbound sender (filled when bridge starts).
+    pub bridge_outbox: BridgeOutbox,
 }
 
 pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -68,6 +71,7 @@ impl ToolRegistry {
         memory: Arc<MemorySystem>,
         skill_registry: SkillRegistry,
         capabilities: Arc<Capabilities>,
+        bridge_outbox: BridgeOutbox,
     ) -> Self {
         Self {
             workspace_root,
@@ -75,6 +79,7 @@ impl ToolRegistry {
             skill_registry,
             capabilities,
             context_limit: std::sync::atomic::AtomicU64::new(128_000),
+            bridge_outbox,
         }
     }
 
@@ -248,6 +253,24 @@ impl ToolRegistry {
           }
         }
       }));
+        }
+
+        if perms.network {
+            tools.push(serde_json::json!({
+              "type": "function",
+              "function": {
+                "name": "bridge_send",
+                "description": "Send a text message to the owner via a configured messaging bridge (Telegram, Weixin, etc.). If platform is omitted, sends to all configured bridges.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "text": { "type": "string", "description": "Message text to send" },
+                    "platform": { "type": "string", "description": "Optional: 'telegram' or 'weixin'. Omit to send to all configured platforms." }
+                  },
+                  "required": ["text"]
+                }
+              }
+            }));
         }
 
         // Memory & knowledge tools are always available — they don't need a permission flag.
@@ -560,8 +583,65 @@ impl ToolRegistry {
                     .await?;
                 Ok("Memory stored.".to_string())
             }
+            "bridge_send" => {
+                if !perms.network {
+                    return Err(anyhow!(
+                        "bridge_send: permission denied (requires permissions.network = true)"
+                    ));
+                }
+                let text = args["text"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("bridge_send: missing 'text'"))?;
+                let platform_filter = args["platform"].as_str();
+                self.bridge_send(text, platform_filter).await
+            }
             other => Err(anyhow!("unknown tool: '{other}'")),
         }
+    }
+
+    async fn bridge_send(&self, text: &str, platform_filter: Option<&str>) -> Result<String> {
+        use crate::bridge::types::{OutboundMessage, OutboundType, Platform};
+
+        let tx = self
+            .bridge_outbox
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("bridge not running — no outbound channel available"))?;
+
+        let cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+
+        let mut targets: Vec<(Platform, String)> = Vec::new();
+        if let Some(tg) = &cfg.telegram {
+            targets.push((Platform::Telegram, tg.owner_user_id.clone()));
+        }
+        if let Some(wx) = &cfg.weixin {
+            targets.push((Platform::Weixin, wx.owner_user_id.clone()));
+        }
+
+        if let Some(filter) = platform_filter {
+            targets.retain(|(p, _)| p.as_str() == filter);
+        }
+
+        if targets.is_empty() {
+            return Ok("No matching bridge platform configured.".to_string());
+        }
+
+        let mut sent = Vec::new();
+        for (platform, chat_id) in &targets {
+            let _ = tx
+                .send(OutboundMessage {
+                    platform: platform.clone(),
+                    chat_id: chat_id.clone(),
+                    text: text.to_string(),
+                    reply_to_id: None,
+                    msg_type: OutboundType::Result,
+                })
+                .await;
+            sent.push(platform.as_str());
+        }
+
+        Ok(format!("Sent to: {}", sent.join(", ")))
     }
 
     // Tool implementations are in sibling modules: shell.rs, file.rs, network.rs

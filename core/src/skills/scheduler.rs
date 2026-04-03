@@ -5,7 +5,7 @@ use chrono::Utc;
 use futures_util::future::join_all;
 use uuid::Uuid;
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
@@ -68,6 +68,10 @@ impl SkillScheduler {
                         let executor = executor.clone();
                         let memory = memory.clone();
                         let job_events = events.clone();
+                        info!(
+                            "[scheduler] spawning job '{}' (schedule: '{}')",
+                            job.name, job.schedule
+                        );
                         tokio::spawn(async move {
                             run_job(job, &executor, &memory, job_events).await;
                         });

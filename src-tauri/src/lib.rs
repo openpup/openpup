@@ -209,6 +209,7 @@ fn run_desktop() -> anyhow::Result<()> {
         bridge_cfg,
         app.alpha.clone(),
         weixin_service,
+        app.bridge_outbox.clone(),
     ));
 
     let app_state = AppState {
@@ -302,6 +303,7 @@ fn run_mobile() -> anyhow::Result<()> {
         bridge_cfg,
         app.alpha.clone(),
         weixin_service,
+        app.bridge_outbox.clone(),
     ));
 
     let app_state = AppState {

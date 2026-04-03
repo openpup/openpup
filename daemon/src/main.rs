@@ -135,6 +135,7 @@ async fn serve() -> Result<()> {
         bridge_config,
         runtime.alpha.clone(),
         weixin_service,
+        runtime.app.bridge_outbox.clone(),
     ));
     bridge_manager.clone().start();
 
