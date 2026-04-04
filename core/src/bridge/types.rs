@@ -14,6 +14,7 @@ pub enum Platform {
     Discord,
     Slack,
     Weixin,
+    QQBot,
 }
 
 impl Platform {
@@ -23,6 +24,7 @@ impl Platform {
             Platform::Discord => "discord",
             Platform::Slack => "slack",
             Platform::Weixin => "weixin",
+            Platform::QQBot => "qqbot",
         }
     }
 }
@@ -106,6 +108,7 @@ pub struct BridgeConfig {
     pub discord: Option<DiscordConfig>,
     pub slack: Option<SlackConfig>,
     pub weixin: Option<WeixinConfig>,
+    pub qqbot: Option<QQBotConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,4 +151,12 @@ pub struct WeixinConfig {
     pub account_id: Option<String>,
     #[serde(default)]
     pub route_tag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QQBotConfig {
+    pub app_id: String,
+    pub client_secret: String,
+    pub owner_user_id: String,
+    pub allowed_chats: Vec<String>,
 }

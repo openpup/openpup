@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
 import { formatMonthDayTime } from '../utils/locale';
 
-type PlatformKey = 'telegram' | 'discord' | 'slack' | 'weixin';
+type PlatformKey = 'telegram' | 'discord' | 'slack' | 'weixin' | 'qqbot';
 type PlatformStatus = 'unconfigured' | 'connecting' | 'connected' | 'error';
 
 interface TelegramConfig {
@@ -38,11 +38,19 @@ interface WeixinConfig {
   route_tag?: string | null;
 }
 
+interface QQBotConfig {
+  app_id: string;
+  client_secret: string;
+  owner_user_id: string;
+  allowed_chats: string[];
+}
+
 interface BridgeConfig {
   telegram?: TelegramConfig | null;
   discord?: DiscordConfig | null;
   slack?: SlackConfig | null;
   weixin?: WeixinConfig | null;
+  qqbot?: QQBotConfig | null;
 }
 
 interface BridgeConnectionStatus {
@@ -99,6 +107,10 @@ interface FormState {
   weixinProxyUrl: string;
   weixinAccountId: string;
   weixinRouteTag: string;
+  qqbotAppId: string;
+  qqbotClientSecret: string;
+  qqbotOwnerUserId: string;
+  qqbotAllowedChats: string;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -254,6 +266,10 @@ export const BridgeSettings: React.FC = () => {
     weixinProxyUrl: '',
     weixinAccountId: '',
     weixinRouteTag: '',
+    qqbotAppId: '',
+    qqbotClientSecret: '',
+    qqbotOwnerUserId: '',
+    qqbotAllowedChats: '',
   });
   const [statuses, setStatuses] = useState<BridgeConnectionStatus[]>([]);
   const [weixinAccounts, setWeixinAccounts] = useState<StoredWeixinAccount[]>([]);
@@ -297,6 +313,10 @@ export const BridgeSettings: React.FC = () => {
         weixinProxyUrl: cfg.weixin?.proxy_url ?? '',
         weixinAccountId: cfg.weixin?.account_id ?? '',
         weixinRouteTag: cfg.weixin?.route_tag ?? '',
+        qqbotAppId: cfg.qqbot?.app_id ?? '',
+        qqbotClientSecret: cfg.qqbot?.client_secret ?? '',
+        qqbotOwnerUserId: cfg.qqbot?.owner_user_id ?? '',
+        qqbotAllowedChats: listToText(cfg.qqbot?.allowed_chats),
       });
       setStatuses(statusList);
       setWeixinAccounts(accountList);
@@ -478,6 +498,12 @@ export const BridgeSettings: React.FC = () => {
             account_id: normalizeOptional(form.weixinAccountId),
             route_tag: normalizeOptional(form.weixinRouteTag),
           } : null,
+          qqbot: form.qqbotAppId.trim() ? {
+            app_id: form.qqbotAppId.trim(),
+            client_secret: form.qqbotClientSecret.trim(),
+            owner_user_id: form.qqbotOwnerUserId.trim(),
+            allowed_chats: textToList(form.qqbotAllowedChats),
+          } : null,
         },
       });
       setMessage(t('bridge_saved', lang));
@@ -574,13 +600,13 @@ export const BridgeSettings: React.FC = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-        {(['telegram', 'discord', 'slack', 'weixin'] as PlatformKey[]).map((platform) => {
+        {(['telegram', 'discord', 'slack', 'weixin', 'qqbot'] as PlatformKey[]).map((platform) => {
           const status = statusMap[platform];
           return (
             <div key={platform} style={{ ...cardStyle, padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                 <span style={{ width: 9, height: 9, borderRadius: '50%', background: statusMeta(status, lang).dot, flexShrink: 0 }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', textTransform: 'capitalize' }}>{platform}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', textTransform: 'capitalize' }}>{platform === 'qqbot' ? 'QQ Bot' : platform}</span>
               </div>
               <div style={{ fontSize: 12, color: statusMeta(status, lang).text, fontWeight: 600 }}>{statusMeta(status, lang).label}</div>
               <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
@@ -896,6 +922,41 @@ export const BridgeSettings: React.FC = () => {
                 </div>
               )}
             </div>
+          </>,
+          false,
+        )}
+
+        {renderBridgeCard(
+          'qqbot',
+          'QQ Bot',
+          t('bridge_qqbot_desc', lang),
+          '',
+          <>
+            <BridgeField
+              label="App ID"
+              value={form.qqbotAppId}
+              placeholder="QQ Bot App ID"
+              onChange={(value) => setForm((prev) => ({ ...prev, qqbotAppId: value }))}
+            />
+            <BridgeField
+              label="Client Secret"
+              value={form.qqbotClientSecret}
+              placeholder="QQ Bot Client Secret"
+              type="password"
+              onChange={(value) => setForm((prev) => ({ ...prev, qqbotClientSecret: value }))}
+            />
+            <BridgeField
+              label="Owner User ID"
+              value={form.qqbotOwnerUserId}
+              placeholder="QQ Bot owner user openid"
+              onChange={(value) => setForm((prev) => ({ ...prev, qqbotOwnerUserId: value }))}
+            />
+            <BridgeField
+              label="Allowed Chats"
+              value={form.qqbotAllowedChats}
+              placeholder="c2c:xxx, group:xxx, channel:xxx"
+              onChange={(value) => setForm((prev) => ({ ...prev, qqbotAllowedChats: value }))}
+            />
           </>,
           false,
         )}

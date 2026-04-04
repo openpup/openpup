@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tokio::sync::{mpsc, RwLock};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::bridge::types::{
@@ -208,13 +208,17 @@ impl WeixinBridge {
 
     pub async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         let context_token = self.contexts.read().await.get(&msg.chat_id).cloned();
-        let context_token = context_token
-            .as_deref()
-            .ok_or_else(|| anyhow!("missing context_token for weixin peer `{}`", msg.chat_id))?;
+        let Some(context_token) = context_token else {
+            warn!(
+                "[weixin] skipping send to `{}`: no context_token yet (peer must send a message first)",
+                msg.chat_id
+            );
+            return Ok(());
+        };
         let body = build_text_message(
             &msg.chat_id,
             &msg.text,
-            Some(context_token),
+            Some(&context_token),
             Uuid::new_v4().to_string(),
         );
         debug!("[weixin] send to {}: {} chars", msg.chat_id, msg.text.len());

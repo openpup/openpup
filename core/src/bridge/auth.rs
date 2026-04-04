@@ -1,5 +1,6 @@
 use super::types::{BridgeConfig, InboundMessage, Platform};
 use anyhow::{bail, Result};
+use tracing::warn;
 
 pub struct OwnerAuth {
     config: BridgeConfig,
@@ -65,6 +66,28 @@ impl OwnerAuth {
                 }
                 if !cfg.allowed_users.contains(&msg.chat_id) {
                     bail!("user_id not in allowlist");
+                }
+                Ok(())
+            }
+            Platform::QQBot => {
+                let cfg = self
+                    .config
+                    .qqbot
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("QQBot not configured"))?;
+                if cfg.owner_user_id.is_empty() {
+                    warn!(
+                        "[qqbot] owner_user_id is empty — allowing message through. \
+                         Set owner_user_id to \"{}\" and allowed_chats to include \"{}\" to lock down access.",
+                        msg.user_id, msg.chat_id,
+                    );
+                    return Ok(());
+                }
+                if msg.user_id != cfg.owner_user_id {
+                    bail!("non-owner message rejected");
+                }
+                if !cfg.allowed_chats.contains(&msg.chat_id) {
+                    bail!("chat_id not in allowlist");
                 }
                 Ok(())
             }

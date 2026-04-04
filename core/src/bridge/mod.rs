@@ -14,6 +14,7 @@ use crate::bridge::types::{
 };
 
 use self::auth::OwnerAuth;
+use self::qqbot::QQBotBridge;
 use self::telegram::TelegramBridge;
 use self::weixin::{WeixinBridge, WeixinService};
 
@@ -21,6 +22,7 @@ pub mod auth;
 pub mod control;
 pub mod discord;
 pub mod formatter;
+pub mod qqbot;
 pub mod slack;
 pub mod telegram;
 pub mod types;
@@ -46,6 +48,7 @@ fn is_enabled_config(config: &BridgeConfig) -> bool {
         || config.discord.is_some()
         || config.slack.is_some()
         || config.weixin.is_some()
+        || config.qqbot.is_some()
 }
 
 impl BridgeManager {
@@ -120,12 +123,14 @@ impl BridgeManager {
             Platform::Discord,
             Platform::Slack,
             Platform::Weixin,
+            Platform::QQBot,
         ] {
             let enabled = match platform {
                 Platform::Telegram => config.telegram.is_some(),
                 Platform::Discord => config.discord.is_some(),
                 Platform::Slack => config.slack.is_some(),
                 Platform::Weixin => config.weixin.is_some(),
+                Platform::QQBot => config.qqbot.is_some(),
             };
             let status = if enabled {
                 BridgeConnectionState::Connecting
@@ -275,6 +280,66 @@ impl BridgeManager {
             }));
         }
 
+        if let Some(qq_cfg) = config.qqbot.clone() {
+            let tx = inbound_tx.clone();
+            let status_sender = status_tx.clone();
+            let bridge = QQBotBridge::new(qq_cfg, tx, Some(status_sender.clone()));
+            let alpha = self.alpha.clone();
+
+            let (qq_out_tx, mut qq_out_rx) = mpsc::channel::<OutboundMessage>(64);
+            outbound_routes.insert(Platform::QQBot, qq_out_tx);
+
+            let alpha_for_sender = alpha.clone();
+            let sender = bridge.clone();
+            handles.push(tokio::spawn(async move {
+                while let Some(msg) = qq_out_rx.recv().await {
+                    if let Err(e) = sender.send(&msg).await {
+                        let _ = alpha_for_sender
+                            .memory
+                            .update_bridge_connection(
+                                Platform::QQBot.as_str(),
+                                &BridgeConnectionState::Error,
+                                false,
+                                None,
+                                Some(&e.to_string()),
+                            )
+                            .await;
+                        warn!("[qqbot] send error: {e}");
+                    } else {
+                        let _ = alpha_for_sender
+                            .memory
+                            .record_external_outbound(&Uuid::new_v4().to_string(), &msg)
+                            .await;
+                        let _ = alpha_for_sender
+                            .memory
+                            .update_bridge_connection(
+                                Platform::QQBot.as_str(),
+                                &BridgeConnectionState::Connected,
+                                true,
+                                Some(chrono::Utc::now().timestamp()),
+                                None,
+                            )
+                            .await;
+                    }
+                }
+            }));
+
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = bridge.start_polling().await {
+                    let _ = status_sender
+                        .send(BridgeStatusEvent {
+                            platform: Platform::QQBot,
+                            status: BridgeConnectionState::Error,
+                            connected: false,
+                            last_seen: None,
+                            error_msg: Some(e.to_string()),
+                        })
+                        .await;
+                    warn!("[qqbot] polling stopped: {e}");
+                }
+            }));
+        }
+
         handles.push(tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
                 if let Some(route_tx) = outbound_routes.get(&msg.platform) {
@@ -321,7 +386,13 @@ impl BridgeManager {
 
                 let auth = OwnerAuth::new(manager.current_config());
                 if let Err(e) = auth.verify(&inbound) {
-                    warn!("[bridge] rejected message: {e}");
+                    warn!(
+                        "[bridge] rejected message from {}:{} (user_id={}, chat_id={}): {e}",
+                        inbound.platform.as_str(),
+                        inbound.message_id,
+                        inbound.user_id,
+                        inbound.chat_id,
+                    );
                     continue;
                 }
 

@@ -618,6 +618,9 @@ impl ToolRegistry {
         if let Some(wx) = &cfg.weixin {
             targets.push((Platform::Weixin, wx.owner_user_id.clone()));
         }
+        if let Some(qq) = &cfg.qqbot {
+            targets.push((Platform::QQBot, format!("c2c:{}", qq.owner_user_id)));
+        }
 
         if let Some(filter) = platform_filter {
             targets.retain(|(p, _)| p.as_str() == filter);
