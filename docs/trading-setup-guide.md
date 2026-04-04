@@ -2,7 +2,25 @@
 
 本文档包含接入 3 个 MCP Server（intel / risk / exec）后，OpenPup 侧所需的全部配置文件内容。
 
-MCP Server 的实现详见 [openpup-mcp/finance](https://github.com/openpup/openpup-mcp/tree/main/finance)。
+MCP Server 的实现详见 [openpup-mcp/finance](https://github.com/openpup/openpup-mcp/tree/main/finance)（暂未开源）。
+
+> 在 MCP Server 就绪之前，可使用东方财富提供的**妙想 Skill** 作为平替方案：
+>
+> | MCP Tool | 妙想 Skill 替代 | 调用方式 |
+> |----------|-----------------|---------|
+> | `mcp__intel__search_news` | mx-search | `@mx-search 贵州茅台最新研报` |
+> | `mcp__intel__query_data` | mx-data | `@mx-data 东方财富最新价` |
+> | `mcp__intel__screen_stocks` | mx-xuangu | `@mx-xuangu 市盈率小于20的A股` |
+> | `mcp__intel__get_watchlist` / `update_watchlist` | mx-zixuan | `@mx-zixuan query` |
+> | `mcp__exec__place_order` / `get_positions` 等 | mx-moni | `@mx-moni 我的持仓` |
+> | `mcp__risk__*` | 无（需自建） | risk_mcp 无妙想替代，需独立实现 |
+>
+> 妙想 Skill 通过 shell 调用 Python 脚本、以文件形式输出结果，与 MCP 的结构化 JSON 返回有差异。主要局限：
+> - 无法被 DAG 流水线自动串联（Skill 输出是文件而非 agent 间传递的上下文）
+> - 无法按 agent 做工具权限隔离（所有 pup 共享 shell 权限）
+> - 风控层（risk_mcp）无妙想对应，需独立实现后才能启用完整链路
+>
+> 因此妙想 Skill 适合**单 agent 手动验证**阶段，完整的多 agent 自动化流水线仍需部署 MCP Server。
 
 ---
 
@@ -576,7 +594,7 @@ mkdir -p ~/.openpup/trading/logs
 
 ### 第三步：部署 MCP Server
 10. 编辑 `~/.openpup/mcp_servers.json`，注册 3 个 MCP Server（见第一节）
-11. 按照 [openpup-mcp/finance](https://github.com/openpup/openpup-mcp/tree/main/finance) 部署 intel / risk / exec 三个 MCP Server
+11. 部署 intel / risk / exec 三个 MCP Server（openpup-mcp/finance 开源后直接使用；开源前可先用妙想 Skill 手动验证单个 agent）
 
 ### 第四步：启动并验证
 12. 启动 3 个 MCP Server（intel:9001, risk:9002, exec:9003）
