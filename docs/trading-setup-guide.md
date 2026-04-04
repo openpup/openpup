@@ -2,6 +2,8 @@
 
 本文档包含接入 3 个 MCP Server（intel / risk / exec）后，OpenPup 侧所需的全部配置文件内容。
 
+MCP Server 的实现详见 [openpup-mcp/finance](https://github.com/openpup/openpup-mcp/tree/main/finance)。
+
 ---
 
 ## 一、mcp_servers.json
@@ -572,22 +574,23 @@ mkdir -p ~/.openpup/trading/logs
 8. 创建 `~/.openpup/skills/watchlist_update.skill.toml`（见 5.4）
 9. 创建 `~/.openpup/skills/emergency_stop.skill.toml`（见 5.5）
 
-### 第三步：注册 MCP Server
+### 第三步：部署 MCP Server
 10. 编辑 `~/.openpup/mcp_servers.json`，注册 3 个 MCP Server（见第一节）
+11. 按照 [openpup-mcp/finance](https://github.com/openpup/openpup-mcp/tree/main/finance) 部署 intel / risk / exec 三个 MCP Server
 
 ### 第四步：启动并验证
-11. 启动 3 个 MCP Server（intel:9001, risk:9002, exec:9003）
-12. 启动 OpenPup daemon：`openpup daemon`
-13. 手动测试单个 pup：`@researcher 分析今日热点`
-14. 手动测试完整流水线：说 `盘前扫描`
-15. 手动测试紧急止损：说 `紧急止损`
-16. 手动测试复盘：说 `收盘复盘`
+12. 启动 3 个 MCP Server（intel:9001, risk:9002, exec:9003）
+13. 启动 OpenPup daemon：`openpup daemon`
+14. 手动测试单个 pup：`@researcher 分析今日热点`
+15. 手动测试完整流水线：说 `盘前扫描`
+16. 手动测试紧急止损：说 `紧急止损`
+17. 手动测试复盘：说 `收盘复盘`
 
 ### 第五步：启用自动调度
-17. 编辑 `~/.openpup/scheduled_jobs.json`，配置定时任务（见第六节）
-18. 确认 daemon 正在运行，调度器会自动按 cron 触发
+18. 编辑 `~/.openpup/scheduled_jobs.json`，配置定时任务（见第六节）
+19. 确认 daemon 正在运行，调度器会自动按 cron 触发
 
 ### 第六步：观察与迭代
-19. 观察 2-3 个交易日的运行情况
-20. 根据复盘报告调整 pup prompt 和风控参数
-21. 确认稳定后，可考虑将 execution_mode 从 leashed 改为 freerun（小仓位）
+20. 观察 2-3 个交易日的运行情况
+21. 根据复盘报告调整 pup prompt 和风控参数
+22. 确认稳定后，可考虑将 execution_mode 从 leashed 改为 freerun（小仓位）
