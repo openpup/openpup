@@ -25,6 +25,10 @@
 Ming Dynasty
 <img src="openpup-ming.png" width="860" alt="Pack Channel collaboration interface">
 [openpup-backup-Ming.zip](./openpup-backup-Ming.zip)
+
+AI Trading
+<img src="openpup-trading.png" width="860" alt="Pack Channel collaboration interface">
+[openpup-backup-Trading.zip](./openpup-backup-Trading.zip)
 </div>
 
 ---

@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.13...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.16...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,24 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.16](https://github.com/openpup/openpup/compare/v0.1.13...v0.1.16) — 2026-04-10
+
+### Added
+- **pup_to_pup delegation** — pups can synchronously delegate sub-tasks to other pups during their tool loop, with recursion depth limit (max 2) and full context propagation (owner summary, shared memories, tool permissions).
+- **QQ Bot bridge** — new bridge platform support for QQ Bot.
+- **Bridge notification skill** — proactive notifications via bridge platforms.
+
+### Fixed
+- **Pack channel memory injection** — pups in pack channels now receive shared memories (rules + semantic retrieval); previously `relevant_memories` was always empty.
+- **Bridge result truncation** — replaced misleading 800-char truncation ("full result saved locally") with smart segmented delivery (≤3800 chars per segment, split at paragraph/line boundaries with `[1/N]` indicators).
+- **Delegated pup activity visibility** — tool calls from pup_to_pup delegated pups are now forwarded to the UI activity stream instead of being silently swallowed.
+
+### Docs
+- A-share trading system OpenPup setup guide.
+- MCP server implementation reference for openpup-mcp/finance.
 
 ---
 

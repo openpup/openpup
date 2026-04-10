@@ -479,14 +479,14 @@ const AppInner: React.FC = () => {
     if (!permissionRequest) return;
     const req = permissionRequest;
     setPermissionRequest(null);
-    await invoke('approve_permission', { request_id: req.request_id, skill_name: req.skill_name, remember }).catch(() => {});
+    await invoke('approve_permission', { requestId: req.request_id, skillName: req.skill_name, remember }).catch(() => {});
   };
 
   const handleDeny = async () => {
     if (!permissionRequest) return;
     const id = permissionRequest.request_id;
     setPermissionRequest(null);
-    await invoke('deny_permission', { request_id: id }).catch(() => {});
+    await invoke('deny_permission', { requestId: id }).catch(() => {});
   };
 
   const send = async () => {
@@ -539,7 +539,7 @@ const AppInner: React.FC = () => {
   const importWorkspace = async () => {
     if (!importPath.trim()) { setSettingsErr(t('settings_path_required', lang)); return; }
     setImporting(true); setSettingsErr(null); setSettingsMsg(null);
-    try { await invoke('import_workspace', { backup_path: importPath.trim() }); setSettingsMsg(t('settings_import_success', lang)); }
+    try { await invoke('import_workspace', { backupPath: importPath.trim() }); setSettingsMsg(t('settings_import_success', lang)); }
     catch (e: unknown) { setSettingsErr(String(e)); }
     finally { setImporting(false); }
   };
