@@ -24,6 +24,17 @@ OpenPup asks: **"What kind of person are you?"**
 
 Your `OWNER.md` is the core — a portrait you write about yourself, read by every pup on every message. Conversations, preferences, and habits accumulate into a **local memory** that no cloud service can replicate or take away.
 
+### Why OpenPup?
+
+- **Owner-centric, not prompt-centric** — Your identity (`OWNER.md`) shapes every interaction. The longer you use it, the better it understands you.
+- **Real multi-agent collaboration** — Not just routing to one agent. Pups delegate to each other mid-task (`pup_to_pup`), share memories, and run DAG-based pack channels with review workflows.
+- **100% local, 100% yours** — All data in `~/.openpup/`. No cloud lock-in. Export your entire workspace as a zip and restore it anywhere.
+- **Bring your own model** — OpenAI, Ollama, any OpenAI-compatible API. Switch providers with one config change.
+- **Desktop + CLI + Mobile + Bridge** — Same brain across Tauri desktop app, headless CLI, Android/iOS, and Telegram/WeChat/QQ/Discord bridges.
+- **Extensible** — TOML skill chains, MCP tool servers, native Rust plugins. Grow the system without forking.
+
+### The Team
+
 A team of specialized "pups" handles your requests:
 
 | Pup | Role |
@@ -34,6 +45,8 @@ A team of specialized "pups" handles your requests:
 | Ops | DevOps, servers, deployments, infrastructure |
 | Research | Information gathering, summarization, analysis |
 | Life Admin | Scheduling, planning, personal organization |
+
+Pups can **delegate to each other** during execution — Writer can ask Dev to check an API signature, Dev can ask Research to look up documentation — all within a single conversation turn.
 
 Everything lives in `~/.openpup/` — plain files you can read, edit, and back up.
 
@@ -74,14 +87,22 @@ Core: 7 pre-built autonomous capability packages ("Hands") — lead generation, 
 ## Features
 
 - **Streaming chat** with intelligent multi-agent routing
-- **Long-term memory** — automatically extracts facts about you every 5 messages; semantic dedup prevents noise
+- **Long-term memory** — automatically extracts facts, preferences, and rules every 5 messages; Weibull-decay weighted retrieval favors recent memories without forgetting; semantic dedup prevents noise. Long-term memories are shared globally; conversation history is per-pup isolated
+- **Rules system** — rules in `RULES.md` are force-injected into every conversation, ensuring pups always respect your boundaries and preferences
+- **Knowledge base** — import documents (PDF/TXT/MD) with automatic chunking and indexing; relevant chunks are semantically retrieved and injected into context, grounding pup answers in your private knowledge
+- **Token budget management** — real-time per-pup context token tracking; auto-trims history at 85% capacity; tool results dynamically truncated proportional to context window; MCP schemas deferred when tool count exceeds 30, saving tokens
+- **Multi-layer context compaction** — three pressure levels (micro/full/persist): light pressure summarizes old turns, heavy pressure extracts key memories to long-term storage and resets context, keeping long conversations coherent
 - **Skills** — installable prompt-chain automations (TOML, [ClaWHub](https://clawhub.ai) compatible)
 - **MCP support** — connect external tools via Model Context Protocol (streamable HTTP, rmcp)
+- **Pack Channel** — DAG-based multi-pup collaboration with parallel execution, dependency injection, and owner review workflow
+- **Pup-to-pup delegation** — pups call each other mid-task for cross-domain expertise
+- **Bridge platforms** — Telegram, WeChat, QQ Bot, Discord
 - **Leashed / FreeRun modes** — confirm every action, or let pups act autonomously
 - **Permission system** — risk-tiered (high/medium/low) with optional trust for recurring actions
 - **Task tracker** — create and track tasks with lifecycle (pending → in_progress → done/failed)
-- **CLI** — a headless OpenPup runtime that shares the same config, memory, skills, MCP, and Alpha routing stack
-- **Workspace backup** — export/import your entire `~/.openpup/` as a tarball
+- **CLI + Daemon** — headless runtime with persistent daemon for bridges, scheduler, and pack channels
+- **Mobile** — Android and iOS via Tauri mobile, sharing the same core
+- **Workspace backup** — export/import your entire `~/.openpup/` as a zip
 - **Plugin API** — write custom pups as native `.dylib`/`.so`/`.dll` plugins
 - **Themes** — GitHub-style dark and light modes
 
