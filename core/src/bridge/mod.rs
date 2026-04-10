@@ -488,15 +488,22 @@ impl BridgeManager {
                         .await
                     {
                         Ok(result) => {
-                            let _ = out_tx
-                                .send(OutboundMessage {
-                                    platform,
-                                    chat_id,
-                                    text: formatter::format_result(&result),
-                                    reply_to_id: Some(msg_id),
-                                    msg_type: OutboundType::Result,
-                                })
-                                .await;
+                            let segments = formatter::format_result(&result);
+                            for (i, seg) in segments.into_iter().enumerate() {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform: platform.clone(),
+                                        chat_id: chat_id.clone(),
+                                        text: seg,
+                                        reply_to_id: if i == 0 {
+                                            Some(msg_id.clone())
+                                        } else {
+                                            None
+                                        },
+                                        msg_type: OutboundType::Result,
+                                    })
+                                    .await;
+                            }
                         }
                         Err(e) => {
                             let _ = out_tx

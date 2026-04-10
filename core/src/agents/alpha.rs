@@ -2719,12 +2719,16 @@ impl AlphaPup {
             .await
             .map(|c| c.system_prompt_override);
 
+        // Inject shared memories (rules + semantic) into channel pup context
+        let (_, memories_str) = self.context_builder.build_memory_context(msg).await;
+        let relevant_memories = ContextBuilder::format_memories_for_prompt(&memories_str);
+
         let task = Task {
             id: Uuid::new_v4().to_string(),
             intent: msg.to_string(),
             context: vec![],
             owner_context: owner_summary.to_string(),
-            relevant_memories: vec![],
+            relevant_memories,
             system_prompt_override: override_prompt.filter(|s| !s.is_empty()),
             assigned_pup: Some(pup_key.to_string()),
             status: TaskStatus::Pending,
