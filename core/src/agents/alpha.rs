@@ -1327,7 +1327,7 @@ impl AlphaPup {
                             let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
                             let owner_ctx = self.context_builder.get_owner_summary(&owner_md).await;
                             self.delegation_depth.fetch_add(1, Ordering::Relaxed);
-                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx).await;
+                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx, &on_activity).await;
                             self.delegation_depth.fetch_sub(1, Ordering::Relaxed);
                             match result {
                                 Ok(text) => format!("[{target} 回复]\n{text}"),
@@ -1525,7 +1525,7 @@ impl AlphaPup {
             let owner_ctx = owner_summary.clone();
             let handle = tokio::spawn(async move {
                 let result = self_clone
-                    .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx)
+                    .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx, &|_, _| {})
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 (pup_key_owned, result)
@@ -2441,7 +2441,7 @@ impl AlphaPup {
                     };
 
                     let result = self_clone
-                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx)
+                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx, &|_, _| {})
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
 
@@ -2569,7 +2569,7 @@ impl AlphaPup {
         // Single pup path
         if self.resolve_pup(&pup_key).await.is_ok() {
             let reply = self
-                .run_pup_for_channel(&pup_key, &msg, &owner_summary)
+                .run_pup_for_channel(&pup_key, &msg, &owner_summary, &|_, _| {})
                 .await?;
             self.record_pup_context_tokens_async(&pup_key).await;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
@@ -2746,7 +2746,7 @@ impl AlphaPup {
                 let o = owner_summary.clone();
                 tokio::spawn(async move {
                     let result = s
-                        .run_pup_for_channel(&k, &m, &o)
+                        .run_pup_for_channel(&k, &m, &o, &|_, _| {})
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
                     (k, result)
@@ -2769,6 +2769,7 @@ impl AlphaPup {
         pup_key: &'a str,
         msg: &'a str,
         owner_summary: &'a str,
+        on_activity: &'a (dyn Fn(String, String) + Send + Sync),
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
         Box::pin(async move {
             match self
@@ -2777,7 +2778,7 @@ impl AlphaPup {
                     msg,
                     owner_summary,
                     None,
-                    |_kind, _label| {},
+                    |kind, label| on_activity(kind, label),
                 )
                 .await?
             {
