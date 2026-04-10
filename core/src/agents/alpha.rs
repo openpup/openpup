@@ -211,6 +211,8 @@ pub struct AlphaPup {
     router: Arc<Router>,
     /// Context assembly: owner summary caching, per-pup history, memory injection.
     context_builder: Arc<ContextBuilder>,
+    /// Current pup_to_pup delegation nesting depth (shared across concurrent calls).
+    delegation_depth: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl AlphaPup {
@@ -287,6 +289,7 @@ impl AlphaPup {
             compaction_engine,
             router,
             context_builder,
+            delegation_depth: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         }
     }
 
@@ -979,6 +982,9 @@ impl AlphaPup {
         format!("{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}")
     }
 
+    /// Maximum nesting depth for pup_to_pup delegation.
+    const MAX_DELEGATION_DEPTH: u8 = 2;
+
     async fn run_agent_with_tools(
         &self,
         agent_name: &str,
@@ -1050,6 +1056,47 @@ impl AlphaPup {
                     }
                 }
             }));
+        }
+
+        // pup_to_pup: allow this pup to delegate a sub-task to another pup (if depth allows)
+        if self.delegation_depth.load(Ordering::Relaxed) < Self::MAX_DELEGATION_DEPTH {
+            let other_pups: Vec<String> = {
+                let registry = self.specialist_registry.read().await;
+                registry
+                    .keys()
+                    .filter(|k| k.as_str() != agent_name)
+                    .cloned()
+                    .collect()
+            };
+            if !other_pups.is_empty() {
+                available_tools.push(serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": "pup_to_pup",
+                        "description": format!(
+                            "Delegate a sub-task to another pup and get the result back. \
+                             Available pups: {}. Use this when the task requires expertise \
+                             outside your own capabilities.",
+                            other_pups.join(", ")
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "target_pup": {
+                                    "type": "string",
+                                    "description": format!("The pup to delegate to. One of: {}", other_pups.join(", ")),
+                                    "enum": other_pups,
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "Clear, self-contained task description for the target pup. Include all necessary context — the target pup has no access to your conversation history."
+                                }
+                            },
+                            "required": ["target_pup", "task"]
+                        }
+                    }
+                }));
+            }
         }
 
         // Track whether we're using deferred MCP loading (single fetch_mcp_tool instead of all schemas)
@@ -1251,6 +1298,42 @@ impl AlphaPup {
                     {
                         Ok(_) => format!("Task {id} updated to {status}."),
                         Err(e) => format!("task_update failed: {e}"),
+                    }
+                } else if tc.name == "pup_to_pup" {
+                    let target = tc.arguments["target_pup"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let sub_task = tc.arguments["task"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if target.is_empty() || sub_task.is_empty() {
+                        "Error: both target_pup and task are required".to_string()
+                    } else {
+                        let current_depth = self.delegation_depth.load(Ordering::Relaxed);
+                        if current_depth >= Self::MAX_DELEGATION_DEPTH {
+                            format!(
+                                "Error: delegation depth limit ({}) reached — cannot delegate further",
+                                Self::MAX_DELEGATION_DEPTH
+                            )
+                        } else {
+                            on_activity(
+                                "delegation".into(),
+                                format!("{agent_name} → {target}"),
+                            );
+                            let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
+                            let owner_ctx = self.context_builder.get_owner_summary(&owner_md).await;
+                            self.delegation_depth.fetch_add(1, Ordering::Relaxed);
+                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx).await;
+                            self.delegation_depth.fetch_sub(1, Ordering::Relaxed);
+                            match result {
+                                Ok(text) => format!("[{target} 回复]\n{text}"),
+                                Err(e) => format!("[{target}] Error: {e}"),
+                            }
+                        }
                     }
                 } else if tc.name == "activate_skill" {
                     // Prompt injection: load the skill's full prompt and return
@@ -2678,27 +2761,33 @@ impl AlphaPup {
     }
 
     /// Run a specialist pup's tool-call loop for a channel task (no streaming to chat).
-    async fn run_pup_for_channel(
-        &self,
-        pup_key: &str,
-        msg: &str,
-        owner_summary: &str,
-    ) -> Result<String> {
-        match self
-            .run_pup_for_channel_with_activity(
-                pup_key,
-                msg,
-                owner_summary,
-                None,
-                |_kind, _label| {},
-            )
-            .await?
-        {
-            AgentRunResult::FinalText(text) => Ok(text),
-            AgentRunResult::ReviewRequest(_) => {
-                Ok("Error: review requests are not supported for this execution path.".to_string())
+    ///
+    /// Returns a boxed future to allow recursive pup_to_pup delegation without
+    /// creating infinitely-sized futures.
+    fn run_pup_for_channel<'a>(
+        &'a self,
+        pup_key: &'a str,
+        msg: &'a str,
+        owner_summary: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            match self
+                .run_pup_for_channel_with_activity(
+                    pup_key,
+                    msg,
+                    owner_summary,
+                    None,
+                    |_kind, _label| {},
+                )
+                .await?
+            {
+                AgentRunResult::FinalText(text) => Ok(text),
+                AgentRunResult::ReviewRequest(_) => {
+                    Ok("Error: review requests are not supported for this execution path."
+                        .to_string())
+                }
             }
-        }
+        })
     }
 
     async fn run_pup_for_channel_with_activity(
@@ -3126,6 +3215,11 @@ pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, Stri
         "fetch_mcp_tool" => {
             let tool = args["tool_name"].as_str().unwrap_or("");
             ("mcp".into(), format!("fetch: {tool}"))
+        }
+        "pup_to_pup" => {
+            let target = args["target_pup"].as_str().unwrap_or("?");
+            let task = args["task"].as_str().unwrap_or("");
+            ("delegation".into(), format!("→ {target}: {}", trunc(task, 50)))
         }
         _ if name.starts_with("mcp__") => {
             // mcp__server__tool → "[server] tool"
