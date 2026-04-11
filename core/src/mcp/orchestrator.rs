@@ -475,9 +475,24 @@ async fn call_remote(entry: &McpServerEntry, tool: &str, params: &Value) -> Resu
     rmcp_call_tool(&entry.base_url, entry, tool, params).await
 }
 
+/// Build transport config, injecting Bearer auth when the entry has a non-empty token.
+fn build_transport_config(
+    url: &str,
+    entry: &McpServerEntry,
+) -> rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
+    let config =
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(url);
+    let token = entry.token.trim();
+    if token.is_empty() {
+        config
+    } else {
+        config.auth_header(token)
+    }
+}
+
 /// Streamable HTTP-based tool listing via rmcp.
 async fn rmcp_list_tools(mcp_url: &str, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
-    let transport = StreamableHttpClientTransport::from_uri(mcp_url);
+    let transport = StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
 
     let client = ClientInfo::default()
         .serve(transport)
@@ -509,11 +524,11 @@ async fn rmcp_list_tools(mcp_url: &str, entry: &McpServerEntry) -> Result<Vec<Mc
 /// Streamable HTTP-based tool call via rmcp.
 async fn rmcp_call_tool(
     mcp_url: &str,
-    _entry: &McpServerEntry,
+    entry: &McpServerEntry,
     tool: &str,
     params: &Value,
 ) -> Result<Value> {
-    let transport = StreamableHttpClientTransport::from_uri(mcp_url);
+    let transport = StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
 
     let client = ClientInfo::default()
         .serve(transport)
