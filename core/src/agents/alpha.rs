@@ -995,7 +995,7 @@ impl AlphaPup {
         on_activity: impl Fn(String, String) + Send + Sync,
         abort: &AbortFlag,
     ) -> Result<AgentRunResult> {
-        let primitive_perms = ToolPermissions {
+        let mut primitive_perms = ToolPermissions {
             shell: tool_perms.shell,
             sandbox_shell: tool_perms.sandbox_shell,
             file_read: tool_perms.file_read,
@@ -1359,10 +1359,11 @@ impl AlphaPup {
                                     .complete_skill_run(&run_id, "activated", "")
                                     .await;
                                 // Union pup + skill permissions so the skill
-                                // gets the tools it needs.  Rebuild the tool
-                                // list for subsequent iterations.
-                                let merged = primitive_perms.union_with_skill(&skill_perms);
-                                let full_tools = self.skill_executor.tools.available_tools(&merged);
+                                // gets the tools it needs.  Update primitive_perms
+                                // so subsequent tool *execution* also uses the
+                                // elevated permissions, not just the tool list.
+                                primitive_perms = primitive_perms.union_with_skill(&skill_perms);
+                                let full_tools = self.skill_executor.tools.available_tools(&primitive_perms);
                                 for t in full_tools {
                                     let t_name = t["function"]["name"].as_str().unwrap_or("");
                                     if !available_tools.iter().any(|existing| {
