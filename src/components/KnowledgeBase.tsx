@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
 import { useKnowledgeBase, KbSearchResult } from '../hooks/useKnowledgeBase';
+import { KnowledgeGraph } from './KnowledgeGraph';
 
 interface KgRelationInfo {
   relation: string;
@@ -70,8 +71,6 @@ export const KnowledgeBase: React.FC = () => {
   // Graph state
   const [entities, setEntities] = useState<KgEntityInfo[]>([]);
   const [graphLoading, setGraphLoading] = useState(false);
-  const [expandedEntity, setExpandedEntity] = useState<string | null>(null);
-
   const loadEntities = useCallback(async () => {
     setGraphLoading(true);
     try {
@@ -117,12 +116,6 @@ export const KnowledgeBase: React.FC = () => {
     };
     return colors[status] || 'var(--color-text-tertiary)';
   };
-
-  // Group entities by type
-  const entityGroups: Record<string, KgEntityInfo[]> = {};
-  for (const e of entities) {
-    (entityGroups[e.entity_type] ??= []).push(e);
-  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
@@ -307,7 +300,7 @@ export const KnowledgeBase: React.FC = () => {
 
       {/* Graph tab */}
       {mode === 'graph' && (
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
           {graphLoading && (
             <div style={{ textAlign: 'center', padding: 20, color: 'var(--color-text-tertiary)', fontSize: 12 }}>
               {t('kb_searching', lang)}...
@@ -319,100 +312,7 @@ export const KnowledgeBase: React.FC = () => {
             </div>
           )}
           {!graphLoading && entities.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {Object.entries(entityGroups).map(([type, group]) => (
-                <div key={type}>
-                  <div style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    color: entityTypeColors[type] || 'var(--color-text-tertiary)',
-                    letterSpacing: '0.05em',
-                    marginBottom: 4,
-                    padding: '0 4px',
-                  }}>
-                    {type} ({group.length})
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {group.map(entity => {
-                      const isExpanded = expandedEntity === entity.id;
-                      return (
-                        <div key={entity.id}>
-                          <button
-                            onClick={() => setExpandedEntity(isExpanded ? null : entity.id)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              width: '100%',
-                              padding: '6px 8px',
-                              borderRadius: 6,
-                              background: isExpanded ? 'var(--color-background-secondary)' : 'transparent',
-                              border: 'none',
-                              cursor: 'pointer',
-                              fontSize: 12,
-                              color: 'var(--color-text-primary)',
-                              textAlign: 'left',
-                            }}
-                          >
-                            <span style={{ fontSize: 10, opacity: 0.5 }}>{isExpanded ? '▾' : '▸'}</span>
-                            <span style={{ fontWeight: 500 }}>{entity.name}</span>
-                            {entity.description && (
-                              <span style={{
-                                color: 'var(--color-text-tertiary)',
-                                fontSize: 11,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                flex: 1,
-                              }}>
-                                — {entity.description}
-                              </span>
-                            )}
-                            {entity.relations.length > 0 && (
-                              <span style={{
-                                color: 'var(--color-text-tertiary)',
-                                fontSize: 11,
-                                flexShrink: 0,
-                              }}>
-                                {entity.relations.length} rel
-                              </span>
-                            )}
-                          </button>
-                          {isExpanded && entity.relations.length > 0 && (
-                            <div style={{ paddingLeft: 24, paddingBottom: 4 }}>
-                              {entity.relations.map((rel, i) => (
-                                <div
-                                  key={i}
-                                  style={{
-                                    fontSize: 11,
-                                    color: 'var(--color-text-secondary)',
-                                    padding: '3px 0',
-                                    display: 'flex',
-                                    gap: 4,
-                                  }}
-                                >
-                                  <span style={{ color: 'var(--color-text-tertiary)' }}>
-                                    {rel.direction === 'out' ? '→' : '←'}
-                                  </span>
-                                  <span style={{ color: entityTypeColors[rel.other_type] || 'var(--color-text-tertiary)' }}>
-                                    {rel.relation}
-                                  </span>
-                                  <span style={{ fontWeight: 500 }}>{rel.other_name}</span>
-                                  <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>
-                                    {Math.round(rel.confidence * 100)}%
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <KnowledgeGraph entities={entities} entityTypeColors={entityTypeColors} />
           )}
         </div>
       )}

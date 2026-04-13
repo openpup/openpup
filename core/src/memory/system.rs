@@ -2051,6 +2051,29 @@ impl MemorySystem {
     }
 
     pub async fn delete_knowledge_source(&self, id: &str) -> Result<()> {
+        // Clean up graph relations linked to this source
+        sqlx::query("DELETE FROM kg_relations WHERE source_id=?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        // Clean up chunk↔entity links for chunks of this source
+        sqlx::query(
+            "DELETE FROM kg_chunk_entities WHERE chunk_id IN \
+             (SELECT id FROM knowledge_chunks WHERE source_id=?1)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        // Remove entities that were only created by this source
+        sqlx::query(
+            "DELETE FROM kg_entities WHERE source_id=?1 \
+             AND id NOT IN (SELECT DISTINCT from_id FROM kg_relations) \
+             AND id NOT IN (SELECT DISTINCT to_id FROM kg_relations)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        // Delete chunks and source
         sqlx::query("DELETE FROM knowledge_chunks WHERE source_id=?1")
             .bind(id)
             .execute(&self.pool)

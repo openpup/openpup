@@ -2961,7 +2961,7 @@ impl AlphaPup {
             chrono::Utc::now().format("%Y-%m-%d %H:%M")
         );
 
-        let ingestor = crate::knowledge::ingestor::Ingestor::new(self.memory.clone());
+        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(self.memory.clone(), self.llm_client.clone());
         let req = crate::knowledge::types::IngestTextRequest {
             title,
             content: artifact.to_string(),
@@ -3009,7 +3009,7 @@ impl AlphaPup {
             return Ok(());
         }
 
-        let ingestor = crate::knowledge::ingestor::Ingestor::new(self.memory.clone());
+        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(self.memory.clone(), self.llm_client.clone());
         let req = crate::knowledge::types::IngestTextRequest {
             title: format!(
                 "对话摘要 ({} · {})",
