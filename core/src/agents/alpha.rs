@@ -1557,7 +1557,9 @@ impl AlphaPup {
             },
         );
 
-        let aggregated = self.aggregate_channel_results(msg, &pup_outputs).await;
+        let aggregated = self
+            .aggregate_channel_results(msg, &pup_outputs, events)
+            .await;
 
         // Auto-ingest aggregated result as artifact to KB
         if let Ok(ref text) = aggregated {
@@ -2272,6 +2274,7 @@ impl AlphaPup {
             .aggregate_channel_results(
                 msg,
                 &all_results.into_iter().collect::<Vec<(String, String)>>(),
+                events,
             )
             .await;
 
@@ -2506,7 +2509,10 @@ impl AlphaPup {
         timeout_handle.abort();
         Self::emit_bridge_progress(&progress_hook, "正在汇总最终结果…");
 
-        let aggregated = self.aggregate_channel_results(msg, &all_results).await?;
+        let null_events: SharedEventSink = Arc::new(crate::runtime::NullEventSink);
+        let aggregated = self
+            .aggregate_channel_results(msg, &all_results, null_events)
+            .await?;
         let _ = self
             .channel_manager
             .post_text(&channel_id, "alpha", &aggregated, &[])
@@ -2856,6 +2862,7 @@ impl AlphaPup {
         &self,
         original_msg: &str,
         results: &[(String, String)],
+        events: SharedEventSink,
     ) -> Result<String> {
         if results.is_empty() {
             return Ok("Pack Channel 协作超时，未收到 Pup 结果。".to_string());
@@ -2877,16 +2884,23 @@ impl AlphaPup {
         );
 
         self.llm_client
-            .chat(vec![
-                LlmMessage {
-                    role: "system".into(),
-                    content: "你是 Alpha Pup，负责整合多 Pup 协作成果并输出清晰的最终回复。".into(),
+            .chat_stream(
+                vec![
+                    LlmMessage {
+                        role: "system".into(),
+                        content: "你是 Alpha Pup，负责整合多 Pup 协作成果并输出清晰的最终回复。"
+                            .into(),
+                    },
+                    LlmMessage {
+                        role: "user".into(),
+                        content: prompt,
+                    },
+                ],
+                |tok, _is_reasoning| {
+                    emit_event(events.as_ref(), "stream_token", tok);
                 },
-                LlmMessage {
-                    role: "user".into(),
-                    content: prompt,
-                },
-            ])
+                &self.abort_flag,
+            )
             .await
     }
 

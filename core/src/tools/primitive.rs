@@ -129,11 +129,11 @@ impl ToolRegistry {
         "type": "function",
         "function": {
           "name": "shell_exec",
-          "description": "Execute a shell command in the real workspace and return combined stdout + stderr.",
+          "description": "Execute a shell command in the real workspace and return combined stdout + stderr. The command is automatically wrapped in the platform shell (sh -c on Unix, cmd /d /s /c on Windows). Do NOT wrap the command yourself in sh, bash, cmd, or powershell — just provide the raw command.",
           "parameters": {
             "type": "object",
             "properties": {
-              "command": { "type": "string", "description": "Shell command to run (passed to /bin/sh -c)" }
+              "command": { "type": "string", "description": "Raw command to execute (e.g. 'python run.py', 'ls -la'). Do NOT prefix with sh/bash/cmd/powershell." }
             },
             "required": ["command"]
           }
@@ -150,7 +150,7 @@ impl ToolRegistry {
           "parameters": {
             "type": "object",
             "properties": {
-              "command": { "type": "string", "description": "Shell command to run inside the sandbox (passed to /bin/sh -c)" },
+              "command": { "type": "string", "description": "Raw command to execute inside the sandbox. Do NOT prefix with sh/bash/cmd/powershell." },
               "timeout_ms": { "type": "integer", "description": "Optional timeout in milliseconds (default: 10000, max: 30000)" }
             },
             "required": ["command"]

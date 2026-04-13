@@ -53,6 +53,17 @@ impl SkillExecutor {
     /// own tool-call loop (no conversation context).  The main conversation
     /// paths use `load_skill_prompt` + context injection instead.
     pub async fn execute_skill(&self, name: &str, input: &str) -> Result<String> {
+        self.execute_skill_stream(name, input, |_| {}).await
+    }
+
+    /// Like `execute_skill` but accepts an `on_token` callback for streaming
+    /// intermediate LLM output to the caller.
+    pub async fn execute_skill_stream(
+        &self,
+        name: &str,
+        input: &str,
+        on_token: impl Fn(&str) + Send + Sync,
+    ) -> Result<String> {
         let (prompt_text, permissions) = self.load_skill_prompt(name).await?;
         let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -88,7 +99,12 @@ impl SkillExecutor {
 
             let response = match self
                 .llm
-                .chat_with_tools_abortable(messages.clone(), available_tools.clone(), &abort)
+                .chat_with_tools_stream(
+                    messages.clone(),
+                    available_tools.clone(),
+                    &on_token,
+                    &abort,
+                )
                 .await?
             {
                 Some(r) => r,
