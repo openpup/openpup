@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.16...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.17...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,22 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.17](https://github.com/openpup/openpup/compare/v0.1.16...v0.1.17) — 2026-04-13
+
+### Fixed
+- **Skill permission elevation** — skill permissions now correctly union with pup permissions at tool *execution* time, not just tool list generation. Previously a skill with `shell=true` on a pup without shell access would show the tool but reject execution.
+- **Channel aggregation streaming** — `aggregate_channel_results` now uses streaming LLM calls, so users see tokens incrementally during the final summarisation phase instead of waiting for the full response.
+- **Skill executor streaming** — standalone skill execution switched from non-streaming `chat_with_tools_abortable` to `chat_with_tools_stream`, with new `execute_skill_stream()` API for callers that need token callbacks.
+- **Shell tool description** — `shell_exec` and `sandbox_shell_exec` descriptions now explicitly state that commands are auto-wrapped in the platform shell, preventing LLMs from generating nested `cmd /c` or `sh -c` invocations on Windows.
+- **Heartbeat scheduler timing** — `last_heartbeat` is now restored from the `skill_runs` DB on startup; fresh installs seed with current time. Prevents duplicate heartbeat runs on every restart and skips the first cycle when there are no conversations to extract from.
+- **Heartbeat streaming** — heartbeat LLM call switched to streaming to fix 400 errors from providers that require `stream=true`.
+- **MCP auth** — pass Bearer token auth to streamable HTTP transport.
+
+### Docs
+- Updated README with memory architecture and token budget details.
 
 ---
 
