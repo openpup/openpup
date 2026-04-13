@@ -1780,6 +1780,20 @@ impl MemorySystem {
         })
     }
 
+    /// Return the `started_at` timestamp of the most recent completed run for a
+    /// given skill name, or `None` if no completed run exists.
+    pub async fn last_skill_run_time(&self, skill_name: &str) -> Result<Option<i64>> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"SELECT started_at FROM skill_runs
+               WHERE skill_name = ?1 AND status = 'completed'
+               ORDER BY started_at DESC LIMIT 1"#,
+        )
+        .bind(skill_name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(ts,)| ts))
+    }
+
     pub async fn list_skill_runs(&self, limit: i64) -> Result<Vec<SkillRunRecord>> {
         let rows = sqlx::query(
             r#"SELECT id, skill_name, triggered_by, started_at, completed_at, status, output

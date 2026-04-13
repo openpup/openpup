@@ -36,7 +36,18 @@ impl SkillScheduler {
         let jobs_path = self.jobs_path;
 
         tokio::spawn(async move {
-            let mut last_heartbeat: Option<chrono::DateTime<Utc>> = None;
+            // Restore last heartbeat time from DB so restarts don't re-trigger.
+            // If no prior run exists (fresh install), seed with `now` so the first
+            // heartbeat waits a full 24 hours — there are no conversations to extract from yet.
+            let mut last_heartbeat: Option<chrono::DateTime<Utc>> = Some(
+                memory
+                    .last_skill_run_time("alpha_heartbeat")
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .unwrap_or_else(Utc::now),
+            );
             let job_registry = JobRegistry::new(jobs_path);
 
             loop {
@@ -225,20 +236,25 @@ async fn tick_alpha_heartbeat(
          Be concise. Only output the RULES section.",
     );
 
+    let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let response = match executor
         .llm
-        .chat(vec![
-            LlmMessage {
-                role: "system".to_string(),
-                content: "You are Alpha, a loyal personal AI assistant. Analyze interaction \
-                          patterns and extract behavioral rules for your owner."
-                    .to_string(),
-            },
-            LlmMessage {
-                role: "user".to_string(),
-                content: prompt,
-            },
-        ])
+        .chat_stream(
+            vec![
+                LlmMessage {
+                    role: "system".to_string(),
+                    content: "You are Alpha, a loyal personal AI assistant. Analyze interaction \
+                              patterns and extract behavioral rules for your owner."
+                        .to_string(),
+                },
+                LlmMessage {
+                    role: "user".to_string(),
+                    content: prompt,
+                },
+            ],
+            |_, _| {},
+            &abort,
+        )
         .await
     {
         Ok(r) => r,
