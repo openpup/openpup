@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.18...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.19...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,19 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.19](https://github.com/openpup/openpup/compare/v0.1.18...v0.1.19) — 2026-04-14
+
+### Changed
+- **Knowledge chunking defaults** — knowledge ingestion now uses larger default chunks with natural boundary alignment and overlap-aware chunk starts, improving retrieval quality for longer mixed zh/en documents.
+- **Default skill discovery** — OpenPup now scans `~/.openpup/skills/` by default, and deduplicates that directory against configured `skills.search_paths` to avoid redundant scans.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.19`.
+
+### Fixed
+- **Embedding payload fallback path** — long embedding inputs are now split into remote-safe chunks before calling the embeddings API, avoiding `413 Payload Too Large` failures in common knowledge/memory flows.
+- **SQLite contention under bridge/channel load** — memory DB initialization now enables WAL, sets a busy timeout, increases pool capacity, adds channel-related indexes, and rewrites channel listing aggregation to reduce slow statements and connection-acquire warnings.
 
 ---
 
