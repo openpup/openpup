@@ -373,18 +373,18 @@ impl OpenPupApp {
         self.alpha.get_context_limit()
     }
 
-    pub async fn compression_status(&self, pup_key: &str) -> Result<(bool, i64)> {
-        self.memory.get_compression_status(pup_key).await
+    pub async fn compression_status(&self, _pup_key: &str) -> Result<(bool, i64)> {
+        self.memory.get_compression_status().await
     }
 
     pub async fn compact_pup_context(
         &self,
-        pup_key: &str,
+        _pup_key: &str,
         simulated_tokens: u64,
     ) -> Result<Vec<crate::memory::compaction::CompactionResult>> {
         self.alpha
             .compaction_engine
-            .compact(pup_key, simulated_tokens, self.alpha.get_context_limit())
+            .compact(simulated_tokens, self.alpha.get_context_limit())
             .await
     }
 

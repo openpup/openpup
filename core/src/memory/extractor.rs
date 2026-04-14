@@ -318,6 +318,10 @@ impl MemoryExtractor {
     }
 
     async fn insert(&self, mem: &ExtractedMemory, conversation_id: Option<i64>) -> Result<String> {
+        self.insert_with_scope(mem, conversation_id, "global").await
+    }
+
+    async fn insert_with_scope(&self, mem: &ExtractedMemory, conversation_id: Option<i64>, role_scope: &str) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
 
@@ -325,8 +329,8 @@ impl MemoryExtractor {
             "INSERT INTO long_term_memory
              (id, content, memory_type, importance, confidence,
               extracted_from, created_at, last_accessed,
-              access_count, access_count_total)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+              access_count, access_count_total, role_scope)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
         )
         .bind(&id)
         .bind(&mem.content)
@@ -336,6 +340,7 @@ impl MemoryExtractor {
         .bind(conversation_id)
         .bind(now)
         .bind(now)
+        .bind(role_scope)
         .execute(&self.pool)
         .await?;
 

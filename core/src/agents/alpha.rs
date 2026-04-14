@@ -521,7 +521,7 @@ impl AlphaPup {
                  {skill_prompt}"
             );
 
-            let pup_history = self.context_builder.build_history("alpha").await;
+            let pup_history = self.context_builder.build_history().await;
             let mut msgs: Vec<serde_json::Value> =
                 vec![serde_json::json!({ "role": "system", "content": system_prompt })];
             for m in &pup_history {
@@ -598,7 +598,7 @@ impl AlphaPup {
         }
 
         if pup_key == "alpha" {
-            let pup_history = self.context_builder.build_history("alpha").await;
+            let pup_history = self.context_builder.build_history().await;
             let reply = self
                 .alpha_reply_stream(
                     msg,
@@ -630,7 +630,7 @@ impl AlphaPup {
                     "当前待处理任务（用 task_update 工具更新状态）：{task_lines}"
                 ));
             }
-            let pup_history = self.context_builder.build_history(&pup_key).await;
+            let pup_history = self.context_builder.build_history().await;
             let task = Task {
                 id: Uuid::new_v4().to_string(),
                 intent: msg.to_string(),
@@ -698,7 +698,7 @@ impl AlphaPup {
         }
 
         // Fallback to alpha
-        let fallback_history = self.context_builder.build_history("alpha").await;
+        let fallback_history = self.context_builder.build_history().await;
         let reply = self
             .alpha_reply_stream(
                 msg,
@@ -1075,8 +1075,8 @@ impl AlphaPup {
                         "name": "pup_to_pup",
                         "description": format!(
                             "Delegate a sub-task to another pup and get the result back. \
-                             Available pups: {}. Use this when the task requires expertise \
-                             outside your own capabilities.",
+                             Available pups: {}. The target pup can see the full shared \
+                             conversation history. The task parameter is a focus hint.",
                             other_pups.join(", ")
                         ),
                         "parameters": {
@@ -1089,7 +1089,7 @@ impl AlphaPup {
                                 },
                                 "task": {
                                     "type": "string",
-                                    "description": "Clear, self-contained task description for the target pup. Include all necessary context — the target pup has no access to your conversation history."
+                                    "description": "Focus hint for the target pup. The target pup has access to the full shared conversation history, so this only needs to specify what to focus on."
                                 }
                             },
                             "required": ["target_pup", "task"]
@@ -2588,7 +2588,7 @@ impl AlphaPup {
 
         // Alpha fallback — use the same tool-call loop as the UI path
         // so bridge users get skills, MCP tools, and task management.
-        let pup_history = self.context_builder.build_history("alpha").await;
+        let pup_history = self.context_builder.build_history().await;
         let memory_ctx = self
             .memory_injector
             .build_memory_context(&msg, &MemoryBudget::default())
@@ -2651,6 +2651,7 @@ impl AlphaPup {
         // Uses pressure-based strategy selection: micro-compact at 40%, full compact
         // at 65%, emergency persist+compact at 85%. Falls back to message-count
         // trigger every 10 turns when real token counts aren't available.
+        // v2: compaction is global (shared history), not per-pup.
         let context_limit = self.get_context_limit();
         let should_compact = if let Some(tokens) = self.get_context_tokens(pup_key).await {
             tokens > context_limit * 2 / 5 // 40% threshold for any compaction
@@ -2663,23 +2664,22 @@ impl AlphaPup {
                 .await
                 .unwrap_or(context_limit / 2); // conservative estimate if unknown
             let engine = self.compaction_engine.clone();
-            let pup_owned = pup_key.to_string();
             tokio::spawn(async move {
                 match engine
-                    .compact(&pup_owned, current_tokens, context_limit)
+                    .compact(current_tokens, context_limit)
                     .await
                 {
                     Ok(results) => {
                         for r in &results {
                             if r.estimated_tokens_saved > 0 {
                                 debug!(
-                                    "[alpha] compaction({}) {}: saved ~{} tokens",
-                                    pup_owned, r.strategy, r.estimated_tokens_saved
+                                    "[alpha] compaction(shared) {}: saved ~{} tokens",
+                                    r.strategy, r.estimated_tokens_saved
                                 );
                             }
                         }
                     }
-                    Err(e) => debug!("[alpha] compaction error for {pup_owned}: {e}"),
+                    Err(e) => debug!("[alpha] compaction error: {e}"),
                 }
             });
         }
@@ -2768,10 +2768,19 @@ impl AlphaPup {
         let (_, memories_str) = self.context_builder.build_memory_context(msg).await;
         let relevant_memories = ContextBuilder::format_memories_for_prompt(&memories_str);
 
+        // v2: inject shared conversation history so delegated pups have full context
+        let shared_history = self.context_builder.build_history().await;
+
         let task = Task {
             id: Uuid::new_v4().to_string(),
             intent: msg.to_string(),
-            context: vec![],
+            context: shared_history
+                .iter()
+                .map(|m| Message {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                })
+                .collect(),
             owner_context: owner_summary.to_string(),
             relevant_memories,
             system_prompt_override: override_prompt.filter(|s| !s.is_empty()),
@@ -2788,10 +2797,12 @@ impl AlphaPup {
         } else {
             base_perms
         };
-        let msgs = vec![
-            serde_json::json!({ "role": "system", "content": system_prompt }),
-            serde_json::json!({ "role": "user", "content": msg }),
-        ];
+        let mut msgs: Vec<serde_json::Value> =
+            vec![serde_json::json!({ "role": "system", "content": system_prompt })];
+        for m in &task.context {
+            msgs.push(serde_json::json!({ "role": m.role, "content": m.content }));
+        }
+        msgs.push(serde_json::json!({ "role": "user", "content": task.intent }));
 
         self.run_agent_with_tools(
             pup_key,
@@ -2877,15 +2888,15 @@ impl AlphaPup {
         infer_context_limit_for_model(&model)
     }
 
-    async fn maybe_extract_memories(&self, pup: &str) -> Result<()> {
-        let recent = self.memory.recent_conversations(pup, 10).await?;
+    async fn maybe_extract_memories(&self, _pup: &str) -> Result<()> {
+        let recent = self.memory.recent_conversations(10).await?;
         if recent.is_empty() {
             return Ok(());
         }
         let transcript = recent
             .into_iter()
             .rev()
-            .map(|(role, content)| format!("{role}: {content}"))
+            .map(|(role, content, _speaker)| format!("{role}: {content}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2926,7 +2937,7 @@ impl AlphaPup {
     // ── Conversation auto-summary → KB ────────────────────────────────────────────
 
     async fn maybe_ingest_conversation_summary(&self, pup: &str) -> Result<()> {
-        let recent = self.memory.recent_conversations(pup, 12).await?;
+        let recent = self.memory.recent_conversations(12).await?;
         if recent.len() < 4 {
             return Ok(()); // not enough content to summarize
         }
@@ -2934,7 +2945,7 @@ impl AlphaPup {
         let transcript = recent
             .into_iter()
             .rev()
-            .map(|(role, content)| format!("{role}: {content}"))
+            .map(|(role, content, _speaker)| format!("{role}: {content}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -3036,7 +3047,7 @@ impl AlphaPup {
         let simulated_tokens = (context_limit as f64 * 0.70) as u64;
         let results = self
             .compaction_engine
-            .compact(pup, simulated_tokens, context_limit)
+            .compact(simulated_tokens, context_limit)
             .await?;
         for r in &results {
             if r.estimated_tokens_saved > 0 {

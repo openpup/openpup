@@ -160,15 +160,22 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
-        // Migration: add pup column to context_summaries (idempotent)
+        // Migration: add pup column to context_summaries (idempotent, legacy)
         let _ = sqlx::query(
             "ALTER TABLE context_summaries ADD COLUMN pup TEXT NOT NULL DEFAULT 'alpha'",
         )
         .execute(&self.pool)
         .await;
 
+        // v2: add scope column — 'global' for shared summary, or pup key for per-agent
+        let _ = sqlx::query(
+            "ALTER TABLE context_summaries ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'",
+        )
+        .execute(&self.pool)
+        .await;
+
         sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_context_summaries_pup ON context_summaries(pup)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_context_summaries_scope ON context_summaries(scope)",
         )
         .execute(&self.pool)
         .await?;
@@ -544,6 +551,14 @@ impl MemorySystem {
         // Cumulative access count (never reset, for Weibull reinforcement)
         let _ = sqlx::query(
             "ALTER TABLE long_term_memory ADD COLUMN access_count_total INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // v2: role-scoped memory — 'global' memories visible to all agents,
+        // per-role memories visible only to that agent.
+        let _ = sqlx::query(
+            "ALTER TABLE long_term_memory ADD COLUMN role_scope TEXT NOT NULL DEFAULT 'global'",
         )
         .execute(&self.pool)
         .await;
@@ -1312,42 +1327,16 @@ impl MemorySystem {
         Ok(())
     }
 
-    /// Fetch last N conversation messages for a specific pup (newest-first).
+    /// Fetch last N conversation messages across all agents (newest-first).
+    /// v2: shared conversation history — all agents read the same stream.
+    /// The `pup` column is preserved as speaker metadata, not used for filtering.
     pub async fn recent_conversations(
         &self,
-        pup: &str,
         limit: i64,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<Vec<(String, String, String)>> {
         let rows = sqlx::query(
             r#"
-      SELECT role, content
-      FROM conversations
-      WHERE pup = ?1
-      ORDER BY id DESC
-      LIMIT ?2;
-      "#,
-        )
-        .bind(pup)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.get::<String, _>("role"),
-                    row.get::<String, _>("content"),
-                )
-            })
-            .collect())
-    }
-
-    /// Fetch last N conversation messages across ALL pups (for intent classification context).
-    pub async fn recent_conversations_global(&self, limit: i64) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query(
-            r#"
-      SELECT role, content
+      SELECT role, content, pup
       FROM conversations
       ORDER BY id DESC
       LIMIT ?1;
@@ -1363,16 +1352,25 @@ impl MemorySystem {
                 (
                     row.get::<String, _>("role"),
                     row.get::<String, _>("content"),
+                    row.get::<String, _>("pup"),
                 )
             })
             .collect())
     }
 
+    /// Compat alias: fetch recent conversations as (role, content) pairs.
+    /// Used by router classify_history and other callers that don't need speaker info.
+    pub async fn recent_conversations_global(&self, limit: i64) -> Result<Vec<(String, String)>> {
+        let rows = self.recent_conversations(limit).await?;
+        Ok(rows.into_iter().map(|(role, content, _)| (role, content)).collect())
+    }
+
     /// Fetch conversation for display: returns (role, content, timestamp) ordered oldest-first.
+    /// v2: shared history — pup_key parameter kept for API compat but ignored in query.
     /// If `before_timestamp` is set, only fetches messages older than that timestamp.
     pub async fn get_pup_conversation_display(
         &self,
-        pup: &str,
+        _pup: &str,
         limit: i64,
         before_timestamp: Option<i64>,
     ) -> Result<Vec<(String, String, i64)>> {
@@ -1381,12 +1379,11 @@ impl MemorySystem {
                 r#"
           SELECT role, content, timestamp
           FROM conversations
-          WHERE pup = ?1 AND timestamp < ?2
+          WHERE timestamp < ?1
           ORDER BY id DESC
-          LIMIT ?3;
+          LIMIT ?2;
           "#,
             )
-            .bind(pup)
             .bind(ts)
             .bind(limit)
             .fetch_all(&self.pool)
@@ -1396,12 +1393,10 @@ impl MemorySystem {
                 r#"
           SELECT role, content, timestamp
           FROM conversations
-          WHERE pup = ?1
           ORDER BY id DESC
-          LIMIT ?2;
+          LIMIT ?1;
           "#,
             )
-            .bind(pup)
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
@@ -1422,22 +1417,21 @@ impl MemorySystem {
     }
 
     /// Count messages for a pup.
-    pub async fn get_pup_message_count(&self, pup: &str) -> Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as cnt FROM conversations WHERE pup = ?1")
-            .bind(pup)
+    /// v2: global message count (pup_key kept for API compat but ignored).
+    pub async fn get_pup_message_count(&self, _pup: &str) -> Result<i64> {
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM conversations")
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("cnt"))
     }
 
-    /// Delete all conversation history + context summary for a pup.
-    pub async fn clear_pup_conversation(&self, pup: &str) -> Result<()> {
-        sqlx::query("DELETE FROM conversations WHERE pup = ?1")
-            .bind(pup)
+    /// Delete all conversation history + context summary.
+    /// v2: clears everything (shared history). pup_key kept for API compat.
+    pub async fn clear_pup_conversation(&self, _pup: &str) -> Result<()> {
+        sqlx::query("DELETE FROM conversations")
             .execute(&self.pool)
             .await?;
-        sqlx::query("DELETE FROM context_summaries WHERE pup = ?1")
-            .bind(pup)
+        sqlx::query("DELETE FROM context_summaries WHERE scope = 'global'")
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1821,12 +1815,12 @@ impl MemorySystem {
 // ── Context compression ───────────────────────────────────────────────────────
 
 impl MemorySystem {
-    /// Returns the stored rolling summary for a pup and the rowid of the last
+    /// Returns the stored rolling summary and the rowid of the last
     /// conversation row it covers (0 = no summary yet).
-    pub async fn get_context_summary(&self, pup: &str) -> Result<Option<(String, i64)>> {
+    /// v2: uses global scope (pup='') instead of per-pup.
+    pub async fn get_context_summary(&self) -> Result<Option<(String, i64)>> {
         let row =
-            sqlx::query("SELECT summary, covers_through_row FROM context_summaries WHERE pup = ?1")
-                .bind(pup)
+            sqlx::query("SELECT summary, covers_through_row FROM context_summaries WHERE scope = 'global'")
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(row.map(|r| {
@@ -1837,11 +1831,11 @@ impl MemorySystem {
         }))
     }
 
-    /// Returns compression status for a pup — whether it has been compressed
+    /// Returns compression status — whether conversation has been compressed
     /// and which row is covered by the compression.
-    pub async fn get_compression_status(&self, pup: &str) -> Result<(bool, i64)> {
-        let row = sqlx::query("SELECT covers_through_row FROM context_summaries WHERE pup = ?1")
-            .bind(pup)
+    /// v2: uses global scope (pup='') instead of per-pup.
+    pub async fn get_compression_status(&self) -> Result<(bool, i64)> {
+        let row = sqlx::query("SELECT covers_through_row FROM context_summaries WHERE scope = 'global'")
             .fetch_optional(&self.pool)
             .await?;
 
@@ -1853,62 +1847,6 @@ impl MemorySystem {
             }
             None => Ok((false, 0)),
         }
-    }
-
-    /// Upsert the rolling summary for a pup.
-    pub async fn save_context_summary(
-        &self,
-        pup: &str,
-        summary: &str,
-        covers_through_row: i64,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-      INSERT INTO context_summaries (pup, summary, covers_through_row, updated_at)
-      VALUES (?1, ?2, ?3, ?4)
-      ON CONFLICT(pup) DO UPDATE SET
-        summary = excluded.summary,
-        covers_through_row = excluded.covers_through_row,
-        updated_at = excluded.updated_at
-      "#,
-        )
-        .bind(pup)
-        .bind(summary)
-        .bind(covers_through_row)
-        .bind(Utc::now().timestamp())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Fetch up to `limit` rows for a specific pup with rowid > `after_row`, oldest-first.
-    pub async fn conversations_after_row(
-        &self,
-        pup: &str,
-        after_row: i64,
-        limit: i64,
-    ) -> Result<Vec<(i64, String, String)>> {
-        let rows = sqlx::query(
-      "SELECT id, role, content FROM conversations WHERE pup = ?1 AND id > ?2 ORDER BY id ASC LIMIT ?3",
-    )
-    .bind(pup)
-    .bind(after_row)
-    .bind(limit)
-    .fetch_all(&self.pool)
-    .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.get("id"), r.get("role"), r.get("content")))
-            .collect())
-    }
-
-    /// Return the max rowid for a pup's conversations (0 if none).
-    pub async fn max_conversation_row(&self, pup: &str) -> Result<i64> {
-        let row = sqlx::query("SELECT COALESCE(MAX(id), 0) as m FROM conversations WHERE pup = ?1")
-            .bind(pup)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row.get::<i64, _>("m"))
     }
 
     // ── Knowledge Base ────────────────────────────────────────────────────────

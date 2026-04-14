@@ -31,6 +31,8 @@ impl MemoryInjector {
 
     /// Build memory context for LLM injection.
     ///
+    /// v2: supports role-scoped memory — injects global + current role's memories.
+    ///
     /// Order:
     ///   1. All active rules (forced, from active_rules view, bypass retrieval)
     ///   2. Semantic + Weibull-weighted Top-K (excluding rules to avoid duplicates)
@@ -39,7 +41,18 @@ impl MemoryInjector {
         query: &str,
         budget: &MemoryBudget,
     ) -> Result<Vec<MemorySearchResult>> {
-        // Force-inject active rules
+        self.build_memory_context_for_role(query, budget, None).await
+    }
+
+    /// Build memory context with optional role scope filtering.
+    /// When `role` is Some, includes both global and role-specific memories.
+    pub async fn build_memory_context_for_role(
+        &self,
+        query: &str,
+        budget: &MemoryBudget,
+        role: Option<&str>,
+    ) -> Result<Vec<MemorySearchResult>> {
+        // Force-inject active rules (rules are always global)
         let rules = sqlx::query(
             "SELECT id, content, importance, confidence
              FROM active_rules
@@ -72,9 +85,10 @@ impl MemoryInjector {
             context.iter().map(|m| m.id.clone()).collect();
 
         // Semantic retrieval (includes Weibull weighting)
+        // v2: filter by role scope when specified
         let semantic = self
             .retriever
-            .search(query, budget.semantic_slots + rule_ids.len())
+            .search_with_role(query, budget.semantic_slots + rule_ids.len(), role)
             .await
             .unwrap_or_default();
 

@@ -72,6 +72,12 @@ impl MemoryRetriever {
     /// Graceful degradation: if embedding fails (model unavailable, API timeout,
     /// etc.), falls back to FTS5-only retrieval rather than returning empty results.
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<MemorySearchResult>> {
+        self.search_with_role(query, limit, None).await
+    }
+
+    /// Role-scoped retrieval: returns global + role-specific memories.
+    /// When `role` is None, returns all non-invalidated memories (same as `search`).
+    pub async fn search_with_role(&self, query: &str, limit: usize, role: Option<&str>) -> Result<Vec<MemorySearchResult>> {
         // Step 1: parallel vector + FTS5 retrieval
         let (vec_res, fts_res) = tokio::join!(
             self.vector_search(query, limit * 3),
@@ -123,6 +129,12 @@ impl MemoryRetriever {
             .collect::<Vec<_>>()
             .join(", ");
 
+        // v2: role_scope filtering — include global + role-specific memories
+        let role_filter = match role {
+            Some(r) => format!("AND role_scope IN ('global', '{}')", r.replace('\'', "''")),
+            None => String::new(),
+        };
+
         let sql = format!(
             r#"
             SELECT id, content, memory_type, confidence, importance,
@@ -131,8 +143,9 @@ impl MemoryRetriever {
             WHERE id IN ({})
               AND memory_type != 'invalidated'
               AND superseded_by IS NULL
+              {}
             "#,
-            placeholders
+            placeholders, role_filter
         );
 
         let mut q = sqlx::query(&sql);
