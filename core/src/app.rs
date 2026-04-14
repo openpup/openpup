@@ -564,12 +564,24 @@ pub async fn build_app(
         .await;
 
     let cfg = crate::config::load_with_env();
+    let mut skill_scan_roots = Vec::new();
+    skill_scan_roots.push(
+        crate::config::app_root()
+            .unwrap_or_else(|_| workspace_root.clone())
+            .join("skills"),
+    );
     for search_path in &cfg.skills.search_paths {
         let expanded_path = crate::config::expand_tilde(search_path);
+        if !skill_scan_roots.iter().any(|p| p == &expanded_path) {
+            skill_scan_roots.push(expanded_path);
+        }
+    }
+
+    for scan_root in skill_scan_roots {
         let _ = skill_registry
-            .register_from_dir(&expanded_path, "local")
+            .register_from_dir(&scan_root, "local")
             .await;
-        skill_registry.add_scan_root(expanded_path, "local").await;
+        skill_registry.add_scan_root(scan_root, "local").await;
     }
 
     let permissions = PermissionChecker::new();

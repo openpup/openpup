@@ -69,7 +69,7 @@ pub struct PupsConfig {
 pub struct SkillsConfig {
     /// Extra directories to scan for user-created skills.
     /// Supports `~` expansion (e.g. "~/.openpup/my_skills" or "~/custom_skills").
-    /// If empty, only built-in skills and ~/.openpup/skills_cache/ are loaded.
+    /// If empty, only built-in skills and ~/.openpup/skills/ are loaded.
     #[serde(default)]
     pub search_paths: Vec<String>,
 }
