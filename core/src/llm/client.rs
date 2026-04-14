@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -863,8 +863,10 @@ impl LlmClient {
     // ── Embeddings ─────────────────────────────────────────────────────────────
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let chunks = split_embedding_input(text);
+
         // Try remote API first
-        match self.embed_remote(text).await {
+        match self.embed_remote_chunks(&chunks).await {
             Ok(v) => Ok(v),
             Err(api_err) => {
                 // Fallback to local fastembed
@@ -881,7 +883,23 @@ impl LlmClient {
         }
     }
 
-    async fn embed_remote(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed_remote_chunks(&self, chunks: &[String]) -> Result<Vec<f32>> {
+        if chunks.is_empty() {
+            bail!("embed: no input chunks");
+        }
+
+        if chunks.len() == 1 {
+            return self.embed_remote_single(&chunks[0]).await;
+        }
+
+        let mut embeddings = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            embeddings.push(self.embed_remote_single(chunk).await?);
+        }
+        average_embeddings(&embeddings)
+    }
+
+    async fn embed_remote_single(&self, text: &str) -> Result<Vec<f32>> {
         let (api_key, api_base, embed_model) = {
             let g = self.config.read().unwrap();
             (g.api_key.clone(), g.api_base.clone(), g.embed_model.clone())
@@ -962,4 +980,124 @@ fn parse_usage(val: &serde_json::Value) -> Option<TokenUsage> {
         completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
         total_tokens: u["total_tokens"].as_u64().unwrap_or(0),
     })
+}
+
+const EMBED_MAX_CHARS_PER_CHUNK: usize = 24_000;
+const EMBED_CHUNK_OVERLAP_CHARS: usize = 512;
+
+fn split_embedding_input(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return vec![String::new()];
+    }
+
+    if trimmed.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK {
+        return vec![trimmed.to_string()];
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let len = chars.len();
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+
+    while start < len {
+        let mut end = (start + EMBED_MAX_CHARS_PER_CHUNK).min(len);
+        if end < len {
+            let search_start = start + EMBED_MAX_CHARS_PER_CHUNK.saturating_mul(7) / 10;
+            if let Some(split_at) = find_embedding_boundary(&chars, search_start.min(end), end) {
+                end = split_at;
+            }
+        }
+
+        if end <= start {
+            end = (start + EMBED_MAX_CHARS_PER_CHUNK).min(len);
+        }
+
+        let chunk: String = chars[start..end].iter().collect();
+        let chunk = chunk.trim().to_string();
+        if !chunk.is_empty() {
+            chunks.push(chunk);
+        }
+
+        if end >= len {
+            break;
+        }
+
+        start = end.saturating_sub(EMBED_CHUNK_OVERLAP_CHARS.min(end.saturating_sub(start)));
+        while start < len && chars[start].is_whitespace() {
+            start += 1;
+        }
+    }
+
+    if chunks.is_empty() {
+        vec![trimmed.to_string()]
+    } else {
+        chunks
+    }
+}
+
+fn find_embedding_boundary(chars: &[char], search_start: usize, end: usize) -> Option<usize> {
+    for idx in (search_start..end).rev() {
+        let ch = chars[idx];
+        if ch == '\n' || ch == '。' || ch == '！' || ch == '？' || ch == '.' || ch == '!' || ch == '?' {
+            return Some(idx + 1);
+        }
+    }
+    for idx in (search_start..end).rev() {
+        if chars[idx].is_whitespace() {
+            return Some(idx + 1);
+        }
+    }
+    None
+}
+
+fn average_embeddings(embeddings: &[Vec<f32>]) -> Result<Vec<f32>> {
+    let dim = embeddings
+        .first()
+        .map(|e| e.len())
+        .ok_or_else(|| anyhow!("embed: missing embedding"))?;
+    if dim == 0 {
+        bail!("embed: empty embedding vector");
+    }
+
+    let mut out = vec![0.0f32; dim];
+    for emb in embeddings {
+        if emb.len() != dim {
+            bail!("embed: inconsistent embedding dimensions");
+        }
+        for (dst, value) in out.iter_mut().zip(emb.iter()) {
+            *dst += *value;
+        }
+    }
+
+    let count = embeddings.len() as f32;
+    for value in &mut out {
+        *value /= count;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{average_embeddings, split_embedding_input, EMBED_MAX_CHARS_PER_CHUNK};
+
+    #[test]
+    fn split_embedding_input_keeps_small_text_single_chunk() {
+        let chunks = split_embedding_input("hello world");
+        assert_eq!(chunks, vec!["hello world".to_string()]);
+    }
+
+    #[test]
+    fn split_embedding_input_splits_large_text() {
+        let input = "a".repeat(EMBED_MAX_CHARS_PER_CHUNK + 2048);
+        let chunks = split_embedding_input(&input);
+        assert!(chunks.len() >= 2);
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK));
+    }
+
+    #[test]
+    fn average_embeddings_returns_mean_vector() {
+        let avg = average_embeddings(&[vec![1.0, 3.0], vec![3.0, 5.0]]).unwrap();
+        assert_eq!(avg, vec![2.0, 4.0]);
+    }
 }

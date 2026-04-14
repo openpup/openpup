@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Utc;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     Pool, Row, Sqlite,
 };
 
@@ -31,10 +31,13 @@ impl MemorySystem {
 
         let opts = SqliteConnectOptions::new()
             .filename(db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_secs(10));
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(10)
             .connect_with(opts)
             .await?;
 
@@ -249,6 +252,16 @@ impl MemorySystem {
         let _ = sqlx::query("ALTER TABLE pack_channels ADD COLUMN blocked_reason TEXT")
             .execute(&self.pool)
             .await;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_pack_channels_status_created_at ON pack_channels(status, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_pack_channels_created_at ON pack_channels(created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"
@@ -277,6 +290,14 @@ impl MemorySystem {
             r#"
       CREATE INDEX IF NOT EXISTS idx_channel_messages_channel
       ON channel_messages(channel_id, timestamp);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_channel_messages_channel_ts_desc
+      ON channel_messages(channel_id, timestamp DESC);
       "#,
         )
         .execute(&self.pool)
@@ -1026,14 +1047,22 @@ impl MemorySystem {
       SELECT c.id, c.task_id, c.title, c.status, c.created_at, c.completed_at,
              c.current_layer, c.review_round, c.awaiting_user, c.blocked_reason,
              COALESCE(
-               (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+               msg.updated_at,
                c.completed_at,
                c.created_at
              ) AS updated_at,
-             COALESCE(GROUP_CONCAT(m.pup_id), '') AS members
+             COALESCE(mem.members, '') AS members
       FROM pack_channels c
-      LEFT JOIN channel_members m ON c.id = m.channel_id
-      GROUP BY c.id
+      LEFT JOIN (
+        SELECT channel_id, MAX(timestamp) AS updated_at
+        FROM channel_messages
+        GROUP BY channel_id
+      ) msg ON msg.channel_id = c.id
+      LEFT JOIN (
+        SELECT channel_id, GROUP_CONCAT(pup_id) AS members
+        FROM channel_members
+        GROUP BY channel_id
+      ) mem ON mem.channel_id = c.id
       ORDER BY c.created_at DESC
       LIMIT ?1
       "#,
