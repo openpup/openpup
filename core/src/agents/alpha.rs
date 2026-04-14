@@ -2586,9 +2586,9 @@ impl AlphaPup {
             return Ok(reply);
         }
 
-        // Alpha fallback — use non-streaming chat
+        // Alpha fallback — use the same tool-call loop as the UI path
+        // so bridge users get skills, MCP tools, and task management.
         let pup_history = self.context_builder.build_history("alpha").await;
-        // v0.1.12: hybrid retrieval for bridge fallback path
         let memory_ctx = self
             .memory_injector
             .build_memory_context(&msg, &MemoryBudget::default())
@@ -2601,13 +2601,15 @@ impl AlphaPup {
             vec![mem_str]
         };
         let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
+        let null_events: SharedEventSink = Arc::new(crate::runtime::NullEventSink);
         let reply = self
-            .alpha_reply_bridge(
+            .alpha_reply_stream(
                 &msg,
                 &owner_summary,
                 &pup_history,
                 &relevant_memories,
                 &pending_tasks,
+                null_events,
             )
             .await?;
         self.record_pup_context_tokens_async("alpha").await;
@@ -2616,60 +2618,6 @@ impl AlphaPup {
                 .await?;
         }
         Ok(reply)
-    }
-
-    /// Non-streaming alpha reply for bridge use (no AppHandle required).
-    async fn alpha_reply_bridge(
-        &self,
-        msg: &str,
-        owner_summary: &str,
-        history: &[LlmMessage],
-        memories: &[String],
-        pending_tasks: &[crate::memory::system::TaskRecord],
-    ) -> Result<String> {
-        let mut system_content = if owner_summary.contains("## Boundaries") {
-            let summary: String = owner_summary.chars().take(1000).collect();
-            format!(
-                "You are Alpha Pup, a loyal personal AI assistant. \
-         Respond in the user's preferred language. Owner profile:\n\n{summary}"
-            )
-        } else {
-            "You are Alpha Pup, a loyal personal AI assistant. Be concise and helpful.".to_string()
-        };
-
-        if !memories.is_empty() {
-            for m in memories {
-                if m.contains("## ") {
-                    system_content.push_str(&format!("\n\n{m}"));
-                } else {
-                    let capped: String = m.chars().take(200).collect();
-                    system_content.push_str(&format!("\n- {capped}"));
-                }
-            }
-        }
-
-        if !pending_tasks.is_empty() {
-            let tasks_str: String = pending_tasks
-                .iter()
-                .map(|t| format!("- id:{} [{}] {}", t.id, t.status, t.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            system_content.push_str(&format!("\n\n## 当前任务\n{tasks_str}"));
-        }
-
-        let mut messages = vec![LlmMessage {
-            role: "system".into(),
-            content: system_content,
-        }];
-        messages.extend_from_slice(history);
-        messages.push(LlmMessage {
-            role: "user".into(),
-            content: msg.to_string(),
-        });
-
-        self.llm_client
-            .chat_stream(messages, |_tok, _is_reasoning| {}, &self.abort_flag)
-            .await
     }
 
     async fn post_process_conversation_turn(
