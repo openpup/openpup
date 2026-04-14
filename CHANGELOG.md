@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.17...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.18...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,24 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.18](https://github.com/openpup/openpup/compare/v0.1.17...v0.1.18) — 2026-04-14
+
+### Added
+- **Knowledge graph view** — added a force-directed graph visualization for the knowledge base to make entity relationships easier to inspect.
+
+### Changed
+- **Shared agent context** — switched agent context assembly from per-pup isolated history to a shared conversation stream, so delegated pups can see the full working thread rather than only a hand-packed summary.
+- **Context compaction scope** — conversation compaction now operates on the shared history summary instead of separate per-pup partitions.
+- **Role-scoped memory retrieval** — memory storage/retrieval now supports global plus role-scoped memories so shared context and per-role recall can coexist.
+- **Trading skill docs** — rewrote trading skill prompts to remove redundancy and refined premarket watchlist update / weekly cleanup guidance.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.18`.
+
+### Fixed
+- **Bridge alpha fallback parity** — bridge conversations now use the same Alpha tool-call path as the UI flow, preserving skill, MCP, and task-management behavior.
+- **Knowledge graph extraction hygiene** — fixed entity extraction and source deletion issues in the knowledge base pipeline.
 
 ---
 
@@ -376,4 +394,3 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - `openpup status`
 - Reads same `~/.openpup/` database as the GUI
 - Streaming SSE output in terminal
-

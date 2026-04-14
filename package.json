@@ -1,6 +1,6 @@
 {
   "name": "openpup",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "private": true,
   "description": "Openpup - single-owner multi-agent desktop companion (Tauri + React + Rust)",
   "scripts": {
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
