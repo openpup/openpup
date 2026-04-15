@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use tracing::debug;
 
-use crate::agents::context_builder::ContextBuilder;
+use crate::agents::context_builder::{ContextBuilder, PupContext};
 use crate::agents::custom_pup::CustomPup;
 use crate::agents::router::Router;
 use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task, TaskStatus};
@@ -1339,7 +1339,7 @@ impl AlphaPup {
                             let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
                             let owner_ctx = self.context_builder.get_owner_summary(&owner_md).await;
                             self.delegation_depth.fetch_add(1, Ordering::Relaxed);
-                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx, &on_activity).await;
+                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx, &on_activity, None).await;
                             self.delegation_depth.fetch_sub(1, Ordering::Relaxed);
                             match result {
                                 Ok(text) => format!("[{target} 回复]\n{text}"),
@@ -1530,15 +1530,27 @@ impl AlphaPup {
             .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
+        // Pre-build shared PupContext to avoid redundant queries across pups
+        let pup_ctx = PupContext {
+            history: self.context_builder.build_history().await,
+            active_rules: self
+                .context_builder
+                .memory_injector
+                .fetch_active_rules(&MemoryBudget::default())
+                .await
+                .unwrap_or_default(),
+        };
+
         let mut join_handles = Vec::new();
         for pup_key in &required_pups {
             let self_clone = self.clone();
             let msg_owned = msg.to_string();
             let pup_key_owned = pup_key.clone();
             let owner_ctx = owner_summary.clone();
+            let pup_ctx_clone = pup_ctx.clone();
             let handle = tokio::spawn(async move {
                 let result = self_clone
-                    .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx, &|_, _| {})
+                    .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx, &|_, _| {}, Some(pup_ctx_clone))
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 (pup_key_owned, result)
@@ -1692,6 +1704,7 @@ impl AlphaPup {
         events: SharedEventSink,
         review_feedback: &HashMap<String, Vec<String>>,
         result_message_ids: &HashMap<String, String>,
+        pup_ctx: Option<PupContext>,
     ) -> Vec<LayerExecutionResult> {
         let mut layer_handles = Vec::new();
 
@@ -1717,6 +1730,7 @@ impl AlphaPup {
             let app_clone = events.clone();
             let app_activity = events.clone();
             let result_message_ids = result_message_ids.clone();
+            let pup_ctx_clone = pup_ctx.clone();
 
             let _ = self
                 .channel_manager
@@ -1806,6 +1820,7 @@ impl AlphaPup {
                                 );
                             }
                         },
+                        pup_ctx_clone,
                     )
                     .await
                     .unwrap_or_else(|e| AgentRunResult::FinalText(format!("Error: {e}")));
@@ -2016,6 +2031,17 @@ impl AlphaPup {
             .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
             .await;
 
+        // Pre-build shared PupContext to avoid redundant queries across layers/pups
+        let pup_ctx = PupContext {
+            history: self.context_builder.build_history().await,
+            active_rules: self
+                .context_builder
+                .memory_injector
+                .fetch_active_rules(&MemoryBudget::default())
+                .await
+                .unwrap_or_default(),
+        };
+
         let mut all_results: HashMap<String, String> = HashMap::new();
         let mut result_message_ids: HashMap<String, String> = HashMap::new();
         // Accumulated context from prior layers to inject as deps
@@ -2064,6 +2090,7 @@ impl AlphaPup {
                         events.clone(),
                         &review_feedback,
                         &result_message_ids,
+                        Some(pup_ctx.clone()),
                     )
                     .await;
 
@@ -2194,6 +2221,7 @@ impl AlphaPup {
                                         events.clone(),
                                         &review_feedback,
                                         &result_message_ids,
+                                        Some(pup_ctx.clone()),
                                     )
                                     .await;
                                 for result in refreshed
@@ -2457,7 +2485,7 @@ impl AlphaPup {
                     };
 
                     let result = self_clone
-                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx, &|_, _| {})
+                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx, &|_, _| {}, None)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
 
@@ -2588,7 +2616,7 @@ impl AlphaPup {
         // Single pup path
         if self.resolve_pup(&pup_key).await.is_ok() {
             let reply = self
-                .run_pup_for_channel(&pup_key, &msg, &owner_summary, &|_, _| {})
+                .run_pup_for_channel(&pup_key, &msg, &owner_summary, &|_, _| {}, None)
                 .await?;
             self.record_pup_context_tokens_async(&pup_key).await;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
@@ -2713,7 +2741,7 @@ impl AlphaPup {
                 let o = owner_summary.clone();
                 tokio::spawn(async move {
                     let result = s
-                        .run_pup_for_channel(&k, &m, &o, &|_, _| {})
+                        .run_pup_for_channel(&k, &m, &o, &|_, _| {}, None)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
                     (k, result)
@@ -2737,6 +2765,7 @@ impl AlphaPup {
         msg: &'a str,
         owner_summary: &'a str,
         on_activity: &'a (dyn Fn(String, String) + Send + Sync),
+        pup_ctx: Option<PupContext>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
         Box::pin(async move {
             match self
@@ -2746,6 +2775,7 @@ impl AlphaPup {
                     owner_summary,
                     None,
                     |kind, label| on_activity(kind, label),
+                    pup_ctx,
                 )
                 .await?
             {
@@ -2765,6 +2795,7 @@ impl AlphaPup {
         owner_summary: &str,
         review_tool: Option<ReviewToolContext>,
         on_activity: impl Fn(String, String) + Send + Sync,
+        pup_ctx: Option<PupContext>,
     ) -> Result<AgentRunResult> {
         let pup = match self.resolve_pup(pup_key).await {
             Ok(pup) => pup,
@@ -2777,11 +2808,31 @@ impl AlphaPup {
             .map(|c| c.system_prompt_override);
 
         // Inject shared memories (rules + semantic) into channel pup context
-        let (_, memories_str) = self.context_builder.build_memory_context(msg).await;
+        let (_, memories_str) = if let Some(ref ctx) = pup_ctx {
+            let memory_context = self
+                .context_builder
+                .memory_injector
+                .build_memory_context_with_preloaded_rules(
+                    msg,
+                    &MemoryBudget::default(),
+                    None,
+                    Some(&ctx.active_rules),
+                )
+                .await
+                .unwrap_or_default();
+            let formatted = MemoryInjector::format_for_injection(&memory_context);
+            (memory_context, formatted)
+        } else {
+            self.context_builder.build_memory_context(msg).await
+        };
         let relevant_memories = ContextBuilder::format_memories_for_prompt(&memories_str);
 
         // v2: inject shared conversation history so delegated pups have full context
-        let shared_history = self.context_builder.build_history().await;
+        let shared_history = if let Some(ref ctx) = pup_ctx {
+            ctx.history.clone()
+        } else {
+            self.context_builder.build_history().await
+        };
 
         let task = Task {
             id: Uuid::new_v4().to_string(),

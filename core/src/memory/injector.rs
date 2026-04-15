@@ -29,30 +29,11 @@ impl MemoryInjector {
         Self { pool, retriever }
     }
 
-    /// Build memory context for LLM injection.
+    /// Fetch active rules from the database.
     ///
-    /// v2: supports role-scoped memory — injects global + current role's memories.
-    ///
-    /// Order:
-    ///   1. All active rules (forced, from active_rules view, bypass retrieval)
-    ///   2. Semantic + Weibull-weighted Top-K (excluding rules to avoid duplicates)
-    pub async fn build_memory_context(
-        &self,
-        query: &str,
-        budget: &MemoryBudget,
-    ) -> Result<Vec<MemorySearchResult>> {
-        self.build_memory_context_for_role(query, budget, None).await
-    }
-
-    /// Build memory context with optional role scope filtering.
-    /// When `role` is Some, includes both global and role-specific memories.
-    pub async fn build_memory_context_for_role(
-        &self,
-        query: &str,
-        budget: &MemoryBudget,
-        role: Option<&str>,
-    ) -> Result<Vec<MemorySearchResult>> {
-        // Force-inject active rules (rules are always global)
+    /// This can be called once and the results shared across multiple pups
+    /// in the same message flow to avoid redundant SQL queries.
+    pub async fn fetch_active_rules(&self, budget: &MemoryBudget) -> Result<Vec<MemorySearchResult>> {
         let rules = sqlx::query(
             "SELECT id, content, importance, confidence
              FROM active_rules
@@ -63,7 +44,7 @@ impl MemoryInjector {
         .await
         .unwrap_or_default();
 
-        let mut context: Vec<MemorySearchResult> = rules
+        Ok(rules
             .iter()
             .map(|row| {
                 let id: String = row.get("id");
@@ -79,7 +60,53 @@ impl MemoryInjector {
                     is_forced: true,
                 }
             })
-            .collect();
+            .collect())
+    }
+
+    /// Build memory context for LLM injection.
+    ///
+    /// v2: supports role-scoped memory — injects global + current role's memories.
+    ///
+    /// Order:
+    ///   1. All active rules (forced, from active_rules view, bypass retrieval)
+    ///   2. Semantic + Weibull-weighted Top-K (excluding rules to avoid duplicates)
+    pub async fn build_memory_context(
+        &self,
+        query: &str,
+        budget: &MemoryBudget,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.build_memory_context_with_preloaded_rules(query, budget, None, None).await
+    }
+
+    /// Build memory context with optional role scope filtering.
+    /// When `role` is Some, includes both global and role-specific memories.
+    pub async fn build_memory_context_for_role(
+        &self,
+        query: &str,
+        budget: &MemoryBudget,
+        role: Option<&str>,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.build_memory_context_with_preloaded_rules(query, budget, role, None).await
+    }
+
+    /// Build memory context with optional pre-fetched active rules.
+    ///
+    /// When `preloaded_rules` is `Some`, the provided rules are used directly
+    /// instead of querying the database — useful when multiple pups share
+    /// the same message flow and the rules have already been fetched once.
+    /// When `None`, rules are fetched from the database as usual.
+    pub async fn build_memory_context_with_preloaded_rules(
+        &self,
+        query: &str,
+        budget: &MemoryBudget,
+        role: Option<&str>,
+        preloaded_rules: Option<&[MemorySearchResult]>,
+    ) -> Result<Vec<MemorySearchResult>> {
+        // Force-inject active rules (rules are always global)
+        let mut context: Vec<MemorySearchResult> = match preloaded_rules {
+            Some(rules) => rules.to_vec(),
+            None => self.fetch_active_rules(budget).await?,
+        };
 
         let rule_ids: std::collections::HashSet<String> =
             context.iter().map(|m| m.id.clone()).collect();

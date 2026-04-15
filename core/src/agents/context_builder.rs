@@ -12,6 +12,13 @@ use crate::memory::injector::{MemoryBudget, MemoryInjector};
 use crate::memory::retriever::MemorySearchResult;
 use crate::memory::system::MemorySystem;
 
+/// Pre-built context that can be shared across pups in the same message flow.
+#[derive(Clone)]
+pub struct PupContext {
+    pub history: Vec<LlmMessage>,
+    pub active_rules: Vec<MemorySearchResult>,
+}
+
 /// Builds and caches context for agent conversations.
 pub struct ContextBuilder {
     pub memory: Arc<MemorySystem>,
