@@ -115,7 +115,7 @@ async fn run_job(
 
     let run_id = Uuid::new_v4().to_string();
     let _ = memory
-        .record_skill_run(&run_id, &job.name, "scheduled")
+        .record_skill_run(&run_id, &job.name, "scheduled", Some(&job.id))
         .await;
 
     let result = match job.mode {
@@ -278,7 +278,7 @@ async fn tick_alpha_heartbeat(
 
     let run_id = Uuid::new_v4().to_string();
     let _ = memory
-        .record_skill_run(&run_id, "alpha_heartbeat", "heartbeat")
+        .record_skill_run(&run_id, "alpha_heartbeat", "heartbeat", None)
         .await;
     let response_preview: String = response.chars().take(1000).collect();
     let _ = memory

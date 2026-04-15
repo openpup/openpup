@@ -198,8 +198,23 @@ impl MemorySystem {
         started_at INTEGER NOT NULL,
         completed_at INTEGER,
         status TEXT NOT NULL DEFAULT 'running',
-        output TEXT
+        output TEXT,
+        job_id TEXT DEFAULT NULL
       );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Migration: add job_id column if not present (idempotent)
+        let _ = sqlx::query("ALTER TABLE skill_runs ADD COLUMN job_id TEXT DEFAULT NULL")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_skill_runs_started_at
+      ON skill_runs(started_at);
       "#,
         )
         .execute(&self.pool)
@@ -207,8 +222,8 @@ impl MemorySystem {
 
         sqlx::query(
             r#"
-      CREATE INDEX IF NOT EXISTS idx_skill_runs_started_at
-      ON skill_runs(started_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_runs_job_id
+      ON skill_runs(job_id);
       "#,
         )
         .execute(&self.pool)
@@ -1749,18 +1764,53 @@ impl MemorySystem {
         id: &str,
         skill_name: &str,
         triggered_by: &str,
+        job_id: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            r#"INSERT INTO skill_runs (id, skill_name, triggered_by, started_at, status)
-         VALUES (?1, ?2, ?3, ?4, 'running')"#,
+            r#"INSERT INTO skill_runs (id, skill_name, triggered_by, started_at, status, job_id)
+         VALUES (?1, ?2, ?3, ?4, 'running', ?5)"#,
         )
         .bind(id)
         .bind(skill_name)
         .bind(triggered_by)
         .bind(Utc::now().timestamp())
+        .bind(job_id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Return the most recent skill run for a given job ID.
+    pub async fn last_run_for_job(&self, job_id: &str) -> Result<Option<SkillRunRecord>> {
+        let row = sqlx::query(
+            r#"SELECT id, skill_name, triggered_by, started_at, completed_at, status, output
+               FROM skill_runs WHERE job_id = ?1 ORDER BY started_at DESC LIMIT 1"#,
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| SkillRunRecord {
+            id: row.get("id"),
+            skill_name: row.get("skill_name"),
+            triggered_by: row.get("triggered_by"),
+            started_at: row.get("started_at"),
+            completed_at: row.get("completed_at"),
+            status: row.get("status"),
+            output: row.get("output"),
+        }))
+    }
+
+    /// Return (total_runs, fail_count) for a given job ID.
+    pub async fn job_run_stats(&self, job_id: &str) -> Result<(i64, i64)> {
+        let row: (i64, i64) = sqlx::query_as(
+            r#"SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0)
+               FROM skill_runs WHERE job_id = ?1"#,
+        )
+        .bind(job_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     pub async fn complete_skill_run(&self, id: &str, status: &str, output: &str) -> Result<()> {

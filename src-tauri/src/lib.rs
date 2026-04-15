@@ -141,6 +141,7 @@ macro_rules! all_commands {
             commands::delete_task,
             commands::list_scheduled_jobs,
             commands::delete_scheduled_job,
+            commands::toggle_scheduled_job,
             commands::open_url,
             commands::list_channels,
             commands::get_channel_messages,

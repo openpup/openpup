@@ -511,7 +511,7 @@ impl AlphaPup {
             let run_id = Uuid::new_v4().to_string();
             let _ = self
                 .memory
-                .record_skill_run(&run_id, skill_name, "conversation")
+                .record_skill_run(&run_id, skill_name, "conversation", None)
                 .await;
 
             let system_prompt = format!(
@@ -1362,7 +1362,7 @@ impl AlphaPup {
                         let run_id = Uuid::new_v4().to_string();
                         let _ = self
                             .memory
-                            .record_skill_run(&run_id, &skill_name, agent_name)
+                            .record_skill_run(&run_id, &skill_name, agent_name, None)
                             .await;
                         match self.skill_executor.load_skill_prompt(&skill_name).await {
                             Ok((prompt, skill_perms)) => {

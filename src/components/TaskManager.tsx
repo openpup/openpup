@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useLang, t } from '../i18n';
 import { formatRelativeTime } from '../utils/locale';
 
@@ -13,6 +14,26 @@ interface TaskItem {
   result: string | null;
 }
 
+interface JobStep {
+  skill: string;
+  input: string;
+}
+
+interface ScheduledJobView {
+  id: string;
+  name: string;
+  schedule: string;
+  enabled: boolean;
+  created_at: number;
+  mode: string;
+  steps: JobStep[];
+  next_run: number | null;
+  last_status: string | null;
+  last_run_at: number | null;
+  total_runs: number;
+  fail_count: number;
+}
+
 const STATUS_COLOR: Record<string, React.CSSProperties> = {
   pending:     { background: 'var(--color-background-secondary)', color: 'var(--color-text-tertiary)' },
   in_progress: { background: 'var(--color-background-info)',      color: 'var(--color-text-info)' },
@@ -20,8 +41,11 @@ const STATUS_COLOR: Record<string, React.CSSProperties> = {
   failed:      { background: 'var(--color-background-danger)',    color: 'var(--color-text-danger)' },
 };
 
+type TabKey = 'manual' | 'scheduled';
+
 export const TaskManager: React.FC = () => {
   const { lang } = useLang();
+  const [tab, setTab] = useState<TabKey>('manual');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +54,10 @@ export const TaskManager: React.FC = () => {
   const [newDesc, setNewDesc] = useState('');
   const [newPup, setNewPup] = useState('');
   const [adding, setAdding] = useState(false);
+
+  // Scheduled jobs state
+  const [jobs, setJobs] = useState<ScheduledJobView[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
@@ -43,7 +71,30 @@ export const TaskManager: React.FC = () => {
     }
   };
 
+  const loadJobs = useCallback(async () => {
+    setJobsLoading(true);
+    try {
+      const data = await invoke<ScheduledJobView[]>('list_scheduled_jobs');
+      setJobs(data);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setJobsLoading(false);
+    }
+  }, []);
+
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (tab === 'scheduled') void loadJobs();
+  }, [tab, loadJobs]);
+
+  // Listen for job completion events to auto-refresh
+  useEffect(() => {
+    const unlisten = listen('scheduled_job_completed', () => {
+      if (tab === 'scheduled') void loadJobs();
+    });
+    return () => { void unlisten.then((fn) => fn()); };
+  }, [tab, loadJobs]);
 
   const addTask = async () => {
     if (!newDesc.trim()) return;
@@ -82,6 +133,24 @@ export const TaskManager: React.FC = () => {
     }
   };
 
+  const toggleJob = async (id: string, enabled: boolean) => {
+    try {
+      await invoke('toggle_scheduled_job', { id, enabled });
+      setJobs((prev) => prev.map((j) => j.id === id ? { ...j, enabled } : j));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const deleteJob = async (id: string) => {
+    try {
+      await invoke('delete_scheduled_job', { id });
+      setJobs((prev) => prev.filter((j) => j.id !== id));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const pending = tasks.filter((task) => task.status === 'pending' || task.status === 'in_progress');
   const done = tasks.filter((task) => task.status === 'done' || task.status === 'failed');
 
@@ -95,11 +164,31 @@ export const TaskManager: React.FC = () => {
     return map[status] ?? status;
   };
 
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '6px 16px',
+    borderRadius: '8px',
+    fontSize: '13px',
+    fontWeight: 500,
+    border: 'none',
+    cursor: 'pointer',
+    background: active ? 'var(--color-background-secondary)' : 'transparent',
+    color: active ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '13px' }}>
-      <h3 style={{ fontSize: '15px', fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
-        {t('task_title', lang)}
-      </h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h3 style={{ fontSize: '15px', fontWeight: 500, color: 'var(--color-text-primary)', margin: 0, marginRight: '8px' }}>
+          {t('task_title', lang)}
+        </h3>
+        <button style={tabStyle(tab === 'manual')} onClick={() => setTab('manual')}>
+          手动
+        </button>
+        <button style={tabStyle(tab === 'scheduled')} onClick={() => setTab('scheduled')}>
+          定时
+        </button>
+      </div>
+
       {error && (
         <p style={{
           color: 'var(--color-text-danger)',
@@ -112,110 +201,136 @@ export const TaskManager: React.FC = () => {
         </p>
       )}
 
-      {/* Add task */}
-      <div style={{
-        borderRadius: '12px',
-        border: '1px solid var(--color-border-tertiary)',
-        background: 'var(--color-background-secondary)',
-        padding: '12px 16px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-      }}>
-        <div style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>{t('task_new', lang)}</div>
-        <input
-          style={{
-            width: '100%',
-            borderRadius: '8px',
-            background: 'var(--color-background-primary)',
-            border: '1px solid var(--color-border-secondary)',
-            padding: '8px 12px',
-            fontSize: '13px',
-            color: 'var(--color-text-primary)',
-            outline: 'none',
-            boxSizing: 'border-box',
-          }}
-          placeholder={t('task_desc_placeholder', lang)}
-          value={newDesc}
-          onChange={(e) => setNewDesc(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void addTask(); }}
-        />
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <input
-            style={{
-              flex: 1,
-              borderRadius: '8px',
-              background: 'var(--color-background-primary)',
-              border: '1px solid var(--color-border-secondary)',
-              padding: '8px 12px',
-              fontSize: '13px',
-              color: 'var(--color-text-primary)',
-              outline: 'none',
-            }}
-            placeholder={t('task_pup_placeholder', lang)}
-            value={newPup}
-            onChange={(e) => setNewPup(e.target.value)}
-          />
-          <button
-            style={{
-              padding: '8px 12px',
-              borderRadius: '8px',
-              background: '#1D9E75',
-              color: '#ffffff',
-              fontWeight: 500,
-              fontSize: '13px',
-              border: 'none',
-              cursor: 'pointer',
-              opacity: adding || !newDesc.trim() ? 0.5 : 1,
-            }}
-            disabled={adding || !newDesc.trim()}
-            onClick={() => void addTask()}
-          >
-            {adding ? t('task_adding', lang) : t('task_add', lang)}
-          </button>
-        </div>
-      </div>
-
-      {loading ? (
-        <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>加载中…</p>
-      ) : tasks.length === 0 ? (
-        <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>{t('task_empty', lang)}</p>
-      ) : (
+      {tab === 'manual' && (
         <>
-          {pending.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
-                {t('task_active', lang)} ({pending.length})
-              </div>
-              {pending.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  expanded={expanded === task.id}
-                  onToggle={() => setExpanded(expanded === task.id ? null : task.id)}
-                  onSetStatus={setStatus}
-                  onDelete={deleteTask}
-                  statusLabel={statusLabel}
-                  lang={lang}
-                />
-              ))}
+          {/* Add task */}
+          <div style={{
+            borderRadius: '12px',
+            border: '1px solid var(--color-border-tertiary)',
+            background: 'var(--color-background-secondary)',
+            padding: '12px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+          }}>
+            <div style={{ fontWeight: 500, color: 'var(--color-text-secondary)' }}>{t('task_new', lang)}</div>
+            <input
+              style={{
+                width: '100%',
+                borderRadius: '8px',
+                background: 'var(--color-background-primary)',
+                border: '1px solid var(--color-border-secondary)',
+                padding: '8px 12px',
+                fontSize: '13px',
+                color: 'var(--color-text-primary)',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+              placeholder={t('task_desc_placeholder', lang)}
+              value={newDesc}
+              onChange={(e) => setNewDesc(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void addTask(); }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                style={{
+                  flex: 1,
+                  borderRadius: '8px',
+                  background: 'var(--color-background-primary)',
+                  border: '1px solid var(--color-border-secondary)',
+                  padding: '8px 12px',
+                  fontSize: '13px',
+                  color: 'var(--color-text-primary)',
+                  outline: 'none',
+                }}
+                placeholder={t('task_pup_placeholder', lang)}
+                value={newPup}
+                onChange={(e) => setNewPup(e.target.value)}
+              />
+              <button
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  background: '#1D9E75',
+                  color: '#ffffff',
+                  fontWeight: 500,
+                  fontSize: '13px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  opacity: adding || !newDesc.trim() ? 0.5 : 1,
+                }}
+                disabled={adding || !newDesc.trim()}
+                onClick={() => void addTask()}
+              >
+                {adding ? t('task_adding', lang) : t('task_add', lang)}
+              </button>
             </div>
-          )}
+          </div>
 
-          {done.length > 0 && (
+          {loading ? (
+            <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>加载中…</p>
+          ) : tasks.length === 0 ? (
+            <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>{t('task_empty', lang)}</p>
+          ) : (
+            <>
+              {pending.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
+                    {t('task_active', lang)} ({pending.length})
+                  </div>
+                  {pending.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      expanded={expanded === task.id}
+                      onToggle={() => setExpanded(expanded === task.id ? null : task.id)}
+                      onSetStatus={setStatus}
+                      onDelete={deleteTask}
+                      statusLabel={statusLabel}
+                      lang={lang}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {done.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
+                    {t('task_done_section', lang)} ({done.length})
+                  </div>
+                  {done.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      expanded={expanded === task.id}
+                      onToggle={() => setExpanded(expanded === task.id ? null : task.id)}
+                      onSetStatus={setStatus}
+                      onDelete={deleteTask}
+                      statusLabel={statusLabel}
+                      lang={lang}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {tab === 'scheduled' && (
+        <>
+          {jobsLoading ? (
+            <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>加载中…</p>
+          ) : jobs.length === 0 ? (
+            <p style={{ color: 'var(--color-text-tertiary)', margin: 0 }}>暂无定时任务</p>
+          ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ fontWeight: 500, color: 'var(--color-text-tertiary)' }}>
-                {t('task_done_section', lang)} ({done.length})
-              </div>
-              {done.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  expanded={expanded === task.id}
-                  onToggle={() => setExpanded(expanded === task.id ? null : task.id)}
-                  onSetStatus={setStatus}
-                  onDelete={deleteTask}
-                  statusLabel={statusLabel}
+              {jobs.map((job) => (
+                <ScheduledJobCard
+                  key={job.id}
+                  job={job}
+                  onToggle={toggleJob}
+                  onDelete={deleteJob}
                   lang={lang}
                 />
               ))}
@@ -226,6 +341,136 @@ export const TaskManager: React.FC = () => {
     </div>
   );
 };
+
+// ─── Scheduled Job Card ────────────────────────────────────────────────────────
+
+const cronHumanLabel = (schedule: string): string => {
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length !== 5) return schedule;
+  const [min, hour, dom, mon, dow] = parts;
+  if (dom === '*' && mon === '*' && dow === '*') {
+    if (min === '0' && hour === '*') return '每小时';
+    if (hour === '*' && min !== '*') return `每小时 第${min}分`;
+    if (hour !== '*' && min !== '*') return `每天 ${hour}:${min.padStart(2, '0')}`;
+  }
+  if (dom === '*' && mon === '*' && dow !== '*' && hour !== '*' && min !== '*') {
+    const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const dayIdx = parseInt(dow, 10);
+    const dayName = dayNames[dayIdx] ?? dow;
+    return `每周${dayName} ${hour}:${min.padStart(2, '0')}`;
+  }
+  return schedule;
+};
+
+const ScheduledJobCard: React.FC<{
+  job: ScheduledJobView;
+  onToggle: (id: string, enabled: boolean) => void;
+  onDelete: (id: string) => void;
+  lang: string;
+}> = ({ job, onToggle, onDelete, lang }) => {
+  const successCount = job.total_runs - job.fail_count;
+  const successRate = job.total_runs > 0 ? Math.round((successCount / job.total_runs) * 100) : 0;
+
+  const lastStatusStyle: React.CSSProperties = (() => {
+    if (!job.last_status) return { background: 'var(--color-background-secondary)', color: 'var(--color-text-tertiary)' };
+    if (job.last_status === 'completed') return { background: 'var(--color-background-success)', color: 'var(--color-text-success)' };
+    if (job.last_status === 'failed') return { background: 'var(--color-background-danger)', color: 'var(--color-text-danger)' };
+    return { background: 'var(--color-background-info)', color: 'var(--color-text-info)' };
+  })();
+
+  const lastStatusLabel = (() => {
+    if (!job.last_status) return '从未执行';
+    if (job.last_status === 'completed') return '成功';
+    if (job.last_status === 'failed') return '失败';
+    return job.last_status;
+  })();
+
+  return (
+    <div style={{
+      borderRadius: '12px',
+      border: '1px solid var(--color-border-tertiary)',
+      padding: '12px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+      background: 'var(--color-background-secondary)',
+      opacity: job.enabled ? 1 : 0.6,
+    }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ flex: 1, fontWeight: 500, color: 'var(--color-text-primary)', fontSize: '13px' }}>
+          {job.name}
+        </span>
+        <span style={{
+          display: 'inline-flex',
+          padding: '2px 8px',
+          borderRadius: '9999px',
+          fontSize: '11px',
+          fontWeight: 500,
+          ...lastStatusStyle,
+        }}>
+          {lastStatusLabel}
+        </span>
+      </div>
+
+      {/* Details row */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
+        <span title={job.schedule}>
+          {cronHumanLabel(job.schedule)}
+        </span>
+        {job.next_run && (
+          <span>
+            下次: {formatRelativeTime(job.next_run, lang as Parameters<typeof formatRelativeTime>[1])}
+          </span>
+        )}
+        {job.last_run_at && (
+          <span>
+            上次: {formatRelativeTime(job.last_run_at, lang as Parameters<typeof formatRelativeTime>[1])}
+          </span>
+        )}
+        {job.total_runs > 0 && (
+          <span>
+            {successCount}/{job.total_runs} ({successRate}%)
+          </span>
+        )}
+      </div>
+
+      {/* Actions row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <button
+          onClick={() => onToggle(job.id, !job.enabled)}
+          style={{
+            padding: '2px 8px',
+            borderRadius: '8px',
+            background: 'var(--color-background-secondary)',
+            color: job.enabled ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+            fontSize: '11px',
+            border: '1px solid var(--color-border-secondary)',
+            cursor: 'pointer',
+          }}
+        >
+          {job.enabled ? '暂停' : '启用'}
+        </button>
+        <button
+          onClick={() => onDelete(job.id)}
+          style={{
+            padding: '2px 8px',
+            borderRadius: '8px',
+            background: 'var(--color-background-secondary)',
+            color: 'var(--color-text-danger)',
+            fontSize: '11px',
+            border: '1px solid var(--color-border-secondary)',
+            cursor: 'pointer',
+          }}
+        >
+          {t('task_delete', lang as Parameters<typeof t>[1])}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ─── Task Card ─────────────────────────────────────────────────────────────────
 
 const TaskCard: React.FC<{
   task: TaskItem;

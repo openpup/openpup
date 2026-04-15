@@ -317,6 +317,10 @@ impl OpenPupApp {
         self.scheduled_jobs_registry().delete(id)
     }
 
+    pub fn toggle_scheduled_job(&self, id: &str, enabled: bool) -> Result<()> {
+        self.scheduled_jobs_registry().toggle(id, enabled)
+    }
+
     pub async fn list_mcp_servers(&self) -> Vec<crate::mcp::orchestrator::McpServerEntry> {
         self.mcp_orchestrator.list_servers().await
     }

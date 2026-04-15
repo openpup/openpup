@@ -85,9 +85,26 @@ impl JobRegistry {
         jobs.retain(|j| j.id != id);
         self.save(&jobs)
     }
+
+    pub fn toggle(&self, id: &str, enabled: bool) -> Result<()> {
+        let mut jobs = self.load();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == id) {
+            job.enabled = enabled;
+        }
+        self.save(&jobs)
+    }
 }
 
 // ── Cron helpers ──────────────────────────────────────────────────────────────
+
+/// Calculate the next fire time for a cron schedule.
+pub fn next_fire_time(schedule: &str) -> Option<i64> {
+    use cron::Schedule;
+    use std::str::FromStr;
+    let seven_field = format!("0 {} *", schedule);
+    let sched = Schedule::from_str(&seven_field).ok()?;
+    sched.upcoming(chrono::Utc).next().map(|t| t.timestamp())
+}
 
 /// Return `true` if the 5-field cron expression `schedule` was due within the
 /// 60-second window ending at `now`.  This lets the scheduler run once per
