@@ -1062,11 +1062,23 @@ impl AlphaPup {
         if self.delegation_depth.load(Ordering::Relaxed) < Self::MAX_DELEGATION_DEPTH {
             let other_pups: Vec<String> = {
                 let registry = self.specialist_registry.read().await;
-                registry
+                let configs = self.pup_configs.read().await;
+                // Collect registered pups that are not disabled in config
+                let mut pups: std::collections::HashSet<String> = registry
                     .keys()
                     .filter(|k| k.as_str() != agent_name)
+                    .filter(|k| configs.get(*k).map(|c| c.enabled).unwrap_or(true))
                     .cloned()
-                    .collect()
+                    .collect();
+                // Also include enabled custom pups from config (not in registry)
+                for (key, cfg) in configs.iter() {
+                    if cfg.enabled && cfg.is_custom && key != agent_name {
+                        pups.insert(key.clone());
+                    }
+                }
+                let mut pups: Vec<String> = pups.into_iter().collect();
+                pups.sort();
+                pups
             };
             if !other_pups.is_empty() {
                 available_tools.push(serde_json::json!({
