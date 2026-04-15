@@ -7,12 +7,13 @@ use uuid::Uuid;
 
 use tracing::{info, warn};
 
+use crate::bridge::types::{BridgeOutbox, OutboundMessage, OutboundType, Platform};
 use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
-use crate::skills::job_registry::{is_due, JobMode, JobRegistry, ScheduledJob};
+use crate::skills::job_registry::{is_due, next_fire_time, JobMode, JobRegistry, NotifyWhen, ScheduledJob};
 use crate::skills::permissions::PermissionChecker;
 
 pub struct SkillScheduler {
@@ -22,6 +23,8 @@ pub struct SkillScheduler {
     pub file_layer: Arc<FileLayer>,
     /// Path to ~/.openpup/scheduled_jobs.json
     pub jobs_path: PathBuf,
+    /// Optional bridge outbox for sending job notifications to messaging platforms.
+    pub bridge_outbox: Option<BridgeOutbox>,
 }
 
 impl SkillScheduler {
@@ -34,6 +37,7 @@ impl SkillScheduler {
         let memory = self.memory;
         let file_layer = self.file_layer;
         let jobs_path = self.jobs_path;
+        let bridge_outbox = self.bridge_outbox;
 
         tokio::spawn(async move {
             // Restore last heartbeat time from DB so restarts don't re-trigger.
@@ -79,12 +83,13 @@ impl SkillScheduler {
                         let executor = executor.clone();
                         let memory = memory.clone();
                         let job_events = events.clone();
+                        let outbox = bridge_outbox.clone();
                         info!(
                             "[scheduler] spawning job '{}' (schedule: '{}')",
                             job.name, job.schedule
                         );
                         tokio::spawn(async move {
-                            run_job(job, &executor, &memory, job_events).await;
+                            run_job(job, &executor, &memory, job_events, outbox).await;
                         });
                     }
                 }
@@ -100,6 +105,7 @@ async fn run_job(
     executor: &Arc<SkillExecutor>,
     memory: &Arc<MemorySystem>,
     events: Option<SharedEventSink>,
+    bridge_outbox: Option<BridgeOutbox>,
 ) {
     if job.steps.is_empty() {
         return;
@@ -118,10 +124,14 @@ async fn run_job(
         .record_skill_run(&run_id, &job.name, "scheduled", Some(&job.id))
         .await;
 
+    let started = std::time::Instant::now();
+
     let result = match job.mode {
         JobMode::Single | JobMode::Sequential => run_sequential(&job, executor).await,
         JobMode::Parallel => run_parallel(&job, executor).await,
     };
+
+    let elapsed_secs = started.elapsed().as_secs();
 
     let (status, output) = match result {
         Ok(o) => ("completed".to_string(), o),
@@ -144,6 +154,85 @@ async fn run_job(
                 "output": output,
             }),
         );
+    }
+
+    // ── Notification dispatch ─────────────────────────────────────────────
+    let should_notify = match job.notify.when {
+        NotifyWhen::Never => false,
+        NotifyWhen::OnFailure => status == "failed",
+        NotifyWhen::Always => true,
+    };
+
+    if should_notify && !job.notify.channels.is_empty() {
+        let message = if status == "completed" {
+            let preview: String = output.chars().take(500).collect();
+            format!(
+                "✅ {} 完成 · 耗时 {}s\n──\n{}",
+                job.name, elapsed_secs, preview
+            )
+        } else {
+            let next_time = next_fire_time(&job.schedule)
+                .map(|t| {
+                    chrono::DateTime::from_timestamp(t, 0)
+                        .map(|dt| dt.format("%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| t.to_string())
+                })
+                .unwrap_or_else(|| "-".to_string());
+            format!(
+                "❌ {} 失败\n{}\n──\ncron: {}\n下次执行: {}",
+                job.name, output, job.schedule, next_time
+            )
+        };
+
+        if let Some(outbox) = bridge_outbox.as_ref() {
+            send_job_notification(outbox, &job.notify.channels, &message).await;
+        }
+    }
+}
+
+/// Send a notification message to the specified bridge channels.
+async fn send_job_notification(outbox: &BridgeOutbox, channels: &[String], message: &str) {
+    let tx = match outbox.lock().await.clone() {
+        Some(tx) => tx,
+        None => {
+            warn!("[scheduler] bridge outbox not available, skipping notification");
+            return;
+        }
+    };
+
+    let cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+
+    for channel in channels {
+        let target: Option<(Platform, String)> = match channel.as_str() {
+            "weixin" => cfg
+                .weixin
+                .as_ref()
+                .map(|wx| (Platform::Weixin, wx.owner_user_id.clone())),
+            "qqbot" => cfg
+                .qqbot
+                .as_ref()
+                .map(|qq| (Platform::QQBot, format!("c2c:{}", qq.owner_user_id))),
+            "telegram" => cfg
+                .telegram
+                .as_ref()
+                .map(|tg| (Platform::Telegram, tg.owner_user_id.clone())),
+            other => {
+                warn!("[scheduler] unknown notification channel: {other}");
+                None
+            }
+        };
+
+        if let Some((platform, chat_id)) = target {
+            let _ = tx
+                .send(OutboundMessage {
+                    platform,
+                    chat_id,
+                    text: message.to_string(),
+                    reply_to_id: None,
+                    msg_type: OutboundType::Result,
+                })
+                .await;
+        }
     }
 }
 

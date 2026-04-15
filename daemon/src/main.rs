@@ -145,6 +145,7 @@ async fn serve() -> Result<()> {
         permissions: runtime.permissions.clone(),
         file_layer: runtime.file_layer.clone(),
         jobs_path: runtime.workspace_root.join("scheduled_jobs.json"),
+        bridge_outbox: Some(runtime.app.bridge_outbox.clone()),
     };
     scheduler.start(None);
 

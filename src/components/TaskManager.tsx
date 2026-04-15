@@ -20,6 +20,11 @@ interface JobStep {
   input: string;
 }
 
+interface NotifyConfig {
+  when: 'always' | 'on_failure' | 'never';
+  channels: string[];
+}
+
 interface ScheduledJobView {
   id: string;
   name: string;
@@ -28,6 +33,7 @@ interface ScheduledJobView {
   created_at: number;
   mode: string;
   steps: JobStep[];
+  notify: NotifyConfig;
   next_run: number | null;
   last_status: string | null;
   last_run_at: number | null;
@@ -423,6 +429,12 @@ const ScheduledJobCard: React.FC<{
         {job.total_runs > 0 && (
           <span>
             {successCount}/{job.total_runs} ({successRate}%)
+          </span>
+        )}
+        {job.notify && job.notify.when !== 'never' && (
+          <span>
+            {job.notify.when === 'always' ? '🔔 始终通知' : '🔔 失败通知'}
+            {job.notify.channels.length > 0 && ` · ${job.notify.channels.map(c => c === 'weixin' ? '微信' : c === 'qqbot' ? 'QQ' : c).join(', ')}`}
           </span>
         )}
       </div>

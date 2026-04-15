@@ -27,6 +27,35 @@ pub struct JobStep {
     pub input: String,
 }
 
+// ── Notification config ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyWhen {
+    Always,
+    #[default]
+    OnFailure,
+    Never,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyConfig {
+    #[serde(default)]
+    pub when: NotifyWhen,
+    /// Channels to notify: "weixin", "qqbot". Empty = app event only.
+    #[serde(default)]
+    pub channels: Vec<String>,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            when: NotifyWhen::OnFailure,
+            channels: vec![],
+        }
+    }
+}
+
 // ── Scheduled job ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +72,8 @@ pub struct ScheduledJob {
     #[serde(default)]
     pub mode: JobMode,
     pub steps: Vec<JobStep>,
+    #[serde(default)]
+    pub notify: NotifyConfig,
 }
 
 fn default_true() -> bool {

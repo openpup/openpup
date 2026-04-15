@@ -202,6 +202,7 @@ fn run_desktop() -> anyhow::Result<()> {
         permissions: app.permissions.clone(),
         file_layer: app.file_layer.clone(),
         jobs_path: app.workspace_root.join("scheduled_jobs.json"),
+        bridge_outbox: Some(app.bridge_outbox.clone()),
     };
 
     let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
@@ -296,6 +297,7 @@ fn run_mobile() -> anyhow::Result<()> {
         permissions: app.permissions.clone(),
         file_layer: app.file_layer.clone(),
         jobs_path: app.workspace_root.join("scheduled_jobs.json"),
+        bridge_outbox: Some(app.bridge_outbox.clone()),
     };
 
     let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
