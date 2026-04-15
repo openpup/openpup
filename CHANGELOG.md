@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.19...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.21...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,22 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.21](https://github.com/openpup/openpup/compare/v0.1.19...v0.1.21) — 2026-04-15
+
+### Added
+- **Scheduled jobs management UI** — TaskManager now has a "定时" tab showing all scheduled jobs with cron schedule, next/last run time, success rate stats, and toggle/delete actions. Previously scheduled jobs were invisible to users.
+- **Job-to-run traceability** — `skill_runs` table now records `job_id`, enabling per-job execution history and success rate queries.
+- **Toggle scheduled jobs** — new `toggle_scheduled_job` command allows enabling/disabling jobs from the UI without editing JSON.
+
+### Changed
+- **PupContext shared caching** — `build_history()` and `active_rules` queries are now pre-built once per message flow and shared across all pups in channel/DAG dispatch, eliminating redundant SQLite queries (3× → 1× for a 3-pup channel).
+
+### Fixed
+- **Custom pups missing from pup_to_pup** — `pup_to_pup` delegation now includes enabled custom pups from config, not just built-in pups from the specialist registry.
+- **Disabled pups shown in pup_to_pup** — the delegation target list now filters out pups that are disabled in config.
 
 ---
 
