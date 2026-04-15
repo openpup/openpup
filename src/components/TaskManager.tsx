@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import cronstrue from 'cronstrue/i18n';
 import { useLang, t } from '../i18n';
 import { formatRelativeTime } from '../utils/locale';
 
@@ -344,22 +345,13 @@ export const TaskManager: React.FC = () => {
 
 // ─── Scheduled Job Card ────────────────────────────────────────────────────────
 
-const cronHumanLabel = (schedule: string): string => {
-  const parts = schedule.trim().split(/\s+/);
-  if (parts.length !== 5) return schedule;
-  const [min, hour, dom, mon, dow] = parts;
-  if (dom === '*' && mon === '*' && dow === '*') {
-    if (min === '0' && hour === '*') return '每小时';
-    if (hour === '*' && min !== '*') return `每小时 第${min}分`;
-    if (hour !== '*' && min !== '*') return `每天 ${hour}:${min.padStart(2, '0')}`;
+const cronHumanLabel = (schedule: string, lang: string): string => {
+  try {
+    const locale = lang.startsWith('zh') ? 'zh_CN' : 'en';
+    return cronstrue.toString(schedule, { locale, use24HourTimeFormat: true });
+  } catch {
+    return schedule;
   }
-  if (dom === '*' && mon === '*' && dow !== '*' && hour !== '*' && min !== '*') {
-    const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
-    const dayIdx = parseInt(dow, 10);
-    const dayName = dayNames[dayIdx] ?? dow;
-    return `每周${dayName} ${hour}:${min.padStart(2, '0')}`;
-  }
-  return schedule;
 };
 
 const ScheduledJobCard: React.FC<{
@@ -416,7 +408,7 @@ const ScheduledJobCard: React.FC<{
       {/* Details row */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: 'var(--color-text-tertiary)' }}>
         <span title={job.schedule}>
-          {cronHumanLabel(job.schedule)}
+          {cronHumanLabel(job.schedule, lang)}
         </span>
         {job.next_run && (
           <span>
