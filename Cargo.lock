@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "openpup"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3048,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-capabilities"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3059,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-core"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-daemon"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3110,7 +3110,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-android"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3128,7 +3128,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-desktop"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-ios"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3163,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-tauri"
-version = "0.1.21"
+version = "0.1.23"
 dependencies = [
  "aes-gcm",
  "anyhow",

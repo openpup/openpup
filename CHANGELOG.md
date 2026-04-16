@@ -7,7 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.21...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.23...HEAD)
 
 ### Planned — v0.2.0: Configurable Organization OS
 
@@ -26,6 +26,26 @@ Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 - **Routines and triggers** — add cadence-driven reviews and event-driven task creation so the system can operate proactively within defined boundaries
 - **Organization memory layers** — separate personal, organizational, unit, role, and task memory so longer-running structures remain coherent
 - **Governance and approvals** — introduce configurable decision, escalation, and approval policies so different organization types can operate safely
+
+---
+
+## [0.1.23](https://github.com/openpup/openpup/compare/v0.1.21...v0.1.23) — 2026-04-16
+
+### Added
+- **Scheduled job notifications** — jobs can now send completion/failure notifications to configured bridge channels (weixin/qqbot/telegram) via `NotifyConfig` (`when: always | on_failure | never`).
+- **Cron schedule human-readable display** — replaced hand-rolled cron parser with `cronstrue/i18n` library for accurate localized descriptions.
+- **Cron evaluation unit tests** — added 6 tests covering every-minute, interval, specific-time, weekday-only, and invalid cron expressions.
+
+### Changed
+- **Local timezone for cron schedules** — `is_due()` and `next_fire_time()` now evaluate in local timezone instead of UTC, so `30 8 * * 1-5` fires at 08:30 local time as expected.
+- **Local timezone for logs** — daemon and Tauri logging now uses `LocalTime::rfc_3339()` timer instead of UTC.
+- **Local timezone for user-facing timestamps** — collaboration output summaries and conversation summaries now display local time.
+
+### Fixed
+- **Terminate button unresponsive after review session lost** — when a pack channel review session disappears (task exit, timeout) while in `awaiting_review` state, `abort_channel` now falls back to directly completing the workflow; `run_dag` error branch also cleans up workflow state instead of leaving it stuck.
+- **QQBot notifications not delivered** — `bridge_send` tool description now lists `qqbot` as a valid platform; added fuzzy platform matching (`qq`/`QQ` → `qqbot`, `wechat`/`wx` → `weixin`, `tg` → `telegram`).
+- **QQBot `c2c:` double-prefix** — fixed `format!("c2c:{}", owner_user_id)` producing `c2c:c2c:...` when config already contains the prefix.
+- **Config path display on Windows** — embedded config path in inline code to prevent `\.` being eaten by frontend rendering.
 
 ---
 
