@@ -2291,6 +2291,18 @@ impl AlphaPup {
                     Err(_) => {
                         timeout_handle.abort();
                         let _ = self.channel_manager.clear_review_session(&channel_id).await;
+                        let _ = self
+                            .channel_manager
+                            .update_workflow_state(
+                                &channel_id,
+                                "completed",
+                                Some(layer_idx as i64),
+                                review_round,
+                                false,
+                                Some("interrupted"),
+                            )
+                            .await;
+                        let _ = self.channel_manager.complete(&channel_id).await;
                         return Err(anyhow!("review session interrupted"));
                     }
                 }

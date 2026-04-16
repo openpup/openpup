@@ -352,6 +352,12 @@ impl ChannelManager {
     }
 
     /// Abort a channel during review — terminates execution immediately.
+    ///
+    /// If the review session still exists, sends an `Abort` decision through the
+    /// oneshot channel so `run_dag` can exit cleanly.  If the session has already
+    /// disappeared (task exited, timeout, etc.), falls back to directly marking
+    /// the workflow as completed/aborted so the channel doesn't get stuck in
+    /// `awaiting_review` forever.
     pub async fn abort_channel(&self, channel_id: &str, sender: &str, comment: &str) -> Result<()> {
         self.post_message(
             channel_id,
@@ -371,6 +377,14 @@ impl ChannelManager {
             let _ = pending.responder.send(ReviewDecision::Abort {
                 comment: comment.to_string(),
             });
+        } else {
+            // Session already gone — clean up workflow state directly so the
+            // channel doesn't remain stuck in "awaiting_review".
+            drop(sessions);
+            let _ = self
+                .update_workflow_state(channel_id, "completed", None, 0, false, Some("aborted"))
+                .await;
+            self.complete(channel_id).await?;
         }
         Ok(())
     }
