@@ -71,6 +71,7 @@ fn init_logging(workspace_root: &std::path::Path) {
             .with_ansi(false)
             .with_target(true)
             .with_thread_ids(false)
+            .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339())
             .init();
 
         std::mem::forget(guard);

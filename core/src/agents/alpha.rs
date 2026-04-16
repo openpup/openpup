@@ -2992,7 +2992,7 @@ impl AlphaPup {
         let title = format!(
             "协作产出: {} ({})",
             title_snippet,
-            chrono::Utc::now().format("%Y-%m-%d %H:%M")
+            chrono::Local::now().format("%Y-%m-%d %H:%M")
         );
 
         let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(self.memory.clone(), self.llm_client.clone());
@@ -3048,7 +3048,7 @@ impl AlphaPup {
             title: format!(
                 "对话摘要 ({} · {})",
                 pup,
-                chrono::Utc::now().format("%Y-%m-%d %H:%M")
+                chrono::Local::now().format("%Y-%m-%d %H:%M")
             ),
             content: summary.to_string(),
             source_type: "conversation".to_string(),

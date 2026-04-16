@@ -265,7 +265,7 @@ impl ToolRegistry {
                   "type": "object",
                   "properties": {
                     "text": { "type": "string", "description": "Message text to send" },
-                    "platform": { "type": "string", "description": "Optional: 'telegram' or 'weixin'. Omit to send to all configured platforms." }
+                    "platform": { "type": "string", "enum": ["telegram", "weixin", "qqbot"], "description": "Optional: 'telegram', 'weixin', or 'qqbot'. Omit to send to all configured platforms." }
                   },
                   "required": ["text"]
                 }
@@ -619,11 +619,22 @@ impl ToolRegistry {
             targets.push((Platform::Weixin, wx.owner_user_id.clone()));
         }
         if let Some(qq) = &cfg.qqbot {
-            targets.push((Platform::QQBot, format!("c2c:{}", qq.owner_user_id)));
+            let chat_id = if qq.owner_user_id.starts_with("c2c:") {
+                qq.owner_user_id.clone()
+            } else {
+                format!("c2c:{}", qq.owner_user_id)
+            };
+            targets.push((Platform::QQBot, chat_id));
         }
 
         if let Some(filter) = platform_filter {
-            targets.retain(|(p, _)| p.as_str() == filter);
+            let normalized = match filter {
+                "qq" | "qqbot" | "QQ" => "qqbot",
+                "wechat" | "wx" | "weixin" => "weixin",
+                "tg" | "telegram" => "telegram",
+                other => other,
+            };
+            targets.retain(|(p, _)| p.as_str() == normalized);
         }
 
         if targets.is_empty() {

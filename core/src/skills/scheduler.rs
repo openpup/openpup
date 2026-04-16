@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{Local, Utc};
 use futures_util::future::join_all;
 use uuid::Uuid;
 
@@ -57,14 +57,15 @@ impl SkillScheduler {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
-                let now = Utc::now();
+                let now_utc = Utc::now();
+                let now_local = Local::now();
 
                 // ── Alpha heartbeat (once per 24 hours) ─────────────────────
                 let elapsed_hours = last_heartbeat
-                    .map(|last| (now - last).num_hours())
+                    .map(|last| (now_utc - last).num_hours())
                     .unwrap_or(i64::MAX);
                 if elapsed_hours >= 24 {
-                    last_heartbeat = Some(now);
+                    last_heartbeat = Some(now_utc);
                     let executor = executor.clone();
                     let memory = memory.clone();
                     let file_layer = file_layer.clone();
@@ -78,8 +79,9 @@ impl SkillScheduler {
                 // ── Dynamic scheduled jobs ───────────────────────────────────
                 // Each due job is spawned independently — the loop never awaits
                 // job execution, so a slow job cannot block the minute tick.
+                // Cron expressions are evaluated in local timezone.
                 for job in job_registry.load().into_iter().filter(|j| j.enabled) {
-                    if is_due(&job.schedule, &now) {
+                    if is_due(&job.schedule, &now_local) {
                         let executor = executor.clone();
                         let memory = memory.clone();
                         let job_events = events.clone();
@@ -174,7 +176,7 @@ async fn run_job(
             let next_time = next_fire_time(&job.schedule)
                 .map(|t| {
                     chrono::DateTime::from_timestamp(t, 0)
-                        .map(|dt| dt.format("%m-%d %H:%M").to_string())
+                        .map(|dt| dt.with_timezone(&Local).format("%m-%d %H:%M").to_string())
                         .unwrap_or_else(|| t.to_string())
                 })
                 .unwrap_or_else(|| "-".to_string());
@@ -208,10 +210,14 @@ async fn send_job_notification(outbox: &BridgeOutbox, channels: &[String], messa
                 .weixin
                 .as_ref()
                 .map(|wx| (Platform::Weixin, wx.owner_user_id.clone())),
-            "qqbot" => cfg
-                .qqbot
-                .as_ref()
-                .map(|qq| (Platform::QQBot, format!("c2c:{}", qq.owner_user_id))),
+            "qqbot" => cfg.qqbot.as_ref().map(|qq| {
+                let chat_id = if qq.owner_user_id.starts_with("c2c:") {
+                    qq.owner_user_id.clone()
+                } else {
+                    format!("c2c:{}", qq.owner_user_id)
+                };
+                (Platform::QQBot, chat_id)
+            }),
             "telegram" => cfg
                 .telegram
                 .as_ref()

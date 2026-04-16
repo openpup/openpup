@@ -2,7 +2,7 @@
 name = "notify"
 version = "1.0.0"
 author = "system"
-description = "发送消息到已配置的消息平台（微信、Telegram等）"
+description = "发送消息到已配置的消息平台（微信、Telegram、QQ等）"
 category = "utility"
 triggers = ["notify", "通知", "发送通知", "推送消息"]
 

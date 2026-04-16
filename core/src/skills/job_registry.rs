@@ -128,19 +128,22 @@ impl JobRegistry {
 
 // ── Cron helpers ──────────────────────────────────────────────────────────────
 
-/// Calculate the next fire time for a cron schedule.
+/// Calculate the next fire time for a cron schedule (local timezone).
 pub fn next_fire_time(schedule: &str) -> Option<i64> {
     use cron::Schedule;
     use std::str::FromStr;
     let seven_field = format!("0 {} *", schedule);
     let sched = Schedule::from_str(&seven_field).ok()?;
-    sched.upcoming(chrono::Utc).next().map(|t| t.timestamp())
+    sched.upcoming(chrono::Local).next().map(|t| t.timestamp())
 }
 
 /// Return `true` if the 5-field cron expression `schedule` was due within the
 /// 60-second window ending at `now`.  This lets the scheduler run once per
 /// minute and correctly fire jobs without double-firing on restart.
-pub fn is_due(schedule: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
+///
+/// Cron expressions are evaluated in the **local timezone** so that users can
+/// write schedules like `30 8 * * 1-5` and have them fire at 08:30 local time.
+pub fn is_due(schedule: &str, now: &chrono::DateTime<chrono::Local>) -> bool {
     use cron::Schedule;
     use std::str::FromStr;
 
@@ -157,4 +160,62 @@ pub fn is_due(schedule: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
         .next()
         .map(|t| t <= *now)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Local, TimeZone};
+
+    #[test]
+    fn test_is_due_every_minute() {
+        // "* * * * *" should be due at any whole minute
+        let now = Local.with_ymd_and_hms(2026, 4, 16, 10, 30, 5).unwrap();
+        assert!(is_due("* * * * *", &now));
+    }
+
+    #[test]
+    fn test_is_due_every_2_min() {
+        // "*/2 * * * *" → due at even minutes
+        let at_even = Local.with_ymd_and_hms(2026, 4, 16, 10, 30, 5).unwrap();
+        assert!(is_due("*/2 * * * *", &at_even));
+
+        let at_odd = Local.with_ymd_and_hms(2026, 4, 16, 10, 31, 5).unwrap();
+        assert!(!is_due("*/2 * * * *", &at_odd));
+    }
+
+    #[test]
+    fn test_is_due_specific_time() {
+        // "30 8 * * *" → 08:30 daily (local time)
+        let at_830 = Local.with_ymd_and_hms(2026, 4, 16, 8, 30, 30).unwrap();
+        assert!(is_due("30 8 * * *", &at_830));
+
+        let at_831 = Local.with_ymd_and_hms(2026, 4, 16, 8, 31, 30).unwrap();
+        assert!(!is_due("30 8 * * *", &at_831));
+    }
+
+    #[test]
+    fn test_is_due_weekday_only() {
+        // "30 8 * * 1-5" → 08:30 Mon-Fri (local time)
+        // 2026-04-16 is Thursday (weekday)
+        let thu = Local.with_ymd_and_hms(2026, 4, 16, 8, 30, 30).unwrap();
+        assert!(is_due("30 8 * * 1-5", &thu));
+
+        // 2026-04-18 is Saturday
+        let sat = Local.with_ymd_and_hms(2026, 4, 18, 8, 30, 30).unwrap();
+        assert!(!is_due("30 8 * * 1-5", &sat));
+    }
+
+    #[test]
+    fn test_next_fire_time_returns_some() {
+        assert!(next_fire_time("* * * * *").is_some());
+        assert!(next_fire_time("*/2 * * * *").is_some());
+        assert!(next_fire_time("30 8 * * 1-5").is_some());
+    }
+
+    #[test]
+    fn test_invalid_cron() {
+        assert!(!is_due("invalid", &Local::now()));
+        assert!(next_fire_time("invalid").is_none());
+    }
 }
