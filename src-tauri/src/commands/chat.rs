@@ -29,7 +29,7 @@ pub async fn send_message(
             .unwrap_or_else(|| "the app config file".to_string());
         let _ = app_handle.emit(
       "stream_error",
-      format!("未配置 API Key。请编辑 {}，在 [llm] 下填写 api_key，然后重启应用。\n\n示例：\n[llm]\napi_key = \"sk-...\"\nmodel = \"gpt-4o\"", config_path),
+      format!("未配置 API Key。请编辑 `{}`，在 [llm] 下填写 api_key，然后重启应用。\n\n示例：\n```toml\n[llm]\napi_key = \"sk-...\"\nmodel = \"gpt-4o\"\n```", config_path)
     );
         return Ok(());
     }
