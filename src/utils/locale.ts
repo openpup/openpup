@@ -81,3 +81,39 @@ export function formatRelativeTime(
 
   return lang === 'zh' ? `${diffDay} 天前` : `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
 }
+
+export function formatScheduleTime(ts: number, lang: Lang): string {
+  const normalized = toMs(ts);
+  const date = new Date(normalized);
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  const time = new Intl.DateTimeFormat(localeForLang(lang), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+
+  if (date.toDateString() === today.toDateString()) {
+    return lang === 'zh' ? `今天 ${time}` : `Today ${time}`;
+  }
+
+  if (date.toDateString() === tomorrow.toDateString()) {
+    return lang === 'zh' ? `明天 ${time}` : `Tomorrow ${time}`;
+  }
+
+  const diffDays = Math.floor((startOfDay(date).getTime() - startOfDay(today).getTime()) / 86_400_000);
+  if (diffDays > 1 && diffDays <= 7) {
+    const weekday = new Intl.DateTimeFormat(localeForLang(lang), { weekday: 'short' }).format(date);
+    return `${weekday} ${time}`;
+  }
+
+  return formatMonthDayTime(normalized, lang);
+}
+
+function startOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}

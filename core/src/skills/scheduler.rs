@@ -13,7 +13,9 @@ use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
-use crate::skills::job_registry::{is_due, next_fire_time, JobMode, JobRegistry, NotifyWhen, ScheduledJob};
+use crate::skills::job_registry::{
+    is_due, next_fire_time, JobMode, JobRegistry, NotifyWhen, ScheduledJob,
+};
 use crate::skills::permissions::PermissionChecker;
 
 pub struct SkillScheduler {
@@ -251,21 +253,18 @@ async fn run_sequential(
     let mut prev_output = String::new();
     for step in &job.steps {
         if executor.registry.get(&step.skill).await.is_none() {
-            warn!(
-                "[scheduler] skill '{}' not found, skipping step in job '{}'",
-                step.skill, job.name
-            );
-            continue;
+            return Err(anyhow::anyhow!(
+                "skill '{}' not found in scheduled job '{}'",
+                step.skill,
+                job.name
+            ));
         }
         let input = if step.input.is_empty() {
             prev_output.clone()
         } else {
             step.input.clone()
         };
-        prev_output = executor
-            .execute_skill(&step.skill, &input)
-            .await
-            .unwrap_or_else(|e| format!("[{}] error: {e}", step.skill));
+        prev_output = executor.execute_skill(&step.skill, &input).await?;
     }
     Ok(prev_output)
 }
@@ -282,20 +281,17 @@ async fn run_parallel(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyh
             let job_name = job.name.clone();
             async move {
                 if executor.registry.get(&skill).await.is_none() {
-                    warn!(
-                        "[scheduler] skill '{skill}' not found, skipping step in job '{job_name}'"
-                    );
-                    return format!("[{skill}] skipped: skill not found");
+                    return Err(anyhow::anyhow!(
+                        "skill '{skill}' not found in scheduled job '{job_name}'"
+                    ));
                 }
-                executor
-                    .execute_skill(&skill, &input)
-                    .await
-                    .unwrap_or_else(|e| format!("[{skill}] error: {e}"))
+                executor.execute_skill(&skill, &input).await
             }
         })
         .collect();
 
-    Ok(join_all(futures).await.join("\n\n---\n\n"))
+    let outputs: anyhow::Result<Vec<_>> = join_all(futures).await.into_iter().collect();
+    Ok(outputs?.join("\n\n---\n\n"))
 }
 
 // ── Alpha heartbeat ───────────────────────────────────────────────────────────

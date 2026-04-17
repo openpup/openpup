@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import cronstrue from 'cronstrue/i18n';
 import { useLang, t } from '../i18n';
-import { formatRelativeTime } from '../utils/locale';
+import { formatRelativeTime, formatScheduleTime } from '../utils/locale';
 
 interface TaskItem {
   id: string;
@@ -418,7 +418,7 @@ const ScheduledJobCard: React.FC<{
         </span>
         {job.next_run && (
           <span>
-            下次: {formatRelativeTime(job.next_run, lang as Parameters<typeof formatRelativeTime>[1])}
+            下次: {formatScheduleTime(job.next_run, lang as Parameters<typeof formatScheduleTime>[1])}
           </span>
         )}
         {job.last_run_at && (
