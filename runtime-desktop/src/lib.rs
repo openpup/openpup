@@ -8,7 +8,7 @@ use openpup_capabilities::{
     AppBridge, AppEvent, BackgroundTaskRequest, BackgroundTasks, Capabilities, CapabilityError,
     CapabilityProfile, Clock, Environment, ExecRequest, ExecResult, FileSystem, HttpRequest,
     HttpResponse, NetworkClient, NotificationRequest, Notifier, PluginHost, ProcessExecutor,
-    ScheduledJob, ScheduledJobInfo, Scheduler, SecureStore,
+    RestrictedFileSystem, ScheduledJob, ScheduledJobInfo, Scheduler, SecureStore,
 };
 use openpup_core::agents::specialist::SpecialistPup;
 use openpup_core::app::{build_app, OpenPupApp};
@@ -28,8 +28,9 @@ impl DesktopRuntimeFactory {
     }
 
     pub fn build_capabilities(workspace_root: PathBuf) -> Arc<Capabilities> {
+        let fs = restricted_fs(Arc::new(DesktopFileSystem), &workspace_root);
         Arc::new(Capabilities {
-            fs: Arc::new(DesktopFileSystem),
+            fs,
             secure_store: Arc::new(NoopSecureStore),
             process: Arc::new(DesktopProcessExecutor),
             net: Arc::new(DesktopNetworkClient::new()),
@@ -56,6 +57,17 @@ impl DesktopRuntimeFactory {
         let app = Self::build_app(permission_ui).await?;
         Ok(HeadlessRuntime::from_app(app))
     }
+}
+
+fn restricted_fs(inner: Arc<dyn FileSystem>, workspace_root: &Path) -> Arc<dyn FileSystem> {
+    let mut roots = vec![workspace_root.to_path_buf(), std::env::temp_dir()];
+    if let Some(data_dir) = dirs::data_local_dir() {
+        roots.push(data_dir.join("openpup"));
+    }
+    Arc::new(
+        RestrictedFileSystem::new(inner, roots)
+            .expect("restricted filesystem should have allowed roots"),
+    )
 }
 
 struct DesktopFileSystem;

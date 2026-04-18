@@ -7,7 +7,7 @@ use openpup_capabilities::{
     AppBridge, AppEvent, BackgroundTaskRequest, BackgroundTasks, Capabilities, CapabilityError,
     CapabilityProfile, Clock, Environment, ExecRequest, ExecResult, FileSystem, HttpRequest,
     HttpResponse, NetworkClient, NotificationRequest, Notifier, PluginHost, ProcessExecutor,
-    ScheduledJob, ScheduledJobInfo, Scheduler, SecureStore,
+    RestrictedFileSystem, ScheduledJob, ScheduledJobInfo, Scheduler, SecureStore,
 };
 use openpup_core::app::{build_app, OpenPupApp};
 use openpup_core::skills::permissions::PermissionUi;
@@ -63,8 +63,9 @@ impl AndroidRuntimeFactory {
 
     pub fn build_capabilities(workspace_root: PathBuf) -> Arc<Capabilities> {
         let state_root = workspace_root.join("mobile_runtime");
+        let fs = restricted_fs(Arc::new(MobileFileSystem), &workspace_root);
         Arc::new(Capabilities {
-            fs: Arc::new(MobileFileSystem),
+            fs,
             secure_store: Arc::new(FileBackedSecureStore::new(
                 state_root.join("secure_store.json"),
             )),
@@ -102,6 +103,16 @@ impl AndroidRuntimeFactory {
         let capabilities = Self::build_capabilities(workspace_root.clone());
         build_app(workspace_root, capabilities, permission_ui, Vec::new()).await
     }
+}
+
+fn restricted_fs(inner: Arc<dyn FileSystem>, workspace_root: &Path) -> Arc<dyn FileSystem> {
+    Arc::new(
+        RestrictedFileSystem::new(
+            inner,
+            vec![workspace_root.to_path_buf(), std::env::temp_dir()],
+        )
+        .expect("restricted filesystem should have allowed roots"),
+    )
 }
 
 /// Derive the app's internal files directory from the Linux process UID.
