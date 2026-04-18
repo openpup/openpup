@@ -20,7 +20,8 @@ use crate::skills::registry::SkillRegistry;
 
 // Re-export risk types for external consumers
 pub use super::risk::{
-    assess_command_risk as assess_risk, format_risk_warning as format_risk, CommandRiskLevel,
+    assess_command_risk as assess_risk, format_risk_warning as format_risk, CommandRiskContext,
+    CommandRiskLevel, ShellKind,
 };
 
 // ── Permission surface ────────────────────────────────────────────────────────
@@ -87,6 +88,17 @@ impl ToolRegistry {
     pub fn set_context_limit(&self, limit: u64) {
         self.context_limit
             .store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn command_risk_context(&self, kind: ShellKind) -> CommandRiskContext {
+        let mut allowed_roots = vec![self.workspace_root.clone(), std::env::temp_dir()];
+        if let Ok(app_root) = crate::config::app_root() {
+            allowed_roots.push(app_root);
+        }
+        CommandRiskContext {
+            kind,
+            allowed_roots,
+        }
     }
 
     /// Dynamic max chars for tool results: 30% of context window × 4 chars/token, clamped.
@@ -356,7 +368,7 @@ impl ToolRegistry {
                     .as_str()
                     .ok_or_else(|| anyhow!("shell_exec: missing 'command'"))?;
                 // Dynamic risk assessment: block high-risk commands
-                let risk = assess_command_risk(cmd);
+                let risk = assess_command_risk(cmd, &self.command_risk_context(ShellKind::Real));
                 if let Some(warning) = format_risk_warning(cmd, risk) {
                     debug!(
                         "[tool/shell_exec] BLOCKED high-risk command: {}",

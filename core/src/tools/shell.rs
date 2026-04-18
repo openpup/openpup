@@ -4,13 +4,23 @@ use openpup_capabilities::ExecRequest;
 use tracing::debug;
 
 use super::primitive::{truncate_chars, ToolRegistry};
+use super::risk::{assess_command_risk, CommandRiskLevel, ShellKind};
 
 impl ToolRegistry {
     /// Maximum execution time for shell_exec (2 minutes).
     pub(crate) const SHELL_EXEC_TIMEOUT_MS: u64 = 120_000;
 
     /// Validate a command for sandbox execution. Rejects destructive patterns.
-    pub(crate) fn validate_sandbox_command(command: &str) -> Result<()> {
+    pub(crate) fn validate_sandbox_command(&self, command: &str) -> Result<()> {
+        if assess_command_risk(command, &self.command_risk_context(ShellKind::Sandbox))
+            == CommandRiskLevel::High
+        {
+            return Err(anyhow!(
+                "sandbox_shell_exec: blocked high-risk command: {}",
+                truncate_chars(command, 120)
+            ));
+        }
+
         let blocked_patterns = [
             "rm -rf /",
             "mkfs",
@@ -71,7 +81,7 @@ impl ToolRegistry {
         command: &str,
         timeout_ms: u64,
     ) -> Result<String> {
-        Self::validate_sandbox_command(command)?;
+        self.validate_sandbox_command(command)?;
 
         let timeout_ms = timeout_ms.clamp(1_000, 30_000);
         if !self.capabilities.process.is_supported() {
