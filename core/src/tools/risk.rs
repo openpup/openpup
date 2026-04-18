@@ -173,7 +173,11 @@ pub fn assess_command_risk(command: &str, ctx: &CommandRiskContext) -> CommandRi
     }
 
     let tokens = rough_shell_tokens(trimmed);
-    if tokens.iter().any(|token| disallowed_path_token(token, ctx)) {
+    if tokens
+        .iter()
+        .enumerate()
+        .any(|(idx, token)| disallowed_path_token(idx, token, ctx))
+    {
         return CommandRiskLevel::High;
     }
 
@@ -189,7 +193,7 @@ fn pipes_remote_script_to_shell(lower: &str) -> bool {
         && (lower.contains("| sh") || lower.contains("| bash") || lower.contains("| zsh"))
 }
 
-fn disallowed_path_token(token: &str, ctx: &CommandRiskContext) -> bool {
+fn disallowed_path_token(index: usize, token: &str, ctx: &CommandRiskContext) -> bool {
     let token = strip_path_punctuation(token);
     if token.is_empty() || token.starts_with('-') {
         return false;
@@ -203,6 +207,9 @@ fn disallowed_path_token(token: &str, ctx: &CommandRiskContext) -> bool {
     let Some(path) = absolute_path_token(token) else {
         return false;
     };
+    if index == 0 {
+        return false;
+    }
 
     match ctx.kind {
         ShellKind::Real => !is_under_allowed_root(&path, &ctx.allowed_roots),
@@ -308,6 +315,10 @@ mod tests {
             assess_command_risk("rg TODO /Users/ben/Workspace/Git/openpup/src", &real_ctx()),
             CommandRiskLevel::Low
         );
+        assert_eq!(
+            assess_command_risk("/usr/bin/python3 script.py", &real_ctx()),
+            CommandRiskLevel::Medium
+        );
     }
 
     #[test]
@@ -322,6 +333,10 @@ mod tests {
         );
         assert_eq!(
             assess_command_risk("rg token /etc", &real_ctx()),
+            CommandRiskLevel::High
+        );
+        assert_eq!(
+            assess_command_risk("/usr/bin/python3 /etc/passwd", &real_ctx()),
             CommandRiskLevel::High
         );
     }
