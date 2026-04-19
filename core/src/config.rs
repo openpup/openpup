@@ -4,6 +4,7 @@
 //! never causes a panic.
 
 use anyhow::{Context, Result};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::warn;
@@ -21,6 +22,8 @@ pub struct AppConfig {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub bridge: Option<crate::bridge::types::BridgeConfig>,
+    #[serde(default)]
+    pub xmtp: XmtpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +46,16 @@ pub struct LlmConfig {
     /// Embedding model
     #[serde(default = "default_embed_model")]
     pub embed_model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct XmtpConfig {
+    /// XMTP EOA private key, stored as enc2 in config.toml.
+    #[serde(default)]
+    pub identity_private_key: String,
+    /// XMTP local DB encryption key, stored as enc2 in config.toml.
+    #[serde(default)]
+    pub db_encryption_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +199,30 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(app_root()?.join("config.toml"))
 }
 
+fn random_hex(bytes: usize) -> String {
+    let mut value = vec![0u8; bytes];
+    rand::rngs::OsRng.fill_bytes(&mut value);
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn ensure_xmtp_config() -> Result<XmtpConfig> {
+    let mut cfg = load();
+    let mut changed = false;
+    if cfg.xmtp.identity_private_key.trim().is_empty() {
+        cfg.xmtp.identity_private_key = format!("0x{}", random_hex(32));
+        changed = true;
+    }
+    if cfg.xmtp.db_encryption_key.trim().is_empty() {
+        cfg.xmtp.db_encryption_key = random_hex(32);
+        changed = true;
+    }
+    let xmtp = cfg.xmtp.clone();
+    if changed {
+        save(&cfg)?;
+    }
+    Ok(xmtp)
+}
+
 /// Load config from `~/.openpup/config.toml`.
 /// Returns defaults if the file does not exist.
 /// `api_key` is transparently decrypted if stored as enc2.
@@ -205,6 +242,14 @@ pub fn load() -> AppConfig {
         Ok(plain) => cfg.llm.api_key = plain,
         Err(e) => warn!("failed to decrypt api_key: {e}"),
     }
+    match crate::crypto::ensure_decrypted(&cfg.xmtp.identity_private_key) {
+        Ok(plain) => cfg.xmtp.identity_private_key = plain,
+        Err(e) => warn!("failed to decrypt xmtp identity_private_key: {e}"),
+    }
+    match crate::crypto::ensure_decrypted(&cfg.xmtp.db_encryption_key) {
+        Ok(plain) => cfg.xmtp.db_encryption_key = plain,
+        Err(e) => warn!("failed to decrypt xmtp db_encryption_key: {e}"),
+    }
     cfg
 }
 
@@ -220,6 +265,16 @@ pub fn save(cfg: &AppConfig) -> Result<()> {
     if !cfg_to_write.llm.api_key.is_empty() {
         cfg_to_write.llm.api_key = crate::crypto::ensure_encrypted(&cfg_to_write.llm.api_key)
             .context("encrypt api_key")?;
+    }
+    if !cfg_to_write.xmtp.identity_private_key.is_empty() {
+        cfg_to_write.xmtp.identity_private_key =
+            crate::crypto::ensure_encrypted(&cfg_to_write.xmtp.identity_private_key)
+                .context("encrypt xmtp identity_private_key")?;
+    }
+    if !cfg_to_write.xmtp.db_encryption_key.is_empty() {
+        cfg_to_write.xmtp.db_encryption_key =
+            crate::crypto::ensure_encrypted(&cfg_to_write.xmtp.db_encryption_key)
+                .context("encrypt xmtp db_encryption_key")?;
     }
     let text = toml::to_string_pretty(&cfg_to_write).context("serialize config")?;
     std::fs::write(&path, text).context("write config.toml")?;

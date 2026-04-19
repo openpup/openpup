@@ -9,11 +9,14 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "xmtp-helper:build": "tsc -p xmtp-helper/tsconfig.json",
+    "xmtp-helper:start": "node xmtp-helper/dist/index.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@xmtp/node-sdk": "5.5.0",
     "cronstrue": "^3.14.0",
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
@@ -27,6 +30,7 @@
     "react-markdown": "^9.0.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
+    "viem": "^2.48.1",
     "zustand": "^4.5.0"
   },
   "devDependencies": {

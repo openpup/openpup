@@ -16,6 +16,7 @@ import { PermissionDialog } from './components/PermissionDialog';
 import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
 import { KnowledgeBase } from './components/KnowledgeBase';
+import { GroupChat } from './components/GroupChat';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
 import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
@@ -688,7 +689,16 @@ const AppInner: React.FC = () => {
     );
   };
 
-  const isPrimaryView = activeNav === 'chat' || activeNav === 'channel';
+  const GroupsEntryIcon = ({ active }: { active: boolean }) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? '#BA7517' : 'currentColor' }}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+
+  const isPrimaryView = activeNav === 'chat' || activeNav === 'channel' || activeNav === 'groups';
   const isChatActive = activeNav === 'chat';
   const getPupAccent = (pupKey: string) => pupAccentColor(pupKey);
   const getPupTagStyle = (pupKey: string) => pupTagStyle(pupKey);
@@ -862,6 +872,30 @@ const AppInner: React.FC = () => {
             ))}
           </div>
           <div className="flex-1" />
+          <button
+            onClick={() => {
+              setActiveNav('groups');
+              inputRef.current?.focus();
+            }}
+            title={t('nav_groups', lang)}
+            style={{
+              width: '34px',
+              height: '34px',
+              marginBottom: '10px',
+              borderRadius: '11px',
+              border: activeNav === 'groups' ? '0.5px solid rgba(186,117,23,0.18)' : '0.5px solid transparent',
+              boxShadow: activeNav === 'groups' ? '0 8px 20px rgba(186,117,23,0.16)' : 'none',
+              background: activeNav === 'groups' ? 'linear-gradient(180deg, rgba(186,117,23,0.18), rgba(186,117,23,0.08))' : 'var(--color-background-secondary)',
+              color: activeNav === 'groups' ? '#BA7517' : 'var(--color-text-tertiary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              alignSelf: 'center',
+            }}
+          >
+            <GroupsEntryIcon active={activeNav === 'groups'} />
+          </button>
           <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: '4px' }}>
             <button
               onClick={() => setSidebarCollapsed(false)}
@@ -873,8 +907,8 @@ const AppInner: React.FC = () => {
           </div>
         </div>
       ) : (
-        /* Expanded 176px sidebar */
-        <div className="flex flex-col shrink-0" style={{ width: '188px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)', overflow: 'hidden' }}>
+        /* Expanded sidebar */
+        <div className="flex flex-col shrink-0" style={{ width: '196px', borderRight: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)', overflow: 'hidden' }}>
           {/* Primary mode switch */}
           <div className="px-3 py-3" style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}>
             <div style={{
@@ -1018,33 +1052,82 @@ const AppInner: React.FC = () => {
 
           </div>
 
-          {/* Mode pill + utilities — fixed bottom */}
-          <div className="px-2 pb-3 pt-2" style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {/* Secondary destination + footer utilities */}
+          <div className="px-2 pb-3 pt-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <button
-                onClick={async () => {
-                  const next = execMode === 'leashed' ? 'free_run' : 'leashed';
-                  await invoke('set_execution_mode', { mode: next }).catch(() => {});
-                  setExecMode(next);
+                onClick={() => {
+                  setActiveNav('groups');
+                  inputRef.current?.focus();
                 }}
-                title={execMode === 'leashed'
-                  ? t('mode_tooltip_leashed', lang)
-                  : t('mode_tooltip_free', lang)
-                }
+                title={t('nav_groups', lang)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
-                  padding: '5px 10px', borderRadius: '6px', fontSize: "12px",
-                  color: 'var(--color-text-secondary)', background: 'var(--color-background-secondary)',
-                  border: 'none', cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  width: '100%',
+                  minHeight: '28px',
+                  padding: '4px 8px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: activeNav === 'groups' ? 600 : 500,
+                  color: activeNav === 'groups' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  background: activeNav === 'groups' ? 'rgba(186,117,23,0.08)' : 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
                 }}
               >
-                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: execMode === 'free_run' ? '#BA7517' : '#1D9E75', flexShrink: 0 }} />
-                {execMode === 'leashed' ? t('mode_leashed', lang) : t('mode_free', lang)}
+                <span style={{
+                  width: '18px',
+                  height: '18px',
+                  borderRadius: '5px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: activeNav === 'groups' ? 'rgba(186,117,23,0.12)' : 'transparent',
+                  color: activeNav === 'groups' ? '#BA7517' : 'var(--color-text-tertiary)',
+                  flexShrink: 0,
+                }}>
+                  <GroupsEntryIcon active={activeNav === 'groups'} />
+                </span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t('nav_groups', lang)}
+                </span>
               </button>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+                alignItems: 'center',
+                gap: '2px',
+                padding: '6px 0 0',
+                borderTop: '0.5px solid var(--color-border-tertiary)',
+              }}>
+                <button
+                  onClick={async () => {
+                    const next = execMode === 'leashed' ? 'free_run' : 'leashed';
+                    await invoke('set_execution_mode', { mode: next }).catch(() => {});
+                    setExecMode(next);
+                  }}
+                  title={execMode === 'leashed'
+                    ? t('mode_tooltip_leashed', lang)
+                    : t('mode_tooltip_free', lang)
+                  }
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 0,
+                    height: '24px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    color: 'var(--color-text-tertiary)',
+                    cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px'
+                  }}
+                >
+                  {execMode === 'leashed' ? '🔒' : '🐕'}
+                </button>
                 <button
                   onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
-                  style={{ fontSize: "11px", color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px' }}
+                  style={{ height: '24px', borderRadius: '6px', fontSize: "11px", color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px' }}
                 >
                   {t('settings_lang_toggle_button', lang)}
                 </button>
@@ -1052,7 +1135,7 @@ const AppInner: React.FC = () => {
                 <button
                   onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
                   title={theme === 'dark' ? t('theme_light', lang) : t('theme_dark', lang)}
-                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px', lineHeight: 1 }}
+                  style={{ height: '24px', borderRadius: '6px', color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px', lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   {theme === 'dark' ? (
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1066,7 +1149,7 @@ const AppInner: React.FC = () => {
                 </button>
                 <button
                   onClick={() => invoke('open_url', { url: 'https://github.com/openpup/openpup' })}
-                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px' }}
+                  style={{ height: '24px', borderRadius: '6px', color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                   title="GitHub"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
@@ -1075,7 +1158,7 @@ const AppInner: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setSidebarCollapsed(true)}
-                  style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '2px 4px', lineHeight: 1 }}
+                  style={{ height: '24px', borderRadius: '6px', color: 'var(--color-text-tertiary)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px', lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                   title={t('sidebar_collapse', lang)}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1274,6 +1357,9 @@ const AppInner: React.FC = () => {
               </div>
             </>
           )}
+
+          {/* ── Group Chat Prototype ── */}
+          {activeNav === 'groups' && <GroupChat />}
 
           {/* ── Memories ── */}
           {activeNav === 'memories' && (

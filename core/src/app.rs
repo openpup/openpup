@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use openpup_capabilities::{Capabilities, CapabilityProfile};
@@ -15,12 +15,16 @@ use crate::channel::manager::ChannelManager;
 use crate::channel::types::{
     ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
 };
+use crate::conversation::types::{
+    ConversationMemberRecord, ConversationMembersChangedPayload, ConversationMessageCreatedPayload,
+    ConversationMessageRecord, ConversationSpaceRecord, ConversationSpacesChangedPayload,
+};
 use crate::llm::client::{LlmClient, Provider};
 use crate::mcp::orchestrator::McpToolInfo;
 use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::{MemorySystem, SkillRunRecord, TaskRecord};
-use crate::runtime::SharedEventSink;
+use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
 use crate::skills::job_registry::{JobRegistry, ScheduledJob};
 use crate::skills::permissions::{ExecutionMode, PermissionChecker, PermissionUi};
@@ -39,9 +43,66 @@ pub struct OpenPupApp {
     pub mcp_orchestrator: Arc<MCPOrchestrator>,
     pub channel_manager: Arc<ChannelManager>,
     pub bridge_outbox: crate::bridge::types::BridgeOutbox,
+    conversation_event_sink: Arc<OnceLock<SharedEventSink>>,
 }
 
 impl OpenPupApp {
+    pub fn set_conversation_event_sink(&self, sink: SharedEventSink) {
+        let _ = self.conversation_event_sink.set(sink);
+    }
+
+    pub async fn emit_conversation_spaces_changed(&self) {
+        let Some(sink) = self.conversation_event_sink.get() else {
+            return;
+        };
+        if let Ok(spaces) = self.list_conversation_spaces().await {
+            emit_event(
+                sink.as_ref(),
+                "conversation_spaces_changed",
+                ConversationSpacesChangedPayload { spaces },
+            );
+        }
+    }
+
+    pub async fn emit_conversation_members_changed(&self, conversation_id: &str) {
+        let Some(sink) = self.conversation_event_sink.get() else {
+            return;
+        };
+        if let Ok(members) = self.conversation_members(conversation_id).await {
+            emit_event(
+                sink.as_ref(),
+                "conversation_members_changed",
+                ConversationMembersChangedPayload {
+                    conversation_id: conversation_id.to_string(),
+                    member_count: members.iter().filter(|member| member.status == "active").count()
+                        as i64,
+                    members,
+                },
+            );
+        }
+    }
+
+    pub fn emit_conversation_message_created(&self, message: ConversationMessageRecord) {
+        let Some(sink) = self.conversation_event_sink.get() else {
+            return;
+        };
+        emit_event(
+            sink.as_ref(),
+            "conversation_message_created",
+            ConversationMessageCreatedPayload {
+                conversation_id: message.conversation_id.clone(),
+                message,
+            },
+        );
+    }
+
+    pub fn emit_xmtp_stream_status(&self, payload: serde_json::Value) {
+        let Some(sink) = self.conversation_event_sink.get() else {
+            return;
+        };
+        emit_event(sink.as_ref(), "xmtp_stream_status", payload);
+    }
+
     pub fn capability_profile(&self) -> CapabilityProfile {
         self.capabilities.env.capability_profile()
     }
@@ -408,6 +469,100 @@ impl OpenPupApp {
         self.memory.get_channel_messages(channel_id).await
     }
 
+    pub async fn create_conversation_space(
+        &self,
+        title: &str,
+    ) -> Result<ConversationSpaceRecord> {
+        self.memory
+            .create_conversation_space(title, None, Some("owner"), None)
+            .await
+    }
+
+    pub async fn list_conversation_spaces(&self) -> Result<Vec<ConversationSpaceRecord>> {
+        self.memory.list_conversation_spaces().await
+    }
+
+    pub async fn find_conversation_space(
+        &self,
+        target: &str,
+    ) -> Result<Option<ConversationSpaceRecord>> {
+        self.memory.find_conversation_space(target).await
+    }
+
+    pub async fn conversation_members(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationMemberRecord>> {
+        self.memory.list_conversation_members(conversation_id).await
+    }
+
+    pub async fn add_conversation_member(
+        &self,
+        conversation_id: &str,
+        display_name: &str,
+        mention_key: Option<&str>,
+        route_label: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<ConversationMemberRecord> {
+        self.memory
+            .add_conversation_member(conversation_id, display_name, mention_key, route_label, role)
+            .await
+    }
+
+    pub async fn remove_conversation_member(
+        &self,
+        conversation_id: &str,
+        identity_id: &str,
+    ) -> Result<()> {
+        self.memory
+            .remove_conversation_member(conversation_id, identity_id)
+            .await
+    }
+
+    pub async fn delete_conversation_space(&self, conversation_id: &str) -> Result<()> {
+        self.memory.delete_conversation_space(conversation_id).await
+    }
+
+    pub async fn conversation_messages(
+        &self,
+        conversation_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ConversationMessageRecord>> {
+        self.memory
+            .list_conversation_messages(conversation_id, limit)
+            .await
+    }
+
+    pub async fn bind_conversation_transport(
+        &self,
+        conversation_id: &str,
+        kind: &str,
+        label: &str,
+        transport_ref: &str,
+    ) -> Result<crate::conversation::types::ConversationTransportRecord> {
+        self.memory
+            .bind_conversation_transport(conversation_id, kind, label, transport_ref)
+            .await
+    }
+
+    pub async fn post_conversation_message(
+        &self,
+        conversation_id: &str,
+        content: &str,
+    ) -> Result<ConversationMessageRecord> {
+        self.memory
+            .post_conversation_message(
+                conversation_id,
+                "owner",
+                Some("app"),
+                "我",
+                "human",
+                Some("app · local transport"),
+                content,
+            )
+            .await
+    }
+
     pub async fn channel_plan(&self, channel_id: &str) -> Result<Option<DelegationPlan>> {
         self.memory.get_channel_plan(channel_id).await
     }
@@ -657,5 +812,6 @@ pub async fn build_app(
         mcp_orchestrator,
         channel_manager,
         bridge_outbox,
+        conversation_event_sink: Arc::new(OnceLock::new()),
     })
 }

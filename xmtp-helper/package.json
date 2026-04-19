@@ -1,0 +1,11 @@
+{
+  "name": "openpup-xmtp-helper",
+  "version": "0.1.23",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  }
+}

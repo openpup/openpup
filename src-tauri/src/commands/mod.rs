@@ -7,11 +7,13 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use openpup_core::app::OpenPupApp;
+use openpup_core::xmtp_helper::XmtpNodeHelper;
 
 #[derive(Clone)]
 pub struct AppState {
     pub app: Arc<OpenPupApp>,
     pub bridge_manager: Arc<crate::bridge::BridgeManager>,
+    pub xmtp_helper: Arc<XmtpNodeHelper>,
 }
 
 impl Deref for AppState {
@@ -107,6 +109,7 @@ pub mod channel;
 pub mod chat;
 pub mod config;
 pub mod context;
+pub mod conversation;
 pub mod feedback;
 pub mod knowledge;
 pub mod mcp;
@@ -118,6 +121,7 @@ pub mod skills;
 pub mod tasks;
 pub mod timeline;
 pub mod workspace;
+pub mod xmtp_helper;
 
 // Re-export all command functions so main.rs can reference them directly.
 pub use bridge::*;
@@ -125,6 +129,7 @@ pub use channel::*;
 pub use chat::*;
 pub use config::*;
 pub use context::*;
+pub use conversation::*;
 pub use feedback::*;
 pub use knowledge::*;
 pub use mcp::*;
@@ -136,3 +141,4 @@ pub use skills::*;
 pub use tasks::*;
 pub use timeline::*;
 pub use workspace::*;
+pub use xmtp_helper::*;

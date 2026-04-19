@@ -22,6 +22,16 @@ pub struct DesktopRuntimeFactory;
 
 impl DesktopRuntimeFactory {
     pub fn workspace_root() -> Result<PathBuf> {
+        if let Ok(root) = std::env::var("OPENPUP_WORKSPACE") {
+            if !root.trim().is_empty() {
+                return Ok(PathBuf::from(root));
+            }
+        }
+        if let Ok(root) = std::env::var("OPENPUP_APP_ROOT") {
+            if !root.trim().is_empty() {
+                return Ok(PathBuf::from(root));
+            }
+        }
         let home_dir =
             dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
         Ok(home_dir.join(".openpup"))

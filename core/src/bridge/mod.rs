@@ -12,6 +12,7 @@ use crate::bridge::types::{
     BridgeConfig, BridgeConnectionState, BridgeContext, BridgeOutbox, BridgeStatusEvent,
     InboundMessage, OutboundMessage, OutboundType, Platform,
 };
+use crate::runtime::{emit_event, SharedEventSink};
 
 use self::auth::OwnerAuth;
 use self::qqbot::QQBotBridge;
@@ -31,9 +32,20 @@ pub mod weixin;
 pub struct BridgeManager {
     config: RwLock<BridgeConfig>,
     alpha: Arc<AlphaPup>,
+    workspace_root: std::path::PathBuf,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     weixin_service: Arc<WeixinService>,
     outbox: BridgeOutbox,
+    event_sink: Arc<RwLock<Option<SharedEventSink>>>,
+    group_routes: Mutex<HashMap<String, BridgeGroupRoute>>,
+    xmtp_helper: Option<Arc<crate::xmtp_helper::XmtpNodeHelper>>,
+}
+
+#[derive(Debug, Clone)]
+struct BridgeGroupRoute {
+    conversation_id: String,
+    title: String,
+    expires_at: i64,
 }
 
 fn is_stop_request(text: &str) -> bool {
@@ -41,6 +53,59 @@ fn is_stop_request(text: &str) -> bool {
         text.trim().to_lowercase().as_str(),
         "stop" | "abort" | "cancel" | "停止" | "停止吧" | "停下" | "停一下" | "取消" | "/stop"
     )
+}
+
+fn bridge_route_key(platform: &Platform, chat_id: &str, user_id: &str) -> String {
+    format!("{}:{chat_id}:{user_id}", platform.as_str())
+}
+
+fn parse_group_command(text: &str) -> Option<(String, String)> {
+    let trimmed = text.trim();
+    let rest = trimmed
+        .strip_prefix("/g ")
+        .or_else(|| trimmed.strip_prefix("/group "))?
+        .trim();
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let target = parts.next()?.trim();
+    let content = parts.next()?.trim();
+    if target.is_empty() || content.is_empty() {
+        return None;
+    }
+    Some((target.to_string(), content.to_string()))
+}
+
+fn parse_use_command(text: &str) -> Option<String> {
+    let target = text.trim().strip_prefix("/use ")?.trim();
+    if target.is_empty() {
+        None
+    } else {
+        Some(target.to_string())
+    }
+}
+
+fn mentions_alpha(text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                ',' | '，' | '.' | '。' | ':' | '：' | ';' | '；' | ')' | '）' | '(' | '（'
+            )
+        });
+        token
+            .strip_prefix('@')
+            .or_else(|| token.strip_prefix('＠'))
+            .map(|mention| mention.eq_ignore_ascii_case("alpha"))
+            .unwrap_or(false)
+    })
+}
+
+fn bridge_member_profile(platform: &Platform) -> (String, &'static str) {
+    match platform {
+        Platform::QQBot => ("QQBot 用户".to_string(), "qqbot-user"),
+        Platform::Weixin => ("微信用户".to_string(), "weixin-user"),
+        Platform::Telegram => ("Telegram 用户".to_string(), "telegram-user"),
+        _ => ("Bridge 用户".to_string(), "bridge-user"),
+    }
 }
 
 fn is_enabled_config(config: &BridgeConfig) -> bool {
@@ -55,16 +120,27 @@ impl BridgeManager {
     pub fn new(
         config: BridgeConfig,
         alpha: Arc<AlphaPup>,
+        workspace_root: std::path::PathBuf,
         weixin_service: Arc<WeixinService>,
         outbox: BridgeOutbox,
+        xmtp_helper: Option<Arc<crate::xmtp_helper::XmtpNodeHelper>>,
     ) -> Self {
         Self {
             config: RwLock::new(config),
             alpha,
+            workspace_root,
             tasks: Mutex::new(Vec::new()),
             weixin_service,
             outbox,
+            event_sink: Arc::new(RwLock::new(None)),
+            group_routes: Mutex::new(HashMap::new()),
+            xmtp_helper,
         }
+    }
+
+    pub fn set_event_sink(&self, sink: SharedEventSink) {
+        let mut guard = self.event_sink.write().expect("bridge event sink lock poisoned");
+        *guard = Some(sink);
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -80,6 +156,228 @@ impl BridgeManager {
 
     pub fn weixin_service(&self) -> Arc<WeixinService> {
         self.weixin_service.clone()
+    }
+
+    fn emit_conversation_message(&self, message: crate::conversation::types::ConversationMessageRecord) {
+        let sink = self
+            .event_sink
+            .read()
+            .expect("bridge event sink lock poisoned")
+            .clone();
+        if let Some(sink) = sink {
+            emit_event(
+                sink.as_ref(),
+                "conversation_message_created",
+                crate::conversation::types::ConversationMessageCreatedPayload {
+                    conversation_id: message.conversation_id.clone(),
+                    message,
+                },
+            );
+        }
+    }
+
+    async fn emit_conversation_members_changed(&self, conversation_id: &str) {
+        let sink = self
+            .event_sink
+            .read()
+            .expect("bridge event sink lock poisoned")
+            .clone();
+        let Some(sink) = sink else {
+            return;
+        };
+        if let Ok(members) = self.alpha.memory.list_conversation_members(conversation_id).await {
+            emit_event(
+                sink.as_ref(),
+                "conversation_members_changed",
+                crate::conversation::types::ConversationMembersChangedPayload {
+                    conversation_id: conversation_id.to_string(),
+                    member_count: members.iter().filter(|member| member.status == "active").count()
+                        as i64,
+                    members,
+                },
+            );
+        }
+    }
+
+    async fn emit_conversation_spaces_changed(&self) {
+        let sink = self
+            .event_sink
+            .read()
+            .expect("bridge event sink lock poisoned")
+            .clone();
+        let Some(sink) = sink else {
+            return;
+        };
+        if let Ok(spaces) = self.alpha.memory.list_conversation_spaces().await {
+            emit_event(
+                sink.as_ref(),
+                "conversation_spaces_changed",
+                crate::conversation::types::ConversationSpacesChangedPayload { spaces },
+            );
+        }
+    }
+
+    async fn set_group_route(&self, key: String, route: BridgeGroupRoute) {
+        self.group_routes.lock().await.insert(key, route);
+    }
+
+    async fn clear_group_route(&self, key: &str) {
+        self.group_routes.lock().await.remove(key);
+    }
+
+    async fn active_group_route(&self, key: &str) -> Option<BridgeGroupRoute> {
+        let now = chrono::Utc::now().timestamp();
+        let mut routes = self.group_routes.lock().await;
+        let route = routes.get(key).cloned()?;
+        if route.expires_at < now {
+            routes.remove(key);
+            None
+        } else {
+            Some(route)
+        }
+    }
+
+    async fn handle_group_inbound(
+        self: Arc<Self>,
+        alpha: Arc<AlphaPup>,
+        out_tx: mpsc::Sender<OutboundMessage>,
+        platform: Platform,
+        chat_id: String,
+        msg_id: String,
+        user_id: String,
+        space: crate::conversation::types::ConversationSpaceRecord,
+        group_text: String,
+    ) {
+        let route_label = format!("{} · bridge", platform.as_str());
+        let identity_id = format!("bridge:{}:{user_id}", platform.as_str());
+        let (display_name, mention_key) = bridge_member_profile(&platform);
+
+        if let Err(e) = alpha
+            .memory
+            .ensure_conversation_member(
+                &space.id,
+                &identity_id,
+                &display_name,
+                Some(mention_key),
+                &route_label,
+                "member",
+            )
+            .await
+        {
+            let _ = out_tx
+                .send(OutboundMessage {
+                    platform,
+                    chat_id,
+                    text: format!("❌ 加入群成员失败：{e}"),
+                    reply_to_id: Some(msg_id),
+                    msg_type: OutboundType::Error,
+                })
+                .await;
+            return;
+        }
+        self.emit_conversation_members_changed(&space.id).await;
+        self.emit_conversation_spaces_changed().await;
+
+        let _ = out_tx
+            .send(OutboundMessage {
+                platform: platform.clone(),
+                chat_id: chat_id.clone(),
+                text: format!("🐾 收到，已发到 #{}，处理中…", space.title),
+                reply_to_id: Some(msg_id.clone()),
+                msg_type: OutboundType::Ack,
+            })
+            .await;
+
+        let sender_route_id = format!("{}:{}:{}", platform.as_str(), chat_id, msg_id);
+        if let Ok(message) = alpha
+            .memory
+            .post_conversation_message(
+                &space.id,
+                &identity_id,
+                Some(&sender_route_id),
+                &display_name,
+                "human",
+                Some(&route_label),
+                &group_text,
+            )
+            .await
+        {
+            if let Some(xmtp_helper) = &self.xmtp_helper {
+                if let Err(e) = xmtp_helper
+                    .publish_message(&alpha.memory, &self.workspace_root, &space, &message)
+                    .await
+                {
+                    warn!("[bridge] failed to publish group message to XMTP: {e}");
+                }
+            }
+            self.emit_conversation_message(message);
+            self.emit_conversation_spaces_changed().await;
+        }
+
+        let mention_required = space
+            .transports
+            .iter()
+            .any(|transport| transport.kind == "xmtp" && transport.status == "active");
+        if mention_required && !mentions_alpha(&group_text) {
+            return;
+        }
+
+        match alpha
+            .process_group_message(&space.id, &space.title, &group_text)
+            .await
+        {
+            Ok(reply) => {
+                if !reply.is_empty() && !alpha.abort_flag.load(Ordering::Relaxed) {
+                    if let Ok(message) = alpha
+                        .memory
+                        .post_conversation_message(
+                            &space.id,
+                            "agent_alpha",
+                            None,
+                            "Alpha",
+                            "agent",
+                            Some("openpup.alpha"),
+                            &reply,
+                        )
+                        .await
+                    {
+                        if let Some(xmtp_helper) = &self.xmtp_helper {
+                            if let Err(e) = xmtp_helper
+                                .publish_message(&alpha.memory, &self.workspace_root, &space, &message)
+                                .await
+                            {
+                                warn!("[bridge] failed to publish Alpha group reply to XMTP: {e}");
+                            }
+                        }
+                        self.emit_conversation_message(message);
+                        self.emit_conversation_spaces_changed().await;
+                    }
+                }
+                let segments = formatter::format_result(&reply);
+                for (i, seg) in segments.into_iter().enumerate() {
+                    let _ = out_tx
+                        .send(OutboundMessage {
+                            platform: platform.clone(),
+                            chat_id: chat_id.clone(),
+                            text: seg,
+                            reply_to_id: if i == 0 { Some(msg_id.clone()) } else { None },
+                            msg_type: OutboundType::Result,
+                        })
+                        .await;
+                }
+            }
+            Err(e) => {
+                let _ = out_tx
+                    .send(OutboundMessage {
+                        platform,
+                        chat_id,
+                        text: format!("❌ 群聊处理失败：{e}"),
+                        reply_to_id: Some(msg_id),
+                        msg_type: OutboundType::Error,
+                    })
+                    .await;
+            }
+        }
     }
 
     pub fn start(self: Arc<Self>) {
@@ -402,6 +700,7 @@ impl BridgeManager {
                 let msg_id = inbound.message_id.clone();
                 let platform = inbound.platform.clone();
                 let inbound_text = inbound.text.clone();
+                let route_key = bridge_route_key(&platform, &chat_id, &inbound.user_id);
 
                 if is_stop_request(&inbound_text) {
                     manager.alpha.abort_flag.store(true, Ordering::Relaxed);
@@ -414,6 +713,171 @@ impl BridgeManager {
                             msg_type: OutboundType::Result,
                         })
                         .await;
+                    continue;
+                }
+
+                if let Some(group_target) = parse_use_command(&inbound_text) {
+                    let out_tx = outbound_tx.clone();
+                    let route_key = route_key.clone();
+                    let manager_for_route = manager.clone();
+                    tokio::spawn(async move {
+                        if matches!(group_target.as_str(), "personal" | "个人" | "私聊") {
+                            manager_for_route.clear_group_route(&route_key).await;
+                            let _ = out_tx
+                                .send(OutboundMessage {
+                                    platform,
+                                    chat_id,
+                                    text: "已切回个人工作区。".to_string(),
+                                    reply_to_id: Some(msg_id),
+                                    msg_type: OutboundType::Ack,
+                                })
+                                .await;
+                            return;
+                        }
+
+                        match alpha.memory.find_conversation_space(&group_target).await {
+                            Ok(Some(space)) => {
+                                manager_for_route
+                                    .set_group_route(
+                                        route_key,
+                                        BridgeGroupRoute {
+                                            conversation_id: space.id.clone(),
+                                            title: space.title.clone(),
+                                            expires_at: chrono::Utc::now().timestamp() + 30 * 60,
+                                        },
+                                    )
+                                    .await;
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!(
+                                            "已切到 #{}，30 分钟内普通消息会进入这个群。发送 /use personal 可返回个人工作区。",
+                                            space.title
+                                        ),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Ack,
+                                    })
+                                    .await;
+                            }
+                            Ok(None) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 未找到群：{group_target}"),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 查找群失败：{e}"),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                        }
+                    });
+                    continue;
+                }
+
+                if let Some((group_target, group_text)) = parse_group_command(&inbound_text) {
+                    let user_id = inbound.user_id.clone();
+                    let manager_for_events = manager.clone();
+
+                    tokio::spawn(async move {
+                        match alpha.memory.find_conversation_space(&group_target).await {
+                            Ok(Some(space)) => {
+                                manager_for_events
+                                    .handle_group_inbound(
+                                        alpha,
+                                        out_tx,
+                                        platform,
+                                        chat_id,
+                                        msg_id,
+                                        user_id,
+                                        space,
+                                        group_text,
+                                    )
+                                    .await;
+                            }
+                            Ok(None) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 未找到群：{group_target}"),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 查找群失败：{e}"),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                        }
+                    });
+                    continue;
+                }
+
+                if let Some(route) = manager.active_group_route(&route_key).await {
+                    let user_id = inbound.user_id.clone();
+                    let group_text = inbound_text.clone();
+                    let manager_for_events = manager.clone();
+                    tokio::spawn(async move {
+                        match alpha.memory.get_conversation_space(&route.conversation_id).await {
+                            Ok(Some(space)) => {
+                                manager_for_events
+                                    .handle_group_inbound(
+                                        alpha,
+                                        out_tx,
+                                        platform,
+                                        chat_id,
+                                        msg_id,
+                                        user_id,
+                                        space,
+                                        group_text,
+                                    )
+                                    .await;
+                            }
+                            Ok(None) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 群已不存在：{}", route.title),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                let _ = out_tx
+                                    .send(OutboundMessage {
+                                        platform,
+                                        chat_id,
+                                        text: format!("❌ 查找群失败：{e}"),
+                                        reply_to_id: Some(msg_id),
+                                        msg_type: OutboundType::Error,
+                                    })
+                                    .await;
+                            }
+                        }
+                    });
                     continue;
                 }
 

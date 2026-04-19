@@ -135,8 +135,10 @@ async fn serve() -> Result<()> {
     let bridge_manager = Arc::new(BridgeManager::new(
         bridge_config,
         runtime.alpha.clone(),
+        runtime.workspace_root.clone(),
         weixin_service,
         runtime.app.bridge_outbox.clone(),
+        None,
     ));
     bridge_manager.clone().start();
 

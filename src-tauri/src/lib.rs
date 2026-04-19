@@ -3,6 +3,7 @@ pub use openpup_core::bridge;
 pub use openpup_core::channel;
 mod commands;
 pub use openpup_core::config;
+pub use openpup_core::conversation;
 pub use openpup_core::crypto;
 pub use openpup_core::knowledge;
 pub use openpup_core::llm;
@@ -21,14 +22,34 @@ use commands::AppState;
 use openpup_core::app::OpenPupApp;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use openpup_core::skills::permissions::PermissionUi;
+use openpup_core::xmtp_helper::{XmtpHelperConfig, XmtpNodeHelper};
 #[cfg(target_os = "android")]
 use openpup_runtime_android::AndroidRuntimeFactory;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use openpup_runtime_desktop::DesktopRuntimeFactory;
 #[cfg(target_os = "ios")]
 use openpup_runtime_ios::IosRuntimeFactory;
+use serde::{Deserialize, Serialize};
 use skills::scheduler::SkillScheduler;
 use tokio::runtime::Runtime;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct XmtpHelperMessagePayload {
+    transport_ref: String,
+    remote_message_id: String,
+    envelope: Option<conversation::types::AgentChatEnvelope>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct XmtpHelperGroupPayload {
+    pub transport_ref: String,
+    pub title: String,
+    pub description: String,
+    pub created_at: Option<i64>,
+    pub added_by_inbox_id: Option<String>,
+}
 
 fn init_logging(workspace_root: &std::path::Path) {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -155,6 +176,22 @@ macro_rules! all_commands {
             commands::get_active_channel_count,
             commands::clear_completed_channels,
             commands::clear_stale_channels,
+            commands::list_conversation_spaces,
+            commands::create_conversation_space,
+            commands::find_conversation_space,
+            commands::get_conversation_members,
+            commands::add_conversation_member,
+            commands::remove_conversation_member,
+            commands::delete_conversation_space,
+            commands::get_conversation_messages,
+            commands::post_conversation_message,
+            commands::get_xmtp_helper_status,
+            commands::get_xmtp_identity,
+            commands::enable_xmtp_for_conversation,
+            commands::add_xmtp_conversation_member,
+            commands::remove_xmtp_conversation_member,
+            commands::leave_xmtp_conversation,
+            commands::sync_xmtp_groups,
             commands::get_pup_conversation,
             commands::get_pup_message_count,
             commands::clear_pup_history,
@@ -184,6 +221,284 @@ fn run_inner() -> anyhow::Result<()> {
     return run_desktop();
 }
 
+fn xmtp_helper_config() -> XmtpHelperConfig {
+    let node_bin = std::env::var_os("OPENPUP_NODE_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("node"));
+    let script_path = std::env::var_os("OPENPUP_XMTP_HELPER_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            manifest_dir
+                .parent()
+                .unwrap_or(manifest_dir.as_path())
+                .join("xmtp-helper")
+                .join("dist")
+                .join("index.js")
+        });
+    XmtpHelperConfig {
+        node_bin,
+        script_path,
+    }
+}
+
+fn spawn_xmtp_event_pump(app: Arc<openpup_core::app::OpenPupApp>, helper: Arc<XmtpNodeHelper>) {
+    let mut rx = helper.subscribe_events();
+    tauri::async_runtime::spawn(async move {
+        while let Ok(event) = rx.recv().await {
+            let result = match event.event.as_str() {
+                "message" => import_xmtp_message(app.clone(), event.payload).await,
+                "group" => import_xmtp_group(app.clone(), event.payload).await.map(|_| ()),
+                "stream" => {
+                    tracing::info!("[xmtp-helper] stream status: {}", event.payload);
+                    app.emit_xmtp_stream_status(event.payload);
+                    Ok(())
+                }
+                _ => continue,
+            };
+            if let Err(e) = result {
+                tracing::warn!("[xmtp-helper] import event failed: {e}");
+            }
+        }
+    });
+}
+
+pub(crate) async fn import_xmtp_group(
+    app: Arc<openpup_core::app::OpenPupApp>,
+    payload: serde_json::Value,
+) -> anyhow::Result<String> {
+    let payload: XmtpHelperGroupPayload = serde_json::from_value(payload)?;
+    if let Some(conversation_id) = app
+        .memory
+        .find_conversation_by_transport("xmtp", &payload.transport_ref)
+        .await?
+    {
+        return Ok(conversation_id);
+    }
+
+    let title = if payload.title.trim().is_empty() {
+        "XMTP 群聊"
+    } else {
+        payload.title.trim()
+    };
+    let description = if payload.description.trim().is_empty() {
+        "XMTP remote group"
+    } else {
+        payload.description.trim()
+    };
+    let space = app
+        .memory
+        .create_conversation_space(title, Some(description), Some("owner"), Some("#378ADD"))
+        .await?;
+    app.memory
+        .bind_conversation_transport(&space.id, "xmtp", "XMTP", &payload.transport_ref)
+        .await?;
+    app.emit_conversation_spaces_changed().await;
+    Ok(space.id)
+}
+
+async fn import_xmtp_message(
+    app: Arc<openpup_core::app::OpenPupApp>,
+    payload: serde_json::Value,
+) -> anyhow::Result<()> {
+    let payload: XmtpHelperMessagePayload = serde_json::from_value(payload)?;
+    if app
+        .memory
+        .xmtp_message_seen(&payload.transport_ref, &payload.remote_message_id)
+        .await?
+    {
+        return Ok(());
+    }
+
+    let conversation_id = match app
+        .memory
+        .find_conversation_by_transport("xmtp", &payload.transport_ref)
+        .await?
+    {
+        Some(conversation_id) => conversation_id,
+        None => {
+            import_xmtp_group(
+                app.clone(),
+                serde_json::json!({
+                    "transportRef": payload.transport_ref,
+                    "title": "XMTP 群聊",
+                    "description": "",
+                    "createdAt": chrono::Utc::now().timestamp(),
+                    "addedByInboxId": "",
+                }),
+            )
+            .await?
+        }
+    };
+
+    let Some(envelope) = payload.envelope else {
+        return Ok(());
+    };
+    let sender = &envelope.sender;
+    let content = envelope.content.text.clone();
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let inbox_id = sender.transport.inbox_id.as_str();
+    let client_kind = sender.client.kind.as_str();
+    let client_instance_id = sender.client.instance_id.as_str();
+    let client_display_name = if sender.client.display_name.trim().is_empty() {
+        "XMTP Client"
+    } else {
+        sender.client.display_name.as_str()
+    };
+    let actor_kind = sender.actor.kind.as_str();
+    let actor_id = sender.actor.actor_id.as_str();
+    let actor_display_name = if sender.actor.display_name.trim().is_empty() {
+        "Human"
+    } else {
+        sender.actor.display_name.as_str()
+    };
+    let agent_key = sender.actor.agent_key.as_deref();
+    let via_kind = sender.via.as_ref().map(|via| via.kind.as_str());
+    let via_label = sender.via.as_ref().map(|via| via.label.as_str());
+    let display_name = display_name_for_remote_actor(client_display_name, actor_kind, actor_display_name, agent_key);
+    let route_label = route_label_for_remote_actor(client_kind, via_label);
+    let identity_id = format!("xmtp:{inbox_id}:{client_instance_id}:{actor_id}");
+    let mention_key = mention_key_for_remote_actor(client_instance_id, actor_id);
+
+    app.memory
+        .upsert_network_identity(
+            "xmtp",
+            inbox_id,
+            &display_name,
+            actor_kind,
+            client_kind,
+            agent_key,
+        )
+        .await?;
+    app.memory
+        .ensure_conversation_member_with_sender_meta(
+            &conversation_id,
+            &identity_id,
+            &display_name,
+            Some(&mention_key),
+            &route_label,
+            if actor_kind == "agent" {
+                "agent"
+            } else {
+                "member"
+            },
+            Some("xmtp"),
+            Some(inbox_id),
+            Some(client_kind),
+            Some(client_instance_id),
+            Some(client_display_name),
+            Some(actor_kind),
+            Some(actor_id),
+            Some(actor_display_name),
+            via_kind,
+            via_label,
+        )
+        .await?;
+    app.emit_conversation_members_changed(&conversation_id)
+        .await;
+
+    let message = app
+        .memory
+        .post_conversation_message_with_sender_meta(
+            &conversation_id,
+            &identity_id,
+            Some(&payload.remote_message_id),
+            &display_name,
+            if actor_kind == "agent" {
+                "agent"
+            } else {
+                "human"
+            },
+            Some(&route_label),
+            &content,
+            Some("xmtp"),
+            Some(inbox_id),
+            Some(client_kind),
+            Some(client_instance_id),
+            Some(client_display_name),
+            Some(actor_kind),
+            Some(actor_id),
+            Some(actor_display_name),
+            via_kind,
+            via_label,
+        )
+        .await?;
+    app.memory
+        .insert_xmtp_message_map(
+            &message.id,
+            &payload.remote_message_id,
+            &payload.transport_ref,
+            "inbound",
+        )
+        .await?;
+    app.emit_conversation_message_created(message);
+    app.emit_conversation_spaces_changed().await;
+    Ok(())
+}
+
+fn display_name_for_remote_actor(
+    client_display_name: &str,
+    actor_kind: &str,
+    actor_display_name: &str,
+    agent_key: Option<&str>,
+) -> String {
+    if actor_kind == "agent" {
+        let actor = agent_key
+            .map(|key| if key == "alpha" { "Alpha" } else { key })
+            .unwrap_or(actor_display_name);
+        format!("{actor} · {client_display_name}")
+    } else if actor_kind == "human" {
+        format!("{client_display_name} / {actor_display_name}")
+    } else {
+        format!("{client_display_name} / {actor_display_name}")
+    }
+}
+
+fn route_label_for_remote_actor(client_kind: &str, via_label: Option<&str>) -> String {
+    match via_label {
+        Some(label) if !label.trim().is_empty() => format!("xmtp · {client_kind} · {label}"),
+        _ => format!("xmtp · {client_kind}"),
+    }
+}
+
+fn mention_key_for_remote_actor(client_instance_id: &str, actor_id: &str) -> String {
+    let client = client_instance_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let actor = actor_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if client.is_empty() {
+        actor
+    } else if actor.is_empty() {
+        client
+    } else {
+        format!("{client}/{actor}")
+    }
+}
+
 /// Desktop startup: resolve workspace root up-front (dirs crate works fine),
 /// build the OpenPupApp, then launch Tauri.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -208,17 +523,22 @@ fn run_desktop() -> anyhow::Result<()> {
 
     let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
     let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+    let xmtp_helper = Arc::new(XmtpNodeHelper::new(xmtp_helper_config()));
     let bridge_manager = Arc::new(bridge::BridgeManager::new(
         bridge_cfg,
         app.alpha.clone(),
+        app.workspace_root.clone(),
         weixin_service,
         app.bridge_outbox.clone(),
+        Some(xmtp_helper.clone()),
     ));
 
     let app_state = AppState {
         app: app.clone(),
         bridge_manager: bridge_manager.clone(),
+        xmtp_helper: xmtp_helper.clone(),
     };
+    let app_for_setup = app.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -239,6 +559,9 @@ fn run_desktop() -> anyhow::Result<()> {
             ));
             permission_checker.set_event_sink(event_sink.clone());
             channel_manager_for_setup.set_event_sink(event_sink.clone());
+            app_for_setup.set_conversation_event_sink(event_sink.clone());
+            bridge_manager.set_event_sink(event_sink.clone());
+            spawn_xmtp_event_pump(app_for_setup.clone(), xmtp_helper.clone());
             tauri::async_runtime::spawn(async move {
                 scheduler_for_setup.start(Some(event_sink));
                 bridge_manager.clone().start();
@@ -303,17 +626,22 @@ fn run_mobile() -> anyhow::Result<()> {
 
     let weixin_service = Arc::new(bridge::weixin::WeixinService::new());
     let bridge_cfg = crate::config::load_with_env().bridge.unwrap_or_default();
+    let xmtp_helper = Arc::new(XmtpNodeHelper::new(xmtp_helper_config()));
     let bridge_manager = Arc::new(bridge::BridgeManager::new(
         bridge_cfg,
         app.alpha.clone(),
+        app.workspace_root.clone(),
         weixin_service,
         app.bridge_outbox.clone(),
+        Some(xmtp_helper.clone()),
     ));
 
     let app_state = AppState {
         app: app.clone(),
         bridge_manager: bridge_manager.clone(),
+        xmtp_helper: xmtp_helper.clone(),
     };
+    let app_for_setup = app.clone();
 
     tauri_app.manage(app_state);
     tauri_app.manage(permission_checker.clone());
@@ -323,6 +651,9 @@ fn run_mobile() -> anyhow::Result<()> {
     ));
     permission_checker.set_event_sink(event_sink.clone());
     channel_manager_for_setup.set_event_sink(event_sink.clone());
+    app_for_setup.set_conversation_event_sink(event_sink.clone());
+    bridge_manager.set_event_sink(event_sink.clone());
+    spawn_xmtp_event_pump(app_for_setup.clone(), xmtp_helper.clone());
     tauri::async_runtime::spawn(async move {
         scheduler_for_setup.start(Some(event_sink));
         bridge_manager.clone().start();

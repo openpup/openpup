@@ -13,12 +13,44 @@ use crate::bridge::types::{
 use crate::channel::types::{
     ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
 };
+use crate::conversation::types::{
+    ConversationMemberRecord, ConversationMessageRecord, ConversationSpaceRecord,
+    ConversationTransportRecord,
+};
 use crate::llm::client::LlmClient;
 
 #[derive(Clone)]
 pub struct MemorySystem {
     pool: Pool<Sqlite>,
     llm: Arc<LlmClient>,
+}
+
+fn normalize_mention_key(value: &str, fallback: &str) -> String {
+    let mut key = String::new();
+    let mut last_separator = false;
+    for ch in value.trim().trim_start_matches('@').trim_start_matches('＠').chars() {
+        if ch.is_alphanumeric() {
+            key.extend(ch.to_lowercase());
+            last_separator = false;
+        } else if (ch == '-' || ch == '_' || ch == '.' || ch == '/' || ch == ':')
+            && !last_separator
+            && !key.is_empty()
+        {
+            key.push(if ch == ':' { '-' } else { ch });
+            last_separator = true;
+        } else if !last_separator && !key.is_empty() {
+            key.push('-');
+            last_separator = true;
+        }
+    }
+    let key = key
+        .trim_matches(|ch| matches!(ch, '-' | '_' | '.' | '/'))
+        .to_string();
+    if key.is_empty() {
+        fallback.to_string()
+    } else {
+        key
+    }
 }
 
 impl MemorySystem {
@@ -339,6 +371,248 @@ impl MemorySystem {
         plan_json   TEXT NOT NULL,
         updated_at  INTEGER NOT NULL
       );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS conversation_spaces (
+        id                TEXT PRIMARY KEY,
+        kind              TEXT NOT NULL DEFAULT 'group',
+        title             TEXT NOT NULL,
+        description       TEXT NOT NULL DEFAULT '',
+        owner_identity_id TEXT NOT NULL DEFAULT 'owner',
+        accent            TEXT NOT NULL DEFAULT '#1D9E75',
+        invite_code       TEXT NOT NULL,
+        routing_mode      TEXT NOT NULL DEFAULT '显式目标',
+        created_at        INTEGER NOT NULL,
+        updated_at        INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_conversation_spaces_updated_at
+      ON conversation_spaces(updated_at DESC);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS conversation_members (
+        id              TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        identity_id     TEXT NOT NULL,
+        display_name    TEXT NOT NULL,
+        mention_key     TEXT NOT NULL DEFAULT '',
+        role            TEXT NOT NULL DEFAULT 'member',
+        status          TEXT NOT NULL DEFAULT 'active',
+        route_label     TEXT NOT NULL DEFAULT 'app',
+        online          INTEGER NOT NULL DEFAULT 0,
+        accent          TEXT NOT NULL DEFAULT '#378ADD',
+        joined_at       INTEGER NOT NULL,
+        last_seen_at    INTEGER,
+        network_kind       TEXT,
+        transport_inbox_id TEXT,
+        client_kind        TEXT,
+        client_instance_id TEXT,
+        client_display_name TEXT,
+        actor_kind         TEXT,
+        actor_id           TEXT,
+        actor_display_name TEXT,
+        via_kind           TEXT,
+        via_label          TEXT,
+        UNIQUE(conversation_id, identity_id)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        let _ =
+            sqlx::query("ALTER TABLE conversation_members ADD COLUMN mention_key TEXT NOT NULL DEFAULT ''")
+                .execute(&self.pool)
+                .await;
+        for column in [
+            "network_kind TEXT",
+            "transport_inbox_id TEXT",
+            "client_kind TEXT",
+            "client_instance_id TEXT",
+            "client_display_name TEXT",
+            "actor_kind TEXT",
+            "actor_id TEXT",
+            "actor_display_name TEXT",
+            "via_kind TEXT",
+            "via_label TEXT",
+        ] {
+            let _ = sqlx::query(&format!("ALTER TABLE conversation_members ADD COLUMN {column}"))
+                .execute(&self.pool)
+                .await;
+        }
+        let _ = sqlx::query(
+            r#"
+            UPDATE conversation_members
+            SET mention_key = lower(replace(display_name, ' ', '-'))
+            WHERE mention_key = ''
+            "#,
+        )
+        .execute(&self.pool)
+        .await;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_conversation_members_conversation
+      ON conversation_members(conversation_id, status);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS conversation_messages (
+        id                 TEXT PRIMARY KEY,
+        conversation_id    TEXT NOT NULL,
+        sender_identity_id TEXT NOT NULL,
+        sender_route_id    TEXT,
+        sender_name        TEXT NOT NULL,
+        sender_kind        TEXT NOT NULL DEFAULT 'human',
+        route_label        TEXT,
+        content            TEXT NOT NULL,
+        created_at         INTEGER NOT NULL,
+        network_kind       TEXT,
+        transport_inbox_id TEXT,
+        client_kind        TEXT,
+        client_instance_id TEXT,
+        client_display_name TEXT,
+        actor_kind         TEXT,
+        actor_id           TEXT,
+        actor_display_name TEXT,
+        via_kind           TEXT,
+        via_label          TEXT
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        for column in [
+            "network_kind TEXT",
+            "transport_inbox_id TEXT",
+            "client_kind TEXT",
+            "client_instance_id TEXT",
+            "client_display_name TEXT",
+            "actor_kind TEXT",
+            "actor_id TEXT",
+            "actor_display_name TEXT",
+            "via_kind TEXT",
+            "via_label TEXT",
+        ] {
+            let _ = sqlx::query(&format!("ALTER TABLE conversation_messages ADD COLUMN {column}"))
+                .execute(&self.pool)
+                .await;
+        }
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
+      ON conversation_messages(conversation_id, created_at);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS conversation_transport_bindings (
+        id              TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        label           TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'active',
+        transport_ref   TEXT,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL,
+        UNIQUE(conversation_id, kind, transport_ref)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_conversation_transport_conversation
+      ON conversation_transport_bindings(conversation_id, status);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS network_identities (
+        id                  TEXT PRIMARY KEY,
+        network_kind        TEXT NOT NULL,
+        network_identity_id TEXT NOT NULL,
+        display_name        TEXT NOT NULL,
+        participant_kind    TEXT NOT NULL DEFAULT 'unknown',
+        app_kind            TEXT NOT NULL DEFAULT 'unknown',
+        agent_key           TEXT,
+        capabilities_json   TEXT NOT NULL DEFAULT '{}',
+        trust_level         TEXT NOT NULL DEFAULT 'untrusted',
+        first_seen_at       INTEGER NOT NULL,
+        last_seen_at        INTEGER NOT NULL,
+        UNIQUE(network_kind, network_identity_id)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS xmtp_identities (
+        id          TEXT PRIMARY KEY,
+        inbox_id    TEXT NOT NULL,
+        address     TEXT,
+        signer_kind TEXT NOT NULL DEFAULT 'helper',
+        key_ref     TEXT,
+        db_path     TEXT NOT NULL,
+        env         TEXT NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        UNIQUE(inbox_id, env)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS xmtp_message_map (
+        local_message_id     TEXT NOT NULL,
+        xmtp_message_id      TEXT NOT NULL,
+        xmtp_conversation_id TEXT NOT NULL,
+        direction            TEXT NOT NULL,
+        created_at           INTEGER NOT NULL,
+        PRIMARY KEY(local_message_id, xmtp_message_id)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_xmtp_message_map_remote
+      ON xmtp_message_map(xmtp_conversation_id, xmtp_message_id);
       "#,
         )
         .execute(&self.pool)
@@ -789,6 +1063,987 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ── Conversation Spaces ─────────────────────────────────────────────────
+
+    pub async fn create_conversation_space(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        owner_identity_id: Option<&str>,
+        accent: Option<&str>,
+    ) -> Result<ConversationSpaceRecord> {
+        let now = Utc::now().timestamp();
+        let id = format!("conv_{}", uuid::Uuid::new_v4());
+        let invite_seed = uuid::Uuid::new_v4().simple().to_string();
+        let invite_code = format!("G-{}", &invite_seed[..4].to_ascii_uppercase());
+        let owner_identity_id = owner_identity_id.unwrap_or("owner");
+        let description = description.unwrap_or("Group Space · local-first");
+        let accent = accent.unwrap_or("#1D9E75");
+
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_spaces
+              (id, kind, title, description, owner_identity_id, accent, invite_code, routing_mode, created_at, updated_at)
+            VALUES (?1, 'group', ?2, ?3, ?4, ?5, ?6, '显式目标', ?7, ?7)
+            "#,
+        )
+        .bind(&id)
+        .bind(title)
+        .bind(description)
+        .bind(owner_identity_id)
+        .bind(accent)
+        .bind(&invite_code)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members
+              (id, conversation_id, identity_id, display_name, mention_key, role, status, route_label, online, accent, joined_at, last_seen_at)
+            VALUES (?1, ?2, ?3, 'Ben', 'ben', 'owner', 'active', 'app', 1, '#378ADD', ?4, ?4)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&id)
+        .bind(owner_identity_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members
+              (id, conversation_id, identity_id, display_name, mention_key, role, status, route_label, online, accent, joined_at, last_seen_at)
+            VALUES (?1, ?2, 'agent_alpha', 'Alpha', 'alpha', 'agent', 'active', 'local agent', 1, ?3, ?4, ?4)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&id)
+        .bind(accent)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_transport_bindings
+              (id, conversation_id, kind, label, status, transport_ref, created_at, updated_at)
+            VALUES (?1, ?2, 'local', 'Local', 'active', NULL, ?3, ?3)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.post_conversation_message(
+            &id,
+            "system",
+            None,
+            "系统",
+            "system",
+            None,
+            &format!("Conversation Space「{}」已创建。Alpha 已加入。", title),
+        )
+        .await?;
+
+        self.get_conversation_space(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created conversation space not found"))
+    }
+
+    pub async fn list_conversation_spaces(&self) -> Result<Vec<ConversationSpaceRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT s.id, s.kind, s.title, s.description, s.owner_identity_id,
+                   s.created_at, s.updated_at, s.accent, s.invite_code, s.routing_mode,
+                   COALESCE(mem.member_count, 0) AS member_count,
+                   COALESCE(msg.last_message_at, s.updated_at) AS sort_at
+            FROM conversation_spaces s
+            LEFT JOIN (
+              SELECT conversation_id, COUNT(*) AS member_count
+              FROM conversation_members
+              WHERE status = 'active'
+              GROUP BY conversation_id
+            ) mem ON mem.conversation_id = s.id
+            LEFT JOIN (
+              SELECT conversation_id, MAX(created_at) AS last_message_at
+              FROM conversation_messages
+              GROUP BY conversation_id
+            ) msg ON msg.conversation_id = s.id
+            ORDER BY sort_at DESC, s.created_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut spaces = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            spaces.push(ConversationSpaceRecord {
+                id: id.clone(),
+                kind: row.get("kind"),
+                title: row.get("title"),
+                description: row.get("description"),
+                owner_identity_id: row.get("owner_identity_id"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                accent: row.get("accent"),
+                invite_code: row.get("invite_code"),
+                routing_mode: row.get("routing_mode"),
+                member_count: row.get("member_count"),
+                unread: 0,
+                transports: self.list_conversation_transports(&id).await?,
+            });
+        }
+        Ok(spaces)
+    }
+
+    pub async fn get_conversation_space(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<ConversationSpaceRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT s.id, s.kind, s.title, s.description, s.owner_identity_id,
+                   s.created_at, s.updated_at, s.accent, s.invite_code, s.routing_mode,
+                   COALESCE(mem.member_count, 0) AS member_count
+            FROM conversation_spaces s
+            LEFT JOIN (
+              SELECT conversation_id, COUNT(*) AS member_count
+              FROM conversation_members
+              WHERE status = 'active'
+              GROUP BY conversation_id
+            ) mem ON mem.conversation_id = s.id
+            WHERE s.id = ?1
+            "#,
+        )
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(ConversationSpaceRecord {
+            id: row.get("id"),
+            kind: row.get("kind"),
+            title: row.get("title"),
+            description: row.get("description"),
+            owner_identity_id: row.get("owner_identity_id"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+            accent: row.get("accent"),
+            invite_code: row.get("invite_code"),
+            routing_mode: row.get("routing_mode"),
+            member_count: row.get("member_count"),
+            unread: 0,
+            transports: self.list_conversation_transports(conversation_id).await?,
+        }))
+    }
+
+    pub async fn find_conversation_space(
+        &self,
+        target: &str,
+    ) -> Result<Option<ConversationSpaceRecord>> {
+        let target = target.trim();
+        if target.is_empty() {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            r#"
+            SELECT id
+            FROM conversation_spaces
+            WHERE id = ?1
+               OR title = ?1
+               OR invite_code = ?1
+               OR lower(title) = lower(?1)
+               OR lower(invite_code) = lower(?1)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(target)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => {
+                let id: String = row.get("id");
+                self.get_conversation_space(&id).await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn list_conversation_members(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationMemberRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, conversation_id, identity_id, display_name, mention_key, role, status,
+                   route_label, online, accent, joined_at, last_seen_at,
+                   network_kind, transport_inbox_id, client_kind, client_instance_id,
+                   client_display_name, actor_kind, actor_id, actor_display_name,
+                   via_kind, via_label
+            FROM conversation_members
+            WHERE conversation_id = ?1
+            ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'agent' THEN 2 ELSE 3 END,
+                     joined_at ASC
+            "#,
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ConversationMemberRecord {
+                id: row.get("id"),
+                conversation_id: row.get("conversation_id"),
+                identity_id: row.get("identity_id"),
+                display_name: row.get("display_name"),
+                mention_key: row.get("mention_key"),
+                role: row.get("role"),
+                status: row.get("status"),
+                route_label: row.get("route_label"),
+                online: row.get::<i64, _>("online") != 0,
+                accent: row.get("accent"),
+                joined_at: row.get("joined_at"),
+                last_seen_at: row.get("last_seen_at"),
+                network_kind: row.get("network_kind"),
+                transport_inbox_id: row.get("transport_inbox_id"),
+                client_kind: row.get("client_kind"),
+                client_instance_id: row.get("client_instance_id"),
+                client_display_name: row.get("client_display_name"),
+                actor_kind: row.get("actor_kind"),
+                actor_id: row.get("actor_id"),
+                actor_display_name: row.get("actor_display_name"),
+                via_kind: row.get("via_kind"),
+                via_label: row.get("via_label"),
+            })
+            .collect())
+    }
+
+    pub async fn ensure_conversation_member(
+        &self,
+        conversation_id: &str,
+        identity_id: &str,
+        display_name: &str,
+        mention_key: Option<&str>,
+        route_label: &str,
+        role: &str,
+    ) -> Result<ConversationMemberRecord> {
+        let now = Utc::now().timestamp();
+        let mention_key = mention_key
+            .map(|value| normalize_mention_key(value, identity_id))
+            .unwrap_or_else(|| normalize_mention_key(display_name, identity_id));
+        let existing = sqlx::query(
+            r#"
+            SELECT id, conversation_id, identity_id, display_name, mention_key, role, status,
+                   route_label, online, accent, joined_at, last_seen_at,
+                   network_kind, transport_inbox_id, client_kind, client_instance_id,
+                   client_display_name, actor_kind, actor_id, actor_display_name,
+                   via_kind, via_label
+            FROM conversation_members
+            WHERE conversation_id = ?1 AND identity_id = ?2
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(identity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = existing {
+            sqlx::query(
+                r#"
+                UPDATE conversation_members
+                SET status = 'active', display_name = ?1, mention_key = ?2, route_label = ?3, last_seen_at = ?4
+                WHERE conversation_id = ?5 AND identity_id = ?6
+                "#,
+            )
+            .bind(display_name)
+            .bind(&mention_key)
+            .bind(route_label)
+            .bind(now)
+            .bind(conversation_id)
+            .bind(identity_id)
+            .execute(&self.pool)
+            .await?;
+
+            return Ok(ConversationMemberRecord {
+                id: row.get("id"),
+                conversation_id: row.get("conversation_id"),
+                identity_id: row.get("identity_id"),
+                display_name: display_name.to_string(),
+                mention_key,
+                role: row.get("role"),
+                status: "active".to_string(),
+                route_label: route_label.to_string(),
+                online: row.get::<i64, _>("online") != 0,
+                accent: row.get("accent"),
+                joined_at: row.get("joined_at"),
+                last_seen_at: Some(now),
+                network_kind: row.get("network_kind"),
+                transport_inbox_id: row.get("transport_inbox_id"),
+                client_kind: row.get("client_kind"),
+                client_instance_id: row.get("client_instance_id"),
+                client_display_name: row.get("client_display_name"),
+                actor_kind: row.get("actor_kind"),
+                actor_id: row.get("actor_id"),
+                actor_display_name: row.get("actor_display_name"),
+                via_kind: row.get("via_kind"),
+                via_label: row.get("via_label"),
+            });
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let accent = if role == "agent" {
+            "#1D9E75"
+        } else {
+            "#7F77DD"
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members
+              (id, conversation_id, identity_id, display_name, mention_key, role, status, route_label, online, accent, joined_at, last_seen_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, 1, ?8, ?9, ?9)
+            "#,
+        )
+        .bind(&id)
+        .bind(conversation_id)
+        .bind(identity_id)
+        .bind(display_name)
+        .bind(&mention_key)
+        .bind(role)
+        .bind(route_label)
+        .bind(accent)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(ConversationMemberRecord {
+            id,
+            conversation_id: conversation_id.to_string(),
+            identity_id: identity_id.to_string(),
+            display_name: display_name.to_string(),
+            mention_key,
+            role: role.to_string(),
+            status: "active".to_string(),
+            route_label: route_label.to_string(),
+            online: true,
+            accent: accent.to_string(),
+            joined_at: now,
+            last_seen_at: Some(now),
+            network_kind: None,
+            transport_inbox_id: None,
+            client_kind: None,
+            client_instance_id: None,
+            client_display_name: None,
+            actor_kind: None,
+            actor_id: None,
+            actor_display_name: None,
+            via_kind: None,
+            via_label: None,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ensure_conversation_member_with_sender_meta(
+        &self,
+        conversation_id: &str,
+        identity_id: &str,
+        display_name: &str,
+        mention_key: Option<&str>,
+        route_label: &str,
+        role: &str,
+        network_kind: Option<&str>,
+        transport_inbox_id: Option<&str>,
+        client_kind: Option<&str>,
+        client_instance_id: Option<&str>,
+        client_display_name: Option<&str>,
+        actor_kind: Option<&str>,
+        actor_id: Option<&str>,
+        actor_display_name: Option<&str>,
+        via_kind: Option<&str>,
+        via_label: Option<&str>,
+    ) -> Result<ConversationMemberRecord> {
+        let member = self
+            .ensure_conversation_member(
+                conversation_id,
+                identity_id,
+                display_name,
+                mention_key,
+                route_label,
+                role,
+            )
+            .await?;
+        sqlx::query(
+            r#"
+            UPDATE conversation_members
+            SET network_kind = ?1,
+                transport_inbox_id = ?2,
+                client_kind = ?3,
+                client_instance_id = ?4,
+                client_display_name = ?5,
+                actor_kind = ?6,
+                actor_id = ?7,
+                actor_display_name = ?8,
+                via_kind = ?9,
+                via_label = ?10
+            WHERE conversation_id = ?11 AND identity_id = ?12
+            "#,
+        )
+        .bind(network_kind)
+        .bind(transport_inbox_id)
+        .bind(client_kind)
+        .bind(client_instance_id)
+        .bind(client_display_name)
+        .bind(actor_kind)
+        .bind(actor_id)
+        .bind(actor_display_name)
+        .bind(via_kind)
+        .bind(via_label)
+        .bind(conversation_id)
+        .bind(identity_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(ConversationMemberRecord {
+            network_kind: network_kind.map(str::to_string),
+            transport_inbox_id: transport_inbox_id.map(str::to_string),
+            client_kind: client_kind.map(str::to_string),
+            client_instance_id: client_instance_id.map(str::to_string),
+            client_display_name: client_display_name.map(str::to_string),
+            actor_kind: actor_kind.map(str::to_string),
+            actor_id: actor_id.map(str::to_string),
+            actor_display_name: actor_display_name.map(str::to_string),
+            via_kind: via_kind.map(str::to_string),
+            via_label: via_label.map(str::to_string),
+            ..member
+        })
+    }
+
+    pub async fn add_conversation_member(
+        &self,
+        conversation_id: &str,
+        display_name: &str,
+        mention_key: Option<&str>,
+        route_label: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<ConversationMemberRecord> {
+        let now = Utc::now().timestamp();
+        let id = uuid::Uuid::new_v4().to_string();
+        let identity_id = format!("member_{}", uuid::Uuid::new_v4());
+        let mention_key =
+            normalize_mention_key(mention_key.unwrap_or(display_name), &identity_id);
+        let role = role.unwrap_or("member");
+        let route_label = route_label.unwrap_or("app");
+        let accent = match role {
+            "agent" => "#1D9E75",
+            "admin" => "#BA7517",
+            _ => "#7F77DD",
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members
+              (id, conversation_id, identity_id, display_name, mention_key, role, status, route_label, online, accent, joined_at, last_seen_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, 0, ?8, ?9, NULL)
+            "#,
+        )
+        .bind(&id)
+        .bind(conversation_id)
+        .bind(&identity_id)
+        .bind(display_name)
+        .bind(&mention_key)
+        .bind(role)
+        .bind(route_label)
+        .bind(accent)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("UPDATE conversation_spaces SET updated_at = ?1 WHERE id = ?2")
+            .bind(now)
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+
+        self.post_conversation_message(
+            conversation_id,
+            "system",
+            None,
+            "系统",
+            "system",
+            None,
+            &format!("{} 已加入群聊。", display_name),
+        )
+        .await?;
+
+        Ok(ConversationMemberRecord {
+            id,
+            conversation_id: conversation_id.to_string(),
+            identity_id,
+            display_name: display_name.to_string(),
+            mention_key,
+            role: role.to_string(),
+            status: "active".to_string(),
+            route_label: route_label.to_string(),
+            online: false,
+            accent: accent.to_string(),
+            joined_at: now,
+            last_seen_at: None,
+            network_kind: None,
+            transport_inbox_id: None,
+            client_kind: None,
+            client_instance_id: None,
+            client_display_name: None,
+            actor_kind: None,
+            actor_id: None,
+            actor_display_name: None,
+            via_kind: None,
+            via_label: None,
+        })
+    }
+
+    pub async fn remove_conversation_member(
+        &self,
+        conversation_id: &str,
+        identity_id: &str,
+    ) -> Result<()> {
+        if identity_id == "owner" || identity_id == "agent_alpha" {
+            anyhow::bail!("cannot remove core member");
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT display_name
+            FROM conversation_members
+            WHERE conversation_id = ?1 AND identity_id = ?2
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(identity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            anyhow::bail!("member not found");
+        };
+        let display_name: String = row.get("display_name");
+        let now = Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            UPDATE conversation_members
+            SET status = 'inactive', online = 0, last_seen_at = ?1
+            WHERE conversation_id = ?2 AND identity_id = ?3
+            "#,
+        )
+        .bind(now)
+        .bind(conversation_id)
+        .bind(identity_id)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("UPDATE conversation_spaces SET updated_at = ?1 WHERE id = ?2")
+            .bind(now)
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+
+        self.post_conversation_message(
+            conversation_id,
+            "system",
+            None,
+            "系统",
+            "system",
+            None,
+            &format!("{display_name} 已离开群聊。"),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_conversation_space(&self, conversation_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM xmtp_message_map WHERE local_message_id IN (SELECT id FROM conversation_messages WHERE conversation_id = ?1)")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM conversation_messages WHERE conversation_id = ?1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM conversation_members WHERE conversation_id = ?1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM conversation_transport_bindings WHERE conversation_id = ?1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM conversation_spaces WHERE id = ?1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_conversation_transports(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationTransportRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT kind, label, status, transport_ref
+            FROM conversation_transport_bindings
+            WHERE conversation_id = ?1
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, label ASC
+            "#,
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ConversationTransportRecord {
+                kind: row.get("kind"),
+                label: row.get("label"),
+                status: row.get("status"),
+                transport_ref: row.get("transport_ref"),
+            })
+            .collect())
+    }
+
+    pub async fn bind_conversation_transport(
+        &self,
+        conversation_id: &str,
+        kind: &str,
+        label: &str,
+        transport_ref: &str,
+    ) -> Result<ConversationTransportRecord> {
+        let now = Utc::now().timestamp();
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_transport_bindings
+              (id, conversation_id, kind, label, status, transport_ref, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?6)
+            ON CONFLICT(conversation_id, kind, transport_ref) DO UPDATE SET
+              label = excluded.label,
+              status = 'active',
+              updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(conversation_id)
+        .bind(kind)
+        .bind(label)
+        .bind(transport_ref)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("UPDATE conversation_spaces SET updated_at = ?1 WHERE id = ?2")
+            .bind(now)
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(ConversationTransportRecord {
+            kind: kind.to_string(),
+            label: label.to_string(),
+            status: "active".to_string(),
+            transport_ref: Some(transport_ref.to_string()),
+        })
+    }
+
+    pub async fn find_conversation_by_transport(
+        &self,
+        kind: &str,
+        transport_ref: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            r#"
+            SELECT conversation_id
+            FROM conversation_transport_bindings
+            WHERE kind = ?1 AND transport_ref = ?2 AND status = 'active'
+            LIMIT 1
+            "#,
+        )
+        .bind(kind)
+        .bind(transport_ref)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| row.get("conversation_id")))
+    }
+
+    pub async fn insert_xmtp_message_map(
+        &self,
+        local_message_id: &str,
+        xmtp_message_id: &str,
+        xmtp_conversation_id: &str,
+        direction: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO xmtp_message_map
+              (local_message_id, xmtp_message_id, xmtp_conversation_id, direction, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(local_message_id)
+        .bind(xmtp_message_id)
+        .bind(xmtp_conversation_id)
+        .bind(direction)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn xmtp_message_seen(
+        &self,
+        xmtp_conversation_id: &str,
+        xmtp_message_id: &str,
+    ) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT 1
+            FROM xmtp_message_map
+            WHERE xmtp_conversation_id = ?1 AND xmtp_message_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind(xmtp_conversation_id)
+        .bind(xmtp_message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    pub async fn upsert_network_identity(
+        &self,
+        network_kind: &str,
+        network_identity_id: &str,
+        display_name: &str,
+        participant_kind: &str,
+        app_kind: &str,
+        agent_key: Option<&str>,
+    ) -> Result<String> {
+        let now = Utc::now().timestamp();
+        let id = format!("net_{}", uuid::Uuid::new_v4());
+        sqlx::query(
+            r#"
+            INSERT INTO network_identities
+              (id, network_kind, network_identity_id, display_name, participant_kind,
+               app_kind, agent_key, capabilities_json, trust_level, first_seen_at, last_seen_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', 'untrusted', ?8, ?8)
+            ON CONFLICT(network_kind, network_identity_id) DO UPDATE SET
+              display_name = excluded.display_name,
+              participant_kind = excluded.participant_kind,
+              app_kind = excluded.app_kind,
+              agent_key = excluded.agent_key,
+              last_seen_at = excluded.last_seen_at
+            "#,
+        )
+        .bind(&id)
+        .bind(network_kind)
+        .bind(network_identity_id)
+        .bind(display_name)
+        .bind(participant_kind)
+        .bind(app_kind)
+        .bind(agent_key)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id
+            FROM network_identities
+            WHERE network_kind = ?1 AND network_identity_id = ?2
+            "#,
+        )
+        .bind(network_kind)
+        .bind(network_identity_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get("id"))
+    }
+
+    pub async fn list_conversation_messages(
+        &self,
+        conversation_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ConversationMessageRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, conversation_id, sender_identity_id, sender_route_id, sender_name,
+                   sender_kind, route_label, content, created_at,
+                   network_kind, transport_inbox_id, client_kind, client_instance_id,
+                   client_display_name, actor_kind, actor_id, actor_display_name,
+                   via_kind, via_label
+            FROM conversation_messages
+            WHERE conversation_id = ?1
+            ORDER BY created_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut messages: Vec<ConversationMessageRecord> = rows
+            .into_iter()
+            .map(|row| ConversationMessageRecord {
+                id: row.get("id"),
+                conversation_id: row.get("conversation_id"),
+                sender_identity_id: row.get("sender_identity_id"),
+                sender_route_id: row.get("sender_route_id"),
+                sender_name: row.get("sender_name"),
+                sender_kind: row.get("sender_kind"),
+                route_label: row.get("route_label"),
+                content: row.get("content"),
+                created_at: row.get("created_at"),
+                network_kind: row.get("network_kind"),
+                transport_inbox_id: row.get("transport_inbox_id"),
+                client_kind: row.get("client_kind"),
+                client_instance_id: row.get("client_instance_id"),
+                client_display_name: row.get("client_display_name"),
+                actor_kind: row.get("actor_kind"),
+                actor_id: row.get("actor_id"),
+                actor_display_name: row.get("actor_display_name"),
+                via_kind: row.get("via_kind"),
+                via_label: row.get("via_label"),
+            })
+            .collect();
+        messages.reverse();
+        Ok(messages)
+    }
+
+    pub async fn post_conversation_message(
+        &self,
+        conversation_id: &str,
+        sender_identity_id: &str,
+        sender_route_id: Option<&str>,
+        sender_name: &str,
+        sender_kind: &str,
+        route_label: Option<&str>,
+        content: &str,
+    ) -> Result<ConversationMessageRecord> {
+        self.post_conversation_message_with_sender_meta(
+            conversation_id,
+            sender_identity_id,
+            sender_route_id,
+            sender_name,
+            sender_kind,
+            route_label,
+            content,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn post_conversation_message_with_sender_meta(
+        &self,
+        conversation_id: &str,
+        sender_identity_id: &str,
+        sender_route_id: Option<&str>,
+        sender_name: &str,
+        sender_kind: &str,
+        route_label: Option<&str>,
+        content: &str,
+        network_kind: Option<&str>,
+        transport_inbox_id: Option<&str>,
+        client_kind: Option<&str>,
+        client_instance_id: Option<&str>,
+        client_display_name: Option<&str>,
+        actor_kind: Option<&str>,
+        actor_id: Option<&str>,
+        actor_display_name: Option<&str>,
+        via_kind: Option<&str>,
+        via_label: Option<&str>,
+    ) -> Result<ConversationMessageRecord> {
+        let now = Utc::now().timestamp();
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_messages
+              (id, conversation_id, sender_identity_id, sender_route_id, sender_name, sender_kind, route_label, content, created_at,
+               network_kind, transport_inbox_id, client_kind, client_instance_id, client_display_name,
+               actor_kind, actor_id, actor_display_name, via_kind, via_label)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            "#,
+        )
+        .bind(&id)
+        .bind(conversation_id)
+        .bind(sender_identity_id)
+        .bind(sender_route_id)
+        .bind(sender_name)
+        .bind(sender_kind)
+        .bind(route_label)
+        .bind(content)
+        .bind(now)
+        .bind(network_kind)
+        .bind(transport_inbox_id)
+        .bind(client_kind)
+        .bind(client_instance_id)
+        .bind(client_display_name)
+        .bind(actor_kind)
+        .bind(actor_id)
+        .bind(actor_display_name)
+        .bind(via_kind)
+        .bind(via_label)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("UPDATE conversation_spaces SET updated_at = ?1 WHERE id = ?2")
+            .bind(now)
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(ConversationMessageRecord {
+            id,
+            conversation_id: conversation_id.to_string(),
+            sender_identity_id: sender_identity_id.to_string(),
+            sender_route_id: sender_route_id.map(str::to_string),
+            sender_name: sender_name.to_string(),
+            sender_kind: sender_kind.to_string(),
+            route_label: route_label.map(str::to_string),
+            content: content.to_string(),
+            created_at: now,
+            network_kind: network_kind.map(str::to_string),
+            transport_inbox_id: transport_inbox_id.map(str::to_string),
+            client_kind: client_kind.map(str::to_string),
+            client_instance_id: client_instance_id.map(str::to_string),
+            client_display_name: client_display_name.map(str::to_string),
+            actor_kind: actor_kind.map(str::to_string),
+            actor_id: actor_id.map(str::to_string),
+            actor_display_name: actor_display_name.map(str::to_string),
+            via_kind: via_kind.map(str::to_string),
+            via_label: via_label.map(str::to_string),
+        })
     }
 
     // ── Message feedback ───────────────────────────────────────────────────

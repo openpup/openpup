@@ -2672,6 +2672,90 @@ impl AlphaPup {
         Ok(reply)
     }
 
+    pub async fn process_group_message(
+        &self,
+        conversation_id: &str,
+        group_title: &str,
+        msg: &str,
+    ) -> anyhow::Result<String> {
+        self.abort_flag.store(false, Ordering::Relaxed);
+        let group_messages = self
+            .memory
+            .list_conversation_messages(conversation_id, 40)
+            .await
+            .unwrap_or_default();
+
+        let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
+            "role": "system",
+            "content": format!(
+                "You are Alpha, an AI member of the OpenPup group \"{group_title}\".\n\
+                 This is a group-scoped conversation. Use only the messages from this group and the current user message.\n\
+                 Do not use personal chat history, private owner memory, or context from other groups.\n\
+                 Reply in the language used by the group."
+            ),
+        })];
+
+        let last_human_idx = group_messages
+            .iter()
+            .rposition(|message| message.sender_kind == "human" && message.content == msg);
+        for (idx, message) in group_messages.into_iter().enumerate() {
+            if Some(idx) == last_human_idx {
+                continue;
+            }
+            if message.sender_kind == "system" {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": message.content,
+                }));
+                continue;
+            }
+
+            let role = if message.sender_kind == "agent" {
+                "assistant"
+            } else {
+                "user"
+            };
+            let route = message
+                .route_label
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!(" via {value}"))
+                .unwrap_or_default();
+            messages.push(serde_json::json!({
+                "role": role,
+                "content": format!("[{}{}] {}", message.sender_name, route, message.content),
+            }));
+        }
+
+        messages.push(serde_json::json!({ "role": "user", "content": msg }));
+
+        let tool_perms = PupToolPermissions {
+            shell: false,
+            sandbox_shell: false,
+            file_read: false,
+            file_write: false,
+            network: false,
+            mcp: true,
+        };
+        let null_flag = &self.abort_flag;
+        self.run_agent_with_tools(
+            "alpha",
+            messages,
+            &tool_perms,
+            None,
+            |_| {},
+            |_, _| {},
+            null_flag,
+        )
+        .await
+        .map(|result| match result {
+            AgentRunResult::FinalText(text) => text,
+            AgentRunResult::ReviewRequest(_) => {
+                "Error: review requests are not supported for group chat.".to_string()
+            }
+        })
+    }
+
     async fn post_process_conversation_turn(
         &self,
         pup_key: &str,

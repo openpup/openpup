@@ -12,6 +12,7 @@ cli/target/
 .env
 .env.*.local
 .local/
+xmtp/
 *.jks
 *.keystore
 *.p12
