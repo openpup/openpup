@@ -60,6 +60,74 @@ const ACTIVITY_COLOR: Record<string, string> = {
   tool_call:  'text-stone-400',
 };
 
+const GROUP_CHAT_FULL_STORAGE_KEY = 'openpup.groupChatFull';
+
+function isGroupChatFullEnabled() {
+  return import.meta.env.DEV ||
+    import.meta.env.VITE_OPENPUP_GROUP_CHAT === '1' ||
+    window.localStorage.getItem(GROUP_CHAT_FULL_STORAGE_KEY) === 'true';
+}
+
+const GroupChatPreview: React.FC = () => {
+  const { lang } = useLang();
+  const ready = [
+    t('group_preview_ready_1', lang),
+    t('group_preview_ready_2', lang),
+    t('group_preview_ready_3', lang),
+    t('group_preview_ready_4', lang),
+  ];
+  const next = [
+    t('group_preview_next_1', lang),
+    t('group_preview_next_2', lang),
+    t('group_preview_next_3', lang),
+    t('group_preview_next_4', lang),
+  ];
+  const sectionStyle: React.CSSProperties = {
+    border: '0.5px solid var(--color-border-tertiary)',
+    borderRadius: '8px',
+    padding: '14px',
+    background: 'var(--color-background-secondary)',
+    minWidth: 0,
+  };
+
+  return (
+    <div className="flex-1 overflow-auto" style={{ background: 'var(--color-background-primary)', color: 'var(--color-text-primary)' }}>
+      <div style={{ maxWidth: '760px', margin: '0 auto', padding: '52px 28px', display: 'grid', gap: '18px' }}>
+        <div style={{ display: 'grid', gap: '10px' }}>
+          <span style={{ width: 'fit-content', fontSize: '11px', fontWeight: 650, color: '#BA7517', background: 'rgba(186,117,23,0.1)', border: '0.5px solid rgba(186,117,23,0.18)', borderRadius: '999px', padding: '3px 8px' }}>
+            {t('group_preview_badge', lang)}
+          </span>
+          <h1 style={{ margin: 0, fontSize: '24px', lineHeight: 1.2, fontWeight: 760, letterSpacing: 0 }}>
+            {t('group_preview_title', lang)}
+          </h1>
+          <p style={{ margin: 0, maxWidth: '640px', color: 'var(--color-text-secondary)', fontSize: '13px', lineHeight: 1.7 }}>
+            {t('group_preview_body', lang)}
+          </p>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '10px' }}>{t('group_preview_ready', lang)}</div>
+            <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--color-text-secondary)', fontSize: '12px', lineHeight: 1.75 }}>
+              {ready.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '10px' }}>{t('group_preview_next', lang)}</div>
+            <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--color-text-secondary)', fontSize: '12px', lineHeight: 1.75 }}>
+              {next.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        </div>
+
+        <div style={{ color: 'var(--color-text-tertiary)', fontSize: '12px', lineHeight: 1.6 }}>
+          {t('group_preview_note', lang)}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 
 // Types are now in stores/ — see stores/appStore.ts, stores/uiStore.ts, stores/chatStore.ts
@@ -224,6 +292,7 @@ const AppInner: React.FC = () => {
   const isMobile = isMobilePlatform(platform);
   const showDesktopControls = platform === 'windows' || platform === 'linux';
   const showDesktopTitlebar = !isMobile;
+  const [groupChatFullEnabled] = useState(isGroupChatFullEnabled);
 
   // ── Zustand stores ──────────────────────────────────────────────────────────
   const {
@@ -877,7 +946,7 @@ const AppInner: React.FC = () => {
               setActiveNav('groups');
               inputRef.current?.focus();
             }}
-            title={t('nav_groups', lang)}
+            title={groupChatFullEnabled ? t('nav_groups', lang) : `${t('nav_groups', lang)} · ${t('group_preview_badge', lang)}`}
             style={{
               width: '34px',
               height: '34px',
@@ -1093,6 +1162,11 @@ const AppInner: React.FC = () => {
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {t('nav_groups', lang)}
                 </span>
+                {!groupChatFullEnabled && (
+                  <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: '10px', fontWeight: 650, color: '#BA7517', background: 'rgba(186,117,23,0.1)', borderRadius: '999px', padding: '1px 6px' }}>
+                    {t('group_preview_badge', lang)}
+                  </span>
+                )}
               </button>
 
               <div style={{
@@ -1358,8 +1432,8 @@ const AppInner: React.FC = () => {
             </>
           )}
 
-          {/* ── Group Chat Prototype ── */}
-          {activeNav === 'groups' && <GroupChat />}
+          {/* ── Group Chat Preview / Experimental UI ── */}
+          {activeNav === 'groups' && (groupChatFullEnabled ? <GroupChat /> : <GroupChatPreview />)}
 
           {/* ── Memories ── */}
           {activeNav === 'memories' && (
