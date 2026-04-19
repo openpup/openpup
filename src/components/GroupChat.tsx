@@ -178,6 +178,12 @@ function localizeXmtpStreamStatus(status: XmtpStreamStatus | null, lang: 'zh' | 
   return status.status;
 }
 
+function shouldSubmitOnEnter(e: KeyboardEvent<HTMLElement>) {
+  if (e.key !== 'Enter') return false;
+  const ne = e.nativeEvent;
+  return !ne.isComposing && ne.keyCode !== 229;
+}
+
 function xmtpStreamTone(status: XmtpStreamStatus | null) {
   if (!status) return 'var(--color-text-tertiary)';
   if (status.status === 'started') return 'var(--color-text-success)';
@@ -664,9 +670,7 @@ export function GroupChat() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return;
-    const ne = e.nativeEvent;
-    if (imeComposingRef.current || ne.isComposing || ne.keyCode === 229) return;
+    if (e.shiftKey || imeComposingRef.current || !shouldSubmitOnEnter(e)) return;
     e.preventDefault();
     void send();
   };
@@ -702,7 +706,9 @@ export function GroupChat() {
                 placeholder={t('group_name_ph', lang)}
                 onChange={(e) => setCreateTitle(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void createSpace();
+                  if (!shouldSubmitOnEnter(e)) return;
+                  e.preventDefault();
+                  void createSpace();
                 }}
                 style={dialogInputStyle}
               />
@@ -996,7 +1002,9 @@ export function GroupChat() {
             placeholder={t('group_name_ph', lang)}
             onChange={(e) => setCreateTitle(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void createSpace();
+              if (!shouldSubmitOnEnter(e)) return;
+              e.preventDefault();
+              void createSpace();
             }}
             style={dialogInputStyle}
           />
@@ -1035,7 +1043,9 @@ export function GroupChat() {
               placeholder={t('group_other_xmtp_id', lang)}
               onChange={(e) => setXmtpMemberId(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void addXmtpMember();
+                if (!shouldSubmitOnEnter(e)) return;
+                e.preventDefault();
+                void addXmtpMember();
               }}
               style={dialogInputStyle}
             />

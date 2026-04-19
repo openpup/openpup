@@ -1113,7 +1113,7 @@ impl MemorySystem {
             r#"
             INSERT INTO conversation_members
               (id, conversation_id, identity_id, display_name, mention_key, role, status, route_label, online, accent, joined_at, last_seen_at)
-            VALUES (?1, ?2, ?3, 'Ben', 'ben', 'owner', 'active', 'app', 1, '#378ADD', ?4, ?4)
+            VALUES (?1, ?2, ?3, '我', 'owner', 'owner', 'active', 'app', 1, '#378ADD', ?4, ?4)
             "#,
         )
         .bind(uuid::Uuid::new_v4().to_string())
