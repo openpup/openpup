@@ -492,7 +492,8 @@ fn build_transport_config(
 
 /// Streamable HTTP-based tool listing via rmcp.
 async fn rmcp_list_tools(mcp_url: &str, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
-    let transport = StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
+    let transport =
+        StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
 
     let client = ClientInfo::default()
         .serve(transport)
@@ -528,7 +529,8 @@ async fn rmcp_call_tool(
     tool: &str,
     params: &Value,
 ) -> Result<Value> {
-    let transport = StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
+    let transport =
+        StreamableHttpClientTransport::from_config(build_transport_config(mcp_url, entry));
 
     let client = ClientInfo::default()
         .serve(transport)

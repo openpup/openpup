@@ -26,10 +26,7 @@ impl QQBotBridge {
         inbound_tx: mpsc::Sender<InboundMessage>,
         status_tx: Option<mpsc::Sender<BridgeStatusEvent>>,
     ) -> Self {
-        let client = QQBotClient::new(
-            config.app_id.clone(),
-            config.client_secret.clone(),
-        );
+        let client = QQBotClient::new(config.app_id.clone(), config.client_secret.clone());
         Self {
             config,
             client,

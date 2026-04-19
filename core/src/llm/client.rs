@@ -1039,7 +1039,14 @@ fn split_embedding_input(text: &str) -> Vec<String> {
 fn find_embedding_boundary(chars: &[char], search_start: usize, end: usize) -> Option<usize> {
     for idx in (search_start..end).rev() {
         let ch = chars[idx];
-        if ch == '\n' || ch == '。' || ch == '！' || ch == '？' || ch == '.' || ch == '!' || ch == '?' {
+        if ch == '\n'
+            || ch == '。'
+            || ch == '！'
+            || ch == '？'
+            || ch == '.'
+            || ch == '!'
+            || ch == '?'
+        {
             return Some(idx + 1);
         }
     }
@@ -1092,7 +1099,9 @@ mod tests {
         let input = "a".repeat(EMBED_MAX_CHARS_PER_CHUNK + 2048);
         let chunks = split_embedding_input(&input);
         assert!(chunks.len() >= 2);
-        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK));
     }
 
     #[test]

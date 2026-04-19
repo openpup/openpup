@@ -288,9 +288,7 @@ pub async fn leave_xmtp_conversation(
 }
 
 #[tauri::command]
-pub async fn sync_xmtp_groups(
-    state: State<'_, AppState>,
-) -> Result<XmtpSyncGroupsResult, String> {
+pub async fn sync_xmtp_groups(state: State<'_, AppState>) -> Result<XmtpSyncGroupsResult, String> {
     state
         .xmtp_helper
         .request("init", xmtp_init_params(&state.app.workspace_root)?)
@@ -323,9 +321,12 @@ pub async fn sync_xmtp_groups(
                 .await
                 .map_err(|e| e.to_string())?
                 .is_some();
-            import_xmtp_group(app.clone(), serde_json::to_value(payload).map_err(|e| e.to_string())?)
-                .await
-                .map_err(|e| e.to_string())?;
+            import_xmtp_group(
+                app.clone(),
+                serde_json::to_value(payload).map_err(|e| e.to_string())?,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
             if !existed {
                 imported += 1;
             }

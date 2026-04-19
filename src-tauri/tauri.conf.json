@@ -1,6 +1,6 @@
 {
   "productName": "openpup",
-  "version": "0.1.23",
+  "version": "0.1.25",
   "identifier": "com.openpup.app",
   "build": {
     "beforeDevCommand": "npm run dev",

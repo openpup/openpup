@@ -7,7 +7,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.23...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.25...HEAD)
+
+---
+
+## [0.1.25](https://github.com/openpup/openpup/compare/v0.1.23...v0.1.25) — 2026-04-19
+
+### Added
+- **XMTP-backed group chat MVP** — added local Conversation Space groups, group navigation, member/message persistence, group-scoped Alpha replies, bridge `/g` routing, and a dedicated group chat UI with Markdown/Mermaid message rendering.
+- **Agent conversation over XMTP** — added a Node/TS XMTP helper, structured `agent.chat.message.v1` envelopes, XMTP transport bindings, network identity metadata, duplicate message mapping, group sync/import, add member, remove member, and leave group flows.
+- **Group architecture documentation** — consolidated Conversation Space, context isolation, XMTP transport, and Node helper design into `docs/architecture1.1.md`.
+
+### Changed
+- **Networked group responder policy** — XMTP-bound groups now require an explicit local `@alpha` mention before local Alpha responds, preventing accidental multi-agent reply loops.
+- **Remote mention model** — local Alpha and remote same-name agents are separated; remote agents use unique mention keys such as `openpup-xxxx/alpha`.
+- **Desktop test workspaces** — desktop runtime now supports `OPENPUP_WORKSPACE` for running multiple isolated local workspaces in parallel.
+
+### Fixed
+- **XMTP stream recovery** — group and message streams now reconnect after normal stream termination or transient failures, and the group UI shows live/reconnecting/stopped/failed stream status.
+- **Scheduled job cron display and execution** — cron schedule handling now normalizes weekdays and local timezone display so next-run calculations match the UI.
+- **Filesystem and shell risk checks** — capability roots and context-aware shell checks now block high-risk reads such as private home paths or root scans while preserving normal workspace and allowed absolute executable use.
 
 ### Planned — v0.2.0: Configurable Organization OS
 

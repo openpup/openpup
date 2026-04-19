@@ -77,7 +77,12 @@ impl MemoryRetriever {
 
     /// Role-scoped retrieval: returns global + role-specific memories.
     /// When `role` is None, returns all non-invalidated memories (same as `search`).
-    pub async fn search_with_role(&self, query: &str, limit: usize, role: Option<&str>) -> Result<Vec<MemorySearchResult>> {
+    pub async fn search_with_role(
+        &self,
+        query: &str,
+        limit: usize,
+        role: Option<&str>,
+    ) -> Result<Vec<MemorySearchResult>> {
         // Step 1: parallel vector + FTS5 retrieval
         let (vec_res, fts_res) = tokio::join!(
             self.vector_search(query, limit * 3),

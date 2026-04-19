@@ -74,8 +74,10 @@ impl OpenPupApp {
                 "conversation_members_changed",
                 ConversationMembersChangedPayload {
                     conversation_id: conversation_id.to_string(),
-                    member_count: members.iter().filter(|member| member.status == "active").count()
-                        as i64,
+                    member_count: members
+                        .iter()
+                        .filter(|member| member.status == "active")
+                        .count() as i64,
                     members,
                 },
             );
@@ -469,10 +471,7 @@ impl OpenPupApp {
         self.memory.get_channel_messages(channel_id).await
     }
 
-    pub async fn create_conversation_space(
-        &self,
-        title: &str,
-    ) -> Result<ConversationSpaceRecord> {
+    pub async fn create_conversation_space(&self, title: &str) -> Result<ConversationSpaceRecord> {
         self.memory
             .create_conversation_space(title, None, Some("owner"), None)
             .await
@@ -505,7 +504,13 @@ impl OpenPupApp {
         role: Option<&str>,
     ) -> Result<ConversationMemberRecord> {
         self.memory
-            .add_conversation_member(conversation_id, display_name, mention_key, route_label, role)
+            .add_conversation_member(
+                conversation_id,
+                display_name,
+                mention_key,
+                route_label,
+                role,
+            )
             .await
     }
 
@@ -737,9 +742,7 @@ pub async fn build_app(
     }
 
     for scan_root in skill_scan_roots {
-        let _ = skill_registry
-            .register_from_dir(&scan_root, "local")
-            .await;
+        let _ = skill_registry.register_from_dir(&scan_root, "local").await;
         skill_registry.add_scan_root(scan_root, "local").await;
     }
 

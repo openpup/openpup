@@ -54,7 +54,11 @@ pub fn format_result(output: &str) -> Vec<String> {
             .unwrap_or(byte_limit);
 
         // Avoid zero-length segments (e.g. leading \n\n).
-        let split_byte = if split_byte == 0 { byte_limit } else { split_byte };
+        let split_byte = if split_byte == 0 {
+            byte_limit
+        } else {
+            split_byte
+        };
 
         segments.push(remaining[..split_byte].to_string());
         remaining = remaining[split_byte..].trim_start_matches('\n');

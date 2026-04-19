@@ -62,7 +62,10 @@ impl QQBotGateway {
                 Ok(action) => match action {
                     LoopAction::Reconnect => {
                         let delay = self.backoff_delay();
-                        warn!("[qqbot] reconnecting in {delay}ms (attempt {})", self.reconnect_count + 1);
+                        warn!(
+                            "[qqbot] reconnecting in {delay}ms (attempt {})",
+                            self.reconnect_count + 1
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
                         self.reconnect_count += 1;
                     }
@@ -86,12 +89,8 @@ impl QQBotGateway {
                     }
                 },
                 Err(e) => {
-                    self.emit_status(
-                        BridgeConnectionState::Error,
-                        false,
-                        Some(e.to_string()),
-                    )
-                    .await;
+                    self.emit_status(BridgeConnectionState::Error, false, Some(e.to_string()))
+                        .await;
                     let delay = self.backoff_delay();
                     warn!("[qqbot] connection error: {e}, retrying in {delay}ms");
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
@@ -116,9 +115,7 @@ impl QQBotGateway {
                 if payload["op"].as_u64() != Some(OP_HELLO as u64) {
                     return Err(anyhow!("expected Hello (op 10), got: {payload}"));
                 }
-                payload["d"]["heartbeat_interval"]
-                    .as_u64()
-                    .unwrap_or(45000)
+                payload["d"]["heartbeat_interval"].as_u64().unwrap_or(45000)
             }
             other => {
                 return Err(anyhow!("unexpected first message: {other:?}"));
@@ -306,10 +303,7 @@ impl QQBotGateway {
                 if text.is_empty() {
                     return;
                 }
-                let group_openid = data["group_openid"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let group_openid = data["group_openid"].as_str().unwrap_or("").to_string();
                 let user_openid = data["author"]["member_openid"]
                     .as_str()
                     .unwrap_or("")
@@ -333,14 +327,8 @@ impl QQBotGateway {
                 if text.is_empty() {
                     return;
                 }
-                let channel_id = data["channel_id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                let user_id = data["author"]["id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let channel_id = data["channel_id"].as_str().unwrap_or("").to_string();
+                let user_id = data["author"]["id"].as_str().unwrap_or("").to_string();
                 let msg_id = data["id"].as_str().unwrap_or("").to_string();
                 let timestamp = self.parse_timestamp(data);
 
@@ -360,10 +348,7 @@ impl QQBotGateway {
                 if text.is_empty() {
                     return;
                 }
-                let user_id = data["author"]["id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let user_id = data["author"]["id"].as_str().unwrap_or("").to_string();
                 let msg_id = data["id"].as_str().unwrap_or("").to_string();
                 let timestamp = self.parse_timestamp(data);
 
@@ -401,9 +386,7 @@ impl QQBotGateway {
                 warn!("[qqbot] rate limited (4008), waiting 60s");
                 LoopAction::Reconnect
             }
-            Some(c) if matches!(c, 4006 | 4007 | 4009 | 4900..=4913) => {
-                LoopAction::ReconnectFresh
-            }
+            Some(c) if matches!(c, 4006 | 4007 | 4009 | 4900..=4913) => LoopAction::ReconnectFresh,
             _ => LoopAction::Reconnect,
         }
     }

@@ -101,21 +101,16 @@ impl ContextBuilder {
             .recent_conversations(VERBATIM_ROWS)
             .await
             .unwrap_or_default();
-        msgs.extend(
-            recent
-                .into_iter()
-                .rev()
-                .map(|(role, content, speaker)| {
-                    if role == "assistant" {
-                        LlmMessage {
-                            role,
-                            content: format!("[{speaker}] {content}"),
-                        }
-                    } else {
-                        LlmMessage { role, content }
-                    }
-                }),
-        );
+        msgs.extend(recent.into_iter().rev().map(|(role, content, speaker)| {
+            if role == "assistant" {
+                LlmMessage {
+                    role,
+                    content: format!("[{speaker}] {content}"),
+                }
+            } else {
+                LlmMessage { role, content }
+            }
+        }));
         msgs
     }
 

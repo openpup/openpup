@@ -189,7 +189,11 @@ mod tests {
 
     #[test]
     fn overlap_starts_on_trimmed_boundary() {
-        let text = format!("{}\n\n{}", "A sentence.".repeat(300), "B sentence.".repeat(300));
+        let text = format!(
+            "{}\n\n{}",
+            "A sentence.".repeat(300),
+            "B sentence.".repeat(300)
+        );
         let sections = vec![Section {
             heading_path: None,
             content: text,
@@ -197,6 +201,8 @@ mod tests {
             char_end: 0,
         }];
         let chunks = chunk_sections(&sections, &ChunkConfig::default());
-        assert!(chunks.iter().all(|c| !c.content.starts_with(char::is_whitespace)));
+        assert!(chunks
+            .iter()
+            .all(|c| !c.content.starts_with(char::is_whitespace)));
     }
 }

@@ -201,10 +201,7 @@ impl QQBotClient {
             if let Some(mid) = reply_to_id {
                 body["msg_id"] = json!(mid);
             }
-            Ok((
-                format!("{API_BASE}/channels/{channel_id}/messages"),
-                body,
-            ))
+            Ok((format!("{API_BASE}/channels/{channel_id}/messages"), body))
         } else {
             Err(anyhow!(
                 "unknown chat_id format: {chat_id} (expected c2c:, group:, or channel: prefix)"

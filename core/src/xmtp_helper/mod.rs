@@ -247,13 +247,24 @@ impl XmtpNodeHelper {
             } else {
                 None
             };
-            let actor_id = agent_key
-                .clone()
-                .unwrap_or_else(|| if is_agent { "agent".to_string() } else { "owner".to_string() });
-            let actor_display_name = agent_key
-                .as_deref()
-                .map(agent_display_name)
-                .unwrap_or_else(|| if is_agent { "Agent".to_string() } else { "Owner".to_string() });
+            let actor_id = agent_key.clone().unwrap_or_else(|| {
+                if is_agent {
+                    "agent".to_string()
+                } else {
+                    "owner".to_string()
+                }
+            });
+            let actor_display_name =
+                agent_key
+                    .as_deref()
+                    .map(agent_display_name)
+                    .unwrap_or_else(|| {
+                        if is_agent {
+                            "Agent".to_string()
+                        } else {
+                            "Owner".to_string()
+                        }
+                    });
             let via = outbound_via(message, &actor_display_name);
             let envelope = AgentChatEnvelope {
                 kind: "agent.chat.message.v1".to_string(),
@@ -305,12 +316,7 @@ impl XmtpNodeHelper {
                 .unwrap_or(&message.id)
                 .to_string();
             memory
-                .insert_xmtp_message_map(
-                    &message.id,
-                    &remote_message_id,
-                    transport_ref,
-                    "outbound",
-                )
+                .insert_xmtp_message_map(&message.id, &remote_message_id, transport_ref, "outbound")
                 .await?;
             remote_ids.push(remote_message_id);
         }
@@ -319,7 +325,11 @@ impl XmtpNodeHelper {
 }
 
 fn short_inbox_id(inbox_id: &str) -> String {
-    inbox_id.chars().take(8).collect::<String>().to_ascii_lowercase()
+    inbox_id
+        .chars()
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase()
 }
 
 fn agent_display_name(agent_key: &str) -> String {

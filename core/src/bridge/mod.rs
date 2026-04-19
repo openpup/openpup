@@ -139,7 +139,10 @@ impl BridgeManager {
     }
 
     pub fn set_event_sink(&self, sink: SharedEventSink) {
-        let mut guard = self.event_sink.write().expect("bridge event sink lock poisoned");
+        let mut guard = self
+            .event_sink
+            .write()
+            .expect("bridge event sink lock poisoned");
         *guard = Some(sink);
     }
 
@@ -158,7 +161,10 @@ impl BridgeManager {
         self.weixin_service.clone()
     }
 
-    fn emit_conversation_message(&self, message: crate::conversation::types::ConversationMessageRecord) {
+    fn emit_conversation_message(
+        &self,
+        message: crate::conversation::types::ConversationMessageRecord,
+    ) {
         let sink = self
             .event_sink
             .read()
@@ -185,14 +191,21 @@ impl BridgeManager {
         let Some(sink) = sink else {
             return;
         };
-        if let Ok(members) = self.alpha.memory.list_conversation_members(conversation_id).await {
+        if let Ok(members) = self
+            .alpha
+            .memory
+            .list_conversation_members(conversation_id)
+            .await
+        {
             emit_event(
                 sink.as_ref(),
                 "conversation_members_changed",
                 crate::conversation::types::ConversationMembersChangedPayload {
                     conversation_id: conversation_id.to_string(),
-                    member_count: members.iter().filter(|member| member.status == "active").count()
-                        as i64,
+                    member_count: members
+                        .iter()
+                        .filter(|member| member.status == "active")
+                        .count() as i64,
                     members,
                 },
             );
@@ -343,7 +356,12 @@ impl BridgeManager {
                     {
                         if let Some(xmtp_helper) = &self.xmtp_helper {
                             if let Err(e) = xmtp_helper
-                                .publish_message(&alpha.memory, &self.workspace_root, &space, &message)
+                                .publish_message(
+                                    &alpha.memory,
+                                    &self.workspace_root,
+                                    &space,
+                                    &message,
+                                )
                                 .await
                             {
                                 warn!("[bridge] failed to publish Alpha group reply to XMTP: {e}");

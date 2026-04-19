@@ -248,7 +248,9 @@ fn spawn_xmtp_event_pump(app: Arc<openpup_core::app::OpenPupApp>, helper: Arc<Xm
         while let Ok(event) = rx.recv().await {
             let result = match event.event.as_str() {
                 "message" => import_xmtp_message(app.clone(), event.payload).await,
-                "group" => import_xmtp_group(app.clone(), event.payload).await.map(|_| ()),
+                "group" => import_xmtp_group(app.clone(), event.payload)
+                    .await
+                    .map(|_| ()),
                 "stream" => {
                     tracing::info!("[xmtp-helper] stream status: {}", event.payload);
                     app.emit_xmtp_stream_status(event.payload);
@@ -358,7 +360,12 @@ async fn import_xmtp_message(
     let agent_key = sender.actor.agent_key.as_deref();
     let via_kind = sender.via.as_ref().map(|via| via.kind.as_str());
     let via_label = sender.via.as_ref().map(|via| via.label.as_str());
-    let display_name = display_name_for_remote_actor(client_display_name, actor_kind, actor_display_name, agent_key);
+    let display_name = display_name_for_remote_actor(
+        client_display_name,
+        actor_kind,
+        actor_display_name,
+        agent_key,
+    );
     let route_label = route_label_for_remote_actor(client_kind, via_label);
     let identity_id = format!("xmtp:{inbox_id}:{client_instance_id}:{actor_id}");
     let mention_key = mention_key_for_remote_actor(client_instance_id, actor_id);

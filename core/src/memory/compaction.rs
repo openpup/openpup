@@ -193,10 +193,9 @@ impl CompactionEngine {
     const COMPRESS_THRESHOLD: i64 = 30;
 
     async fn full_compact(&self) -> Result<CompactionResult> {
-        let max_row: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM conversations")
-                .fetch_one(&self.pool)
-                .await?;
+        let max_row: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM conversations")
+            .fetch_one(&self.pool)
+            .await?;
 
         let (existing_summary, covers_through): (String, i64) = sqlx::query_as(
             "SELECT COALESCE(summary, ''), COALESCE(covers_through_row, 0) FROM context_summaries WHERE scope = 'global'",

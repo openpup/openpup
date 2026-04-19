@@ -33,7 +33,10 @@ impl MemoryInjector {
     ///
     /// This can be called once and the results shared across multiple pups
     /// in the same message flow to avoid redundant SQL queries.
-    pub async fn fetch_active_rules(&self, budget: &MemoryBudget) -> Result<Vec<MemorySearchResult>> {
+    pub async fn fetch_active_rules(
+        &self,
+        budget: &MemoryBudget,
+    ) -> Result<Vec<MemorySearchResult>> {
         let rules = sqlx::query(
             "SELECT id, content, importance, confidence
              FROM active_rules
@@ -75,7 +78,8 @@ impl MemoryInjector {
         query: &str,
         budget: &MemoryBudget,
     ) -> Result<Vec<MemorySearchResult>> {
-        self.build_memory_context_with_preloaded_rules(query, budget, None, None).await
+        self.build_memory_context_with_preloaded_rules(query, budget, None, None)
+            .await
     }
 
     /// Build memory context with optional role scope filtering.
@@ -86,7 +90,8 @@ impl MemoryInjector {
         budget: &MemoryBudget,
         role: Option<&str>,
     ) -> Result<Vec<MemorySearchResult>> {
-        self.build_memory_context_with_preloaded_rules(query, budget, role, None).await
+        self.build_memory_context_with_preloaded_rules(query, budget, role, None)
+            .await
     }
 
     /// Build memory context with optional pre-fetched active rules.

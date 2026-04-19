@@ -28,7 +28,12 @@ pub struct MemorySystem {
 fn normalize_mention_key(value: &str, fallback: &str) -> String {
     let mut key = String::new();
     let mut last_separator = false;
-    for ch in value.trim().trim_start_matches('@').trim_start_matches('＠').chars() {
+    for ch in value
+        .trim()
+        .trim_start_matches('@')
+        .trim_start_matches('＠')
+        .chars()
+    {
         if ch.is_alphanumeric() {
             key.extend(ch.to_lowercase());
             last_separator = false;
@@ -435,10 +440,11 @@ impl MemorySystem {
         )
         .execute(&self.pool)
         .await?;
-        let _ =
-            sqlx::query("ALTER TABLE conversation_members ADD COLUMN mention_key TEXT NOT NULL DEFAULT ''")
-                .execute(&self.pool)
-                .await;
+        let _ = sqlx::query(
+            "ALTER TABLE conversation_members ADD COLUMN mention_key TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await;
         for column in [
             "network_kind TEXT",
             "transport_inbox_id TEXT",
@@ -451,9 +457,11 @@ impl MemorySystem {
             "via_kind TEXT",
             "via_label TEXT",
         ] {
-            let _ = sqlx::query(&format!("ALTER TABLE conversation_members ADD COLUMN {column}"))
-                .execute(&self.pool)
-                .await;
+            let _ = sqlx::query(&format!(
+                "ALTER TABLE conversation_members ADD COLUMN {column}"
+            ))
+            .execute(&self.pool)
+            .await;
         }
         let _ = sqlx::query(
             r#"
@@ -513,9 +521,11 @@ impl MemorySystem {
             "via_kind TEXT",
             "via_label TEXT",
         ] {
-            let _ = sqlx::query(&format!("ALTER TABLE conversation_messages ADD COLUMN {column}"))
-                .execute(&self.pool)
-                .await;
+            let _ = sqlx::query(&format!(
+                "ALTER TABLE conversation_messages ADD COLUMN {column}"
+            ))
+            .execute(&self.pool)
+            .await;
         }
 
         sqlx::query(
@@ -1540,8 +1550,7 @@ impl MemorySystem {
         let now = Utc::now().timestamp();
         let id = uuid::Uuid::new_v4().to_string();
         let identity_id = format!("member_{}", uuid::Uuid::new_v4());
-        let mention_key =
-            normalize_mention_key(mention_key.unwrap_or(display_name), &identity_id);
+        let mention_key = normalize_mention_key(mention_key.unwrap_or(display_name), &identity_id);
         let role = role.unwrap_or("member");
         let route_label = route_label.unwrap_or("app");
         let accent = match role {
@@ -2629,10 +2638,7 @@ impl MemorySystem {
     /// Fetch last N conversation messages across all agents (newest-first).
     /// v2: shared conversation history — all agents read the same stream.
     /// The `pup` column is preserved as speaker metadata, not used for filtering.
-    pub async fn recent_conversations(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<(String, String, String)>> {
+    pub async fn recent_conversations(&self, limit: i64) -> Result<Vec<(String, String, String)>> {
         let rows = sqlx::query(
             r#"
       SELECT role, content, pup
@@ -2661,7 +2667,10 @@ impl MemorySystem {
     /// Used by router classify_history and other callers that don't need speaker info.
     pub async fn recent_conversations_global(&self, limit: i64) -> Result<Vec<(String, String)>> {
         let rows = self.recent_conversations(limit).await?;
-        Ok(rows.into_iter().map(|(role, content, _)| (role, content)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(role, content, _)| (role, content))
+            .collect())
     }
 
     /// Fetch conversation for display: returns (role, content, timestamp) ordered oldest-first.
@@ -3153,10 +3162,11 @@ impl MemorySystem {
     /// conversation row it covers (0 = no summary yet).
     /// v2: uses global scope (pup='') instead of per-pup.
     pub async fn get_context_summary(&self) -> Result<Option<(String, i64)>> {
-        let row =
-            sqlx::query("SELECT summary, covers_through_row FROM context_summaries WHERE scope = 'global'")
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query(
+            "SELECT summary, covers_through_row FROM context_summaries WHERE scope = 'global'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|r| {
             (
                 r.get::<String, _>("summary"),
@@ -3169,9 +3179,10 @@ impl MemorySystem {
     /// and which row is covered by the compression.
     /// v2: uses global scope (pup='') instead of per-pup.
     pub async fn get_compression_status(&self) -> Result<(bool, i64)> {
-        let row = sqlx::query("SELECT covers_through_row FROM context_summaries WHERE scope = 'global'")
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT covers_through_row FROM context_summaries WHERE scope = 'global'")
+                .fetch_optional(&self.pool)
+                .await?;
 
         match row {
             Some(r) => {

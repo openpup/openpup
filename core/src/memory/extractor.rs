@@ -321,7 +321,12 @@ impl MemoryExtractor {
         self.insert_with_scope(mem, conversation_id, "global").await
     }
 
-    async fn insert_with_scope(&self, mem: &ExtractedMemory, conversation_id: Option<i64>, role_scope: &str) -> Result<String> {
+    async fn insert_with_scope(
+        &self,
+        mem: &ExtractedMemory,
+        conversation_id: Option<i64>,
+        role_scope: &str,
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
 

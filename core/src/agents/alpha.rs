@@ -1332,14 +1332,19 @@ impl AlphaPup {
                                 Self::MAX_DELEGATION_DEPTH
                             )
                         } else {
-                            on_activity(
-                                "delegation".into(),
-                                format!("{agent_name} → {target}"),
-                            );
+                            on_activity("delegation".into(), format!("{agent_name} → {target}"));
                             let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
                             let owner_ctx = self.context_builder.get_owner_summary(&owner_md).await;
                             self.delegation_depth.fetch_add(1, Ordering::Relaxed);
-                            let result = self.run_pup_for_channel(&target, &sub_task, &owner_ctx, &on_activity, None).await;
+                            let result = self
+                                .run_pup_for_channel(
+                                    &target,
+                                    &sub_task,
+                                    &owner_ctx,
+                                    &on_activity,
+                                    None,
+                                )
+                                .await;
                             self.delegation_depth.fetch_sub(1, Ordering::Relaxed);
                             match result {
                                 Ok(text) => format!("[{target} 回复]\n{text}"),
@@ -1375,7 +1380,8 @@ impl AlphaPup {
                                 // so subsequent tool *execution* also uses the
                                 // elevated permissions, not just the tool list.
                                 primitive_perms = primitive_perms.union_with_skill(&skill_perms);
-                                let full_tools = self.skill_executor.tools.available_tools(&primitive_perms);
+                                let full_tools =
+                                    self.skill_executor.tools.available_tools(&primitive_perms);
                                 for t in full_tools {
                                     let t_name = t["function"]["name"].as_str().unwrap_or("");
                                     if !available_tools.iter().any(|existing| {
@@ -1550,7 +1556,13 @@ impl AlphaPup {
             let pup_ctx_clone = pup_ctx.clone();
             let handle = tokio::spawn(async move {
                 let result = self_clone
-                    .run_pup_for_channel(&pup_key_owned, &msg_owned, &owner_ctx, &|_, _| {}, Some(pup_ctx_clone))
+                    .run_pup_for_channel(
+                        &pup_key_owned,
+                        &msg_owned,
+                        &owner_ctx,
+                        &|_, _| {},
+                        Some(pup_ctx_clone),
+                    )
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 (pup_key_owned, result)
@@ -2801,10 +2813,7 @@ impl AlphaPup {
                 .unwrap_or(context_limit / 2); // conservative estimate if unknown
             let engine = self.compaction_engine.clone();
             tokio::spawn(async move {
-                match engine
-                    .compact(current_tokens, context_limit)
-                    .await
-                {
+                match engine.compact(current_tokens, context_limit).await {
                     Ok(results) => {
                         for r in &results {
                             if r.estimated_tokens_saved > 0 {
@@ -2876,10 +2885,9 @@ impl AlphaPup {
                 .await?
             {
                 AgentRunResult::FinalText(text) => Ok(text),
-                AgentRunResult::ReviewRequest(_) => {
-                    Ok("Error: review requests are not supported for this execution path."
-                        .to_string())
-                }
+                AgentRunResult::ReviewRequest(_) => Ok(
+                    "Error: review requests are not supported for this execution path.".to_string(),
+                ),
             }
         })
     }
@@ -3079,7 +3087,10 @@ impl AlphaPup {
             chrono::Local::now().format("%Y-%m-%d %H:%M")
         );
 
-        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(self.memory.clone(), self.llm_client.clone());
+        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(
+            self.memory.clone(),
+            self.llm_client.clone(),
+        );
         let req = crate::knowledge::types::IngestTextRequest {
             title,
             content: artifact.to_string(),
@@ -3127,7 +3138,10 @@ impl AlphaPup {
             return Ok(());
         }
 
-        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(self.memory.clone(), self.llm_client.clone());
+        let ingestor = crate::knowledge::ingestor::Ingestor::with_llm(
+            self.memory.clone(),
+            self.llm_client.clone(),
+        );
         let req = crate::knowledge::types::IngestTextRequest {
             title: format!(
                 "对话摘要 ({} · {})",
@@ -3353,7 +3367,10 @@ pub fn describe_tool_call(name: &str, args: &serde_json::Value) -> (String, Stri
         "pup_to_pup" => {
             let target = args["target_pup"].as_str().unwrap_or("?");
             let task = args["task"].as_str().unwrap_or("");
-            ("delegation".into(), format!("→ {target}: {}", trunc(task, 50)))
+            (
+                "delegation".into(),
+                format!("→ {target}: {}", trunc(task, 50)),
+            )
         }
         _ if name.starts_with("mcp__") => {
             // mcp__server__tool → "[server] tool"
