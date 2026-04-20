@@ -42,7 +42,7 @@ pub enum NotifyWhen {
 pub struct NotifyConfig {
     #[serde(default)]
     pub when: NotifyWhen,
-    /// Channels to notify: "weixin", "qqbot". Empty = app event only.
+    /// Channels to notify: "weixin", "qqbot", "telegram", "discord". Empty = app event only.
     #[serde(default)]
     pub channels: Vec<String>,
 }

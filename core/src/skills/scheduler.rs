@@ -224,6 +224,12 @@ async fn send_job_notification(outbox: &BridgeOutbox, channels: &[String], messa
                 .telegram
                 .as_ref()
                 .map(|tg| (Platform::Telegram, tg.owner_user_id.clone())),
+            "discord" => cfg.discord.as_ref().and_then(|discord| {
+                discord
+                    .allowed_channels
+                    .first()
+                    .map(|channel_id| (Platform::Discord, channel_id.clone()))
+            }),
             other => {
                 warn!("[scheduler] unknown notification channel: {other}");
                 None

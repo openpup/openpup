@@ -41,20 +41,6 @@ impl OwnerAuth {
                 }
                 Ok(())
             }
-            Platform::Slack => {
-                let cfg = self
-                    .config
-                    .slack
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Slack not configured"))?;
-                if msg.user_id != cfg.owner_user_id {
-                    bail!("non-owner message rejected");
-                }
-                if !cfg.allowed_channels.contains(&msg.chat_id) {
-                    bail!("channel not in allowlist");
-                }
-                Ok(())
-            }
             Platform::Weixin => {
                 let cfg = self
                     .config

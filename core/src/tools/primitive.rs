@@ -272,12 +272,12 @@ impl ToolRegistry {
               "type": "function",
               "function": {
                 "name": "bridge_send",
-                "description": "Send a text message to the owner via a configured messaging bridge (Telegram, Weixin, etc.). If platform is omitted, sends to all configured bridges.",
+                "description": "Send a text message to the owner via a configured messaging bridge (Telegram, Discord, Weixin, etc.). If platform is omitted, sends to all configured bridges.",
                 "parameters": {
                   "type": "object",
                   "properties": {
                     "text": { "type": "string", "description": "Message text to send" },
-                    "platform": { "type": "string", "enum": ["telegram", "weixin", "qqbot"], "description": "Optional: 'telegram', 'weixin', or 'qqbot'. Omit to send to all configured platforms." }
+                    "platform": { "type": "string", "enum": ["telegram", "discord", "weixin", "qqbot"], "description": "Optional: 'telegram', 'discord', 'weixin', or 'qqbot'. Omit to send to all configured platforms." }
                   },
                   "required": ["text"]
                 }
@@ -627,6 +627,11 @@ impl ToolRegistry {
         if let Some(tg) = &cfg.telegram {
             targets.push((Platform::Telegram, tg.owner_user_id.clone()));
         }
+        if let Some(discord) = &cfg.discord {
+            if let Some(channel_id) = discord.allowed_channels.first() {
+                targets.push((Platform::Discord, channel_id.clone()));
+            }
+        }
         if let Some(wx) = &cfg.weixin {
             targets.push((Platform::Weixin, wx.owner_user_id.clone()));
         }
@@ -644,6 +649,7 @@ impl ToolRegistry {
                 "qq" | "qqbot" | "QQ" => "qqbot",
                 "wechat" | "wx" | "weixin" => "weixin",
                 "tg" | "telegram" => "telegram",
+                "discord" | "dc" => "discord",
                 other => other,
             };
             targets.retain(|(p, _)| p.as_str() == normalized);

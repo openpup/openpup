@@ -69,6 +69,19 @@ pub struct ChannelCompletedPayload {
     pub channel_id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelExternalEvent {
+    pub kind: String,
+    pub channel_id: String,
+    pub title: Option<String>,
+    pub sender: Option<String>,
+    pub content: Option<String>,
+    pub msg_type: Option<String>,
+    pub status_val: Option<String>,
+    pub event_payload: Option<Value>,
+    pub timestamp: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelWorkflowState {
     pub channel_id: String,
@@ -77,6 +90,15 @@ pub struct ChannelWorkflowState {
     pub review_round: i64,
     pub awaiting_user: bool,
     pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelTransportBindingRecord {
+    pub kind: String,
+    pub label: String,
+    pub status: String,
+    pub transport_ref: String,
+    pub parent_ref: Option<String>,
 }
 
 // ─── DAG / Delegation plan types ──────────────────────────────────────────────

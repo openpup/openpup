@@ -198,6 +198,34 @@ The default bridge target is always personal scope:
 bridge message -> personal Conversation Space
 ```
 
+## Discord Bridge Rules
+
+Discord is an experimental bridge aimed at two different flows and they use different routing rules:
+
+1. Allowed channel:
+   - Only the configured `owner_user_id` is accepted.
+   - Only channels listed in `allowed_channels` are accepted.
+   - Plain messages must explicitly mention `@alpha` before they are routed to the local personal bridge flow.
+   - `/g <group> ...` and `/use <group|personal>` are accepted as explicit routing commands and do not require an `@alpha` mention.
+
+2. Pack Channel thread:
+   - A Discord thread can be bound to one local Pack Channel through `channel_transport_bindings`.
+   - Messages posted inside a bound thread never enter personal chat.
+   - Instead they are interpreted as Pack Channel review input:
+     - `/continue ...` or `继续` -> continue the current review gate
+     - `/abort ...` or `终止` -> abort the Pack Channel
+     - `/changes ...` or `打回 ...` -> request changes
+     - any other text -> review comment
+
+This keeps Discord collaboration deterministic:
+
+- allowed channels are the access boundary
+- `pack_hub_channel_id` is the outbound projection target
+- `pack_thread_mode` decides whether Pack Channels create a dedicated Discord thread or post directly into the hub channel
+- `pack_fallback_to_channel` decides whether projection falls back to the hub channel if thread creation fails
+
+Bridge-originated Pack Channel comments and decisions carry an origin marker so the same Discord thread does not receive its own mirrored echo back.
+
 Explicit group routing can use:
 
 ```text

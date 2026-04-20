@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::bridge::types::{BridgeConfig, BridgeConnectionStatus};
 use crate::bridge::weixin::{
@@ -19,11 +19,43 @@ pub async fn save_bridge_config(
     bridge_manager: Option<&Arc<BridgeManager>>,
     config: BridgeConfig,
 ) -> Result<()> {
+    validate_bridge_config(&config)?;
     let mut cfg = crate::config::load();
     cfg.bridge = Some(config.clone());
     crate::config::save(&cfg)?;
     if let Some(manager) = bridge_manager {
         manager.restart(config).await;
+    }
+    Ok(())
+}
+
+fn validate_bridge_config(config: &BridgeConfig) -> Result<()> {
+    if let Some(discord) = &config.discord {
+        if !discord.bot_token.trim().is_empty() && discord.allowed_channels.is_empty() {
+            bail!("Discord allowed channels is required. Please add at least one channel ID.");
+        }
+        if let Some(mode) = discord
+            .pack_thread_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !matches!(mode, "thread" | "channel") {
+                bail!("Discord pack thread mode must be `thread` or `channel`.");
+            }
+        }
+        if let Some(hub) = discord
+            .pack_hub_channel_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !discord.allowed_channels.iter().any(|item| item == hub) {
+                bail!(
+                    "Discord pack hub channel must also appear in allowed channels so inbound and outbound routing stay aligned."
+                );
+            }
+        }
     }
     Ok(())
 }

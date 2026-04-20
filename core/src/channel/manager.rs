@@ -8,7 +8,9 @@ use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::channel::heartbeat::HeartbeatMonitor;
-use crate::channel::types::{ChannelCompletedPayload, ChannelMessagePayload, ChannelWorkflowState};
+use crate::channel::types::{
+    ChannelCompletedPayload, ChannelExternalEvent, ChannelMessagePayload, ChannelWorkflowState,
+};
 use crate::memory::system::MemorySystem;
 use crate::runtime::{emit_event, SharedEventSink};
 
@@ -44,6 +46,7 @@ pub struct ChannelManager {
     event_sink: Arc<OnceLock<SharedEventSink>>,
     /// Broadcast senders keyed by channel_id. Removed when channel is completed.
     senders: Arc<RwLock<HashMap<String, broadcast::Sender<ChannelMessagePayload>>>>,
+    event_tx: broadcast::Sender<ChannelExternalEvent>,
     review_sessions: Arc<Mutex<HashMap<String, PendingReview>>>,
     pub monitor: Arc<HeartbeatMonitor>,
 }
@@ -54,6 +57,7 @@ impl ChannelManager {
             memory,
             event_sink: Arc::new(OnceLock::new()),
             senders: Arc::new(RwLock::new(HashMap::new())),
+            event_tx: broadcast::channel(256).0,
             review_sessions: Arc::new(Mutex::new(HashMap::new())),
             monitor: Arc::new(HeartbeatMonitor::new()),
         }
@@ -61,6 +65,10 @@ impl ChannelManager {
 
     pub fn set_event_sink(&self, sink: SharedEventSink) {
         let _ = self.event_sink.set(sink);
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<ChannelExternalEvent> {
+        self.event_tx.subscribe()
     }
 
     /// Create a new channel, register a broadcast sender, and return the channel id.
@@ -81,6 +89,17 @@ impl ChannelManager {
             let mut guard = self.senders.write().await;
             guard.insert(channel_id.clone(), tx);
         }
+        let _ = self.event_tx.send(ChannelExternalEvent {
+            kind: "created".to_string(),
+            channel_id: channel_id.clone(),
+            title: Some(title.to_string()),
+            sender: None,
+            content: None,
+            msg_type: None,
+            status_val: None,
+            event_payload: None,
+            timestamp: Utc::now().timestamp(),
+        });
 
         Ok(channel_id)
     }
@@ -151,6 +170,17 @@ impl ChannelManager {
                 let _ = tx.send(payload.clone());
             }
         }
+        let _ = self.event_tx.send(ChannelExternalEvent {
+            kind: "message".to_string(),
+            channel_id: channel_id.to_string(),
+            title: None,
+            sender: Some(sender.to_string()),
+            content: Some(content.to_string()),
+            msg_type: Some(msg_type.to_string()),
+            status_val: status_val.map(|value| value.to_string()),
+            event_payload: payload.event_payload.clone(),
+            timestamp: now,
+        });
 
         // Emit Tauri event if handle is available
         if let Some(sink) = self.event_sink.get() {
@@ -227,6 +257,17 @@ impl ChannelManager {
                 emit_event(sink.as_ref(), "channel_workflow_updated", state);
             }
         }
+        let _ = self.event_tx.send(ChannelExternalEvent {
+            kind: "workflow".to_string(),
+            channel_id: channel_id.to_string(),
+            title: None,
+            sender: None,
+            content: blocked_reason.map(str::to_string),
+            msg_type: Some(status.to_string()),
+            status_val: current_layer.map(|layer| layer.to_string()),
+            event_payload: None,
+            timestamp: Utc::now().timestamp(),
+        });
 
         Ok(())
     }
@@ -273,6 +314,18 @@ impl ChannelManager {
         content: &str,
         reply_to: Option<&str>,
     ) -> Result<String> {
+        self.submit_review_comment_with_payload(channel_id, sender, content, reply_to, None)
+            .await
+    }
+
+    pub async fn submit_review_comment_with_payload(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        content: &str,
+        reply_to: Option<&str>,
+        event_payload: Option<Value>,
+    ) -> Result<String> {
         self.post_message(
             channel_id,
             sender,
@@ -282,7 +335,7 @@ impl ChannelManager {
             None,
             &[],
             reply_to,
-            None,
+            event_payload,
         )
         .await
     }
@@ -326,6 +379,17 @@ impl ChannelManager {
         sender: &str,
         comment: &str,
     ) -> Result<()> {
+        self.continue_channel_with_payload(channel_id, sender, comment, None)
+            .await
+    }
+
+    pub async fn continue_channel_with_payload(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        comment: &str,
+        event_payload: Option<Value>,
+    ) -> Result<()> {
         self.post_message(
             channel_id,
             sender,
@@ -335,7 +399,7 @@ impl ChannelManager {
             None,
             &[],
             None,
-            None,
+            event_payload,
         )
         .await?;
 
@@ -359,6 +423,17 @@ impl ChannelManager {
     /// the workflow as completed/aborted so the channel doesn't get stuck in
     /// `awaiting_review` forever.
     pub async fn abort_channel(&self, channel_id: &str, sender: &str, comment: &str) -> Result<()> {
+        self.abort_channel_with_payload(channel_id, sender, comment, None)
+            .await
+    }
+
+    pub async fn abort_channel_with_payload(
+        &self,
+        channel_id: &str,
+        sender: &str,
+        comment: &str,
+        event_payload: Option<Value>,
+    ) -> Result<()> {
         self.post_message(
             channel_id,
             sender,
@@ -368,7 +443,7 @@ impl ChannelManager {
             None,
             &[],
             None,
-            None,
+            event_payload,
         )
         .await?;
 
@@ -413,6 +488,17 @@ impl ChannelManager {
                 },
             );
         }
+        let _ = self.event_tx.send(ChannelExternalEvent {
+            kind: "completed".to_string(),
+            channel_id: channel_id.to_string(),
+            title: None,
+            sender: None,
+            content: None,
+            msg_type: None,
+            status_val: None,
+            event_payload: None,
+            timestamp: Utc::now().timestamp(),
+        });
 
         // Remove broadcast sender
         {

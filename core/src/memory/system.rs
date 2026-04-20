@@ -11,7 +11,8 @@ use crate::bridge::types::{
     BridgeConnectionState, BridgeConnectionStatus, InboundMessage, OutboundMessage,
 };
 use crate::channel::types::{
-    ChannelMessageRecord, ChannelRecord, ChannelWorkflowState, DelegationPlan,
+    ChannelMessageRecord, ChannelRecord, ChannelTransportBindingRecord, ChannelWorkflowState,
+    DelegationPlan,
 };
 use crate::conversation::types::{
     ConversationMemberRecord, ConversationMessageRecord, ConversationSpaceRecord,
@@ -364,6 +365,44 @@ impl MemorySystem {
         joined_at   INTEGER NOT NULL,
         PRIMARY KEY (channel_id, pup_id)
       );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS channel_transport_bindings (
+        id            TEXT PRIMARY KEY,
+        channel_id    TEXT NOT NULL,
+        kind          TEXT NOT NULL,
+        label         TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'active',
+        transport_ref TEXT NOT NULL,
+        parent_ref    TEXT,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
+        UNIQUE(channel_id, kind, transport_ref)
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        let _ = sqlx::query("ALTER TABLE channel_transport_bindings ADD COLUMN parent_ref TEXT")
+            .execute(&self.pool)
+            .await;
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_channel_transport_bindings_channel
+      ON channel_transport_bindings(channel_id, status);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_channel_transport_bindings_transport
+      ON channel_transport_bindings(kind, transport_ref, status);
       "#,
         )
         .execute(&self.pool)
@@ -1073,6 +1112,95 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn bind_channel_transport(
+        &self,
+        channel_id: &str,
+        kind: &str,
+        label: &str,
+        transport_ref: &str,
+        parent_ref: Option<&str>,
+    ) -> Result<ChannelTransportBindingRecord> {
+        let now = Utc::now().timestamp();
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO channel_transport_bindings
+              (id, channel_id, kind, label, status, transport_ref, parent_ref, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?7)
+            ON CONFLICT(channel_id, kind, transport_ref) DO UPDATE SET
+              label = excluded.label,
+              status = 'active',
+              parent_ref = excluded.parent_ref,
+              updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(channel_id)
+        .bind(kind)
+        .bind(label)
+        .bind(transport_ref)
+        .bind(parent_ref)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(ChannelTransportBindingRecord {
+            kind: kind.to_string(),
+            label: label.to_string(),
+            status: "active".to_string(),
+            transport_ref: transport_ref.to_string(),
+            parent_ref: parent_ref.map(str::to_string),
+        })
+    }
+
+    pub async fn find_channel_by_transport(
+        &self,
+        kind: &str,
+        transport_ref: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            r#"
+            SELECT channel_id
+            FROM channel_transport_bindings
+            WHERE kind = ?1 AND transport_ref = ?2 AND status = 'active'
+            LIMIT 1
+            "#,
+        )
+        .bind(kind)
+        .bind(transport_ref)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| row.get("channel_id")))
+    }
+
+    pub async fn list_channel_transports(
+        &self,
+        channel_id: &str,
+    ) -> Result<Vec<ChannelTransportBindingRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT kind, label, status, transport_ref, parent_ref
+            FROM channel_transport_bindings
+            WHERE channel_id = ?1
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, label ASC
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ChannelTransportBindingRecord {
+                kind: row.get("kind"),
+                label: row.get("label"),
+                status: row.get("status"),
+                transport_ref: row.get("transport_ref"),
+                parent_ref: row.get("parent_ref"),
+            })
+            .collect())
     }
 
     // ── Conversation Spaces ─────────────────────────────────────────────────
@@ -2239,6 +2367,17 @@ impl MemorySystem {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            DELETE FROM channel_transport_bindings
+            WHERE channel_id IN (
+              SELECT id FROM pack_channels WHERE status = 'completed'
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query("DELETE FROM pack_channels WHERE status = 'completed'")
             .execute(&self.pool)
             .await?;
@@ -2288,6 +2427,24 @@ impl MemorySystem {
         sqlx::query(
             r#"
             DELETE FROM channel_members
+            WHERE channel_id IN (
+              SELECT c.id
+              FROM pack_channels c
+              WHERE c.status = 'active'
+                AND COALESCE(
+                  (SELECT MAX(msg.timestamp) FROM channel_messages msg WHERE msg.channel_id = c.id),
+                  c.created_at
+                ) < ?1
+            )
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM channel_transport_bindings
             WHERE channel_id IN (
               SELECT c.id
               FROM pack_channels c
@@ -2521,6 +2678,7 @@ impl MemorySystem {
             r#"
       SELECT platform, status, connected, last_seen, error_msg
       FROM bridge_connections
+      WHERE platform IN ('telegram', 'discord', 'weixin', 'qqbot')
       ORDER BY platform ASC
       "#,
         )

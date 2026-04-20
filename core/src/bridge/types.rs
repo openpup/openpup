@@ -12,7 +12,6 @@ pub type BridgeOutbox = Arc<Mutex<Option<mpsc::Sender<OutboundMessage>>>>;
 pub enum Platform {
     Telegram,
     Discord,
-    Slack,
     Weixin,
     QQBot,
 }
@@ -22,7 +21,6 @@ impl Platform {
         match self {
             Platform::Telegram => "telegram",
             Platform::Discord => "discord",
-            Platform::Slack => "slack",
             Platform::Weixin => "weixin",
             Platform::QQBot => "qqbot",
         }
@@ -106,7 +104,6 @@ impl BridgeContext {
 pub struct BridgeConfig {
     pub telegram: Option<TelegramConfig>,
     pub discord: Option<DiscordConfig>,
-    pub slack: Option<SlackConfig>,
     pub weixin: Option<WeixinConfig>,
     pub qqbot: Option<QQBotConfig>,
 }
@@ -126,15 +123,11 @@ pub struct DiscordConfig {
     pub owner_user_id: String,
     pub allowed_channels: Vec<String>,
     #[serde(default)]
-    pub proxy_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SlackConfig {
-    pub bot_token: String,
-    pub app_token: String,
-    pub owner_user_id: String,
-    pub allowed_channels: Vec<String>,
+    pub pack_hub_channel_id: Option<String>,
+    #[serde(default)]
+    pub pack_thread_mode: Option<String>,
+    #[serde(default)]
+    pub pack_fallback_to_channel: Option<bool>,
     #[serde(default)]
     pub proxy_url: Option<String>,
 }

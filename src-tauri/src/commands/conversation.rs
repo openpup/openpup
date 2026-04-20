@@ -57,6 +57,12 @@ fn bridge_target(platform: &str) -> Option<(crate::bridge::types::Platform, Stri
                 tg.owner_user_id.clone(),
             )
         }),
+        "discord" => cfg.discord.as_ref().and_then(|discord| {
+            discord
+                .allowed_channels
+                .first()
+                .map(|channel_id| (crate::bridge::types::Platform::Discord, channel_id.clone()))
+        }),
         _ => None,
     }
 }
@@ -70,6 +76,7 @@ fn bridge_platform_for_member(
                 "qqbot" => Some("qqbot"),
                 "weixin" => Some("weixin"),
                 "telegram" => Some("telegram"),
+                "discord" => Some("discord"),
                 _ => None,
             };
         }
@@ -82,6 +89,8 @@ fn bridge_platform_for_member(
         Some("weixin")
     } else if route.contains("telegram") {
         Some("telegram")
+    } else if route.contains("discord") {
+        Some("discord")
     } else {
         None
     }

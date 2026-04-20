@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useLang, t } from '../i18n';
 import { formatMonthDayTime } from '../utils/locale';
 
-type PlatformKey = 'telegram' | 'discord' | 'slack' | 'weixin' | 'qqbot';
+type PlatformKey = 'telegram' | 'discord' | 'weixin' | 'qqbot';
 type PlatformStatus = 'unconfigured' | 'connecting' | 'connected' | 'error';
 
 interface TelegramConfig {
@@ -17,14 +17,9 @@ interface DiscordConfig {
   bot_token: string;
   owner_user_id: string;
   allowed_channels: string[];
-  proxy_url?: string | null;
-}
-
-interface SlackConfig {
-  bot_token: string;
-  app_token: string;
-  owner_user_id: string;
-  allowed_channels: string[];
+  pack_hub_channel_id?: string | null;
+  pack_thread_mode?: string | null;
+  pack_fallback_to_channel?: boolean | null;
   proxy_url?: string | null;
 }
 
@@ -48,7 +43,6 @@ interface QQBotConfig {
 interface BridgeConfig {
   telegram?: TelegramConfig | null;
   discord?: DiscordConfig | null;
-  slack?: SlackConfig | null;
   weixin?: WeixinConfig | null;
   qqbot?: QQBotConfig | null;
 }
@@ -94,12 +88,10 @@ interface FormState {
   discordBotToken: string;
   discordOwnerUserId: string;
   discordAllowedChannels: string;
+  discordPackHubChannelId: string;
+  discordPackThreadMode: string;
+  discordPackFallbackToChannel: boolean;
   discordProxyUrl: string;
-  slackBotToken: string;
-  slackAppToken: string;
-  slackOwnerUserId: string;
-  slackAllowedChannels: string;
-  slackProxyUrl: string;
   weixinBaseUrl: string;
   weixinAccessToken: string;
   weixinOwnerUserId: string;
@@ -245,6 +237,7 @@ const StatusPill: React.FC<{ status?: BridgeConnectionStatus; lang: 'zh' | 'en' 
 
 export const BridgeSettings: React.FC = () => {
   const { lang } = useLang();
+  const [discordAdvancedOpen, setDiscordAdvancedOpen] = useState(false);
   const [form, setForm] = useState<FormState>({
     telegramBotToken: '',
     telegramOwnerUserId: '',
@@ -253,12 +246,10 @@ export const BridgeSettings: React.FC = () => {
     discordBotToken: '',
     discordOwnerUserId: '',
     discordAllowedChannels: '',
+    discordPackHubChannelId: '',
+    discordPackThreadMode: 'thread',
+    discordPackFallbackToChannel: true,
     discordProxyUrl: '',
-    slackBotToken: '',
-    slackAppToken: '',
-    slackOwnerUserId: '',
-    slackAllowedChannels: '',
-    slackProxyUrl: '',
     weixinBaseUrl: DEFAULT_WEIXIN_BASE_URL,
     weixinAccessToken: '',
     weixinOwnerUserId: '',
@@ -300,12 +291,10 @@ export const BridgeSettings: React.FC = () => {
         discordBotToken: cfg.discord?.bot_token ?? '',
         discordOwnerUserId: cfg.discord?.owner_user_id ?? '',
         discordAllowedChannels: listToText(cfg.discord?.allowed_channels),
+        discordPackHubChannelId: cfg.discord?.pack_hub_channel_id ?? '',
+        discordPackThreadMode: cfg.discord?.pack_thread_mode ?? 'thread',
+        discordPackFallbackToChannel: cfg.discord?.pack_fallback_to_channel ?? true,
         discordProxyUrl: cfg.discord?.proxy_url ?? '',
-        slackBotToken: cfg.slack?.bot_token ?? '',
-        slackAppToken: cfg.slack?.app_token ?? '',
-        slackOwnerUserId: cfg.slack?.owner_user_id ?? '',
-        slackAllowedChannels: listToText(cfg.slack?.allowed_channels),
-        slackProxyUrl: cfg.slack?.proxy_url ?? '',
         weixinBaseUrl: cfg.weixin?.base_url ?? DEFAULT_WEIXIN_BASE_URL,
         weixinAccessToken: cfg.weixin?.access_token ?? '',
         weixinOwnerUserId: cfg.weixin?.owner_user_id ?? '',
@@ -464,6 +453,11 @@ export const BridgeSettings: React.FC = () => {
   );
 
   const save = async () => {
+    if (form.discordBotToken.trim() && textToList(form.discordAllowedChannels).length === 0) {
+      setError(t('bridge_discord_allowed_required', lang));
+      setMessage(null);
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -480,14 +474,10 @@ export const BridgeSettings: React.FC = () => {
             bot_token: form.discordBotToken.trim(),
             owner_user_id: form.discordOwnerUserId.trim(),
             allowed_channels: textToList(form.discordAllowedChannels),
+            pack_hub_channel_id: normalizeOptional(form.discordPackHubChannelId),
+            pack_thread_mode: form.discordPackThreadMode,
+            pack_fallback_to_channel: form.discordPackFallbackToChannel,
             proxy_url: normalizeOptional(form.discordProxyUrl),
-          } : null,
-          slack: form.slackBotToken.trim() ? {
-            bot_token: form.slackBotToken.trim(),
-            app_token: form.slackAppToken.trim(),
-            owner_user_id: form.slackOwnerUserId.trim(),
-            allowed_channels: textToList(form.slackAllowedChannels),
-            proxy_url: normalizeOptional(form.slackProxyUrl),
           } : null,
           weixin: form.weixinBaseUrl.trim() && form.weixinAccessToken.trim() ? {
             base_url: form.weixinBaseUrl.trim(),
@@ -540,7 +530,7 @@ export const BridgeSettings: React.FC = () => {
 
           {showProxy && (
             <BridgeField
-              label="Proxy"
+              label={t('bridge_proxy_label', lang)}
               value={proxyValue}
               placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
               onChange={(value) => setForm((prev) => ({ ...prev, [`${platform}ProxyUrl`]: value } as FormState))}
@@ -600,7 +590,7 @@ export const BridgeSettings: React.FC = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-        {(['telegram', 'discord', 'slack', 'weixin', 'qqbot'] as PlatformKey[]).map((platform) => {
+        {(['telegram', 'discord', 'weixin', 'qqbot'] as PlatformKey[]).map((platform) => {
           const status = statusMap[platform];
           return (
             <div key={platform} style={{ ...cardStyle, padding: 14 }}>
@@ -666,43 +656,79 @@ export const BridgeSettings: React.FC = () => {
             <BridgeField
               label="Allowed Channels"
               value={form.discordAllowedChannels}
-              placeholder="channel_id_1, channel_id_2"
+              placeholder="At least one Discord text channel ID"
               onChange={(value) => setForm((prev) => ({ ...prev, discordAllowedChannels: value }))}
             />
+            <div style={{ display: 'grid', gap: 8 }}>
+              <button
+                onClick={() => setDiscordAdvancedOpen((prev) => !prev)}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  border: '0.5px solid var(--color-border-secondary)',
+                  background: 'var(--color-background-primary)',
+                  color: 'var(--color-text-secondary)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  justifySelf: 'start',
+                }}
+              >
+                {discordAdvancedOpen ? t('bridge_advanced_hide', lang) : t('bridge_advanced_show', lang)}
+              </button>
+              {discordAdvancedOpen && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 12,
+                    padding: '12px',
+                    borderRadius: 12,
+                    border: '0.5px solid var(--color-border-secondary)',
+                    background: 'var(--color-background-secondary)',
+                  }}
+                >
+                  <BridgeField
+                    label={t('bridge_discord_pack_hub', lang)}
+                    value={form.discordPackHubChannelId}
+                    placeholder={t('bridge_discord_pack_hub_placeholder', lang)}
+                    onChange={(value) => setForm((prev) => ({ ...prev, discordPackHubChannelId: value }))}
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: -4, lineHeight: 1.6 }}>
+                    {t('bridge_discord_pack_hub_hint', lang)}
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={labelStyle}>{t('bridge_discord_pack_mode', lang)}</span>
+                    <select
+                      value={form.discordPackThreadMode}
+                      onChange={(e) => setForm((prev) => ({ ...prev, discordPackThreadMode: e.target.value }))}
+                      style={inputStyle}
+                    >
+                      <option value="thread">{t('bridge_discord_pack_mode_thread', lang)}</option>
+                      <option value="channel">{t('bridge_discord_pack_mode_channel', lang)}</option>
+                    </select>
+                  </label>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: -4, lineHeight: 1.6 }}>
+                    {t('bridge_discord_pack_mode_hint', lang)}
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={form.discordPackFallbackToChannel}
+                      onChange={(e) => setForm((prev) => ({ ...prev, discordPackFallbackToChannel: e.target.checked }))}
+                    />
+                    <span>{t('bridge_discord_pack_fallback', lang)}</span>
+                  </label>
+                  <BridgeField
+                    label={t('bridge_proxy_label', lang)}
+                    value={form.discordProxyUrl}
+                    placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+                    onChange={(value) => setForm((prev) => ({ ...prev, discordProxyUrl: value }))}
+                  />
+                </div>
+              )}
+            </div>
           </>,
-        )}
-
-        {renderBridgeCard(
-          'slack',
-          'Slack',
-          t('bridge_slack_desc', lang),
-          form.slackProxyUrl,
-          <>
-            <BridgeField
-              label="Bot Token"
-              value={form.slackBotToken}
-              placeholder="Slack bot token"
-              onChange={(value) => setForm((prev) => ({ ...prev, slackBotToken: value }))}
-            />
-            <BridgeField
-              label="App Token"
-              value={form.slackAppToken}
-              placeholder="Slack app token"
-              onChange={(value) => setForm((prev) => ({ ...prev, slackAppToken: value }))}
-            />
-            <BridgeField
-              label="Owner User ID"
-              value={form.slackOwnerUserId}
-              placeholder="Slack owner user id"
-              onChange={(value) => setForm((prev) => ({ ...prev, slackOwnerUserId: value }))}
-            />
-            <BridgeField
-              label="Allowed Channels"
-              value={form.slackAllowedChannels}
-              placeholder="channel_id_1, channel_id_2"
-              onChange={(value) => setForm((prev) => ({ ...prev, slackAllowedChannels: value }))}
-            />
-          </>,
+          false,
         )}
 
         {renderBridgeCard(

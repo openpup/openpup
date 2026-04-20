@@ -2591,7 +2591,7 @@ impl AlphaPup {
         Ok(aggregated)
     }
 
-    /// Entry point for external bridge messages (Telegram, Discord, Slack).
+    /// Entry point for external bridge messages (Telegram, Discord, Weixin, QQBot).
     /// Uses the same routing as process_user_message_stream but returns a Result
     /// instead of emitting Tauri events.
     #[allow(dead_code)]
