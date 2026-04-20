@@ -744,6 +744,13 @@ impl BridgeManager {
             if source_thread_id == Some(target_chat_id.as_str()) {
                 continue;
             }
+            let text = if event.kind == "created" && target_chat_id != parent_channel_id {
+                format!(
+                    "{text}\n\nReply here to comment on the Pack Channel.\nUse `/continue`, `/changes <note>`, or `/abort <note>` during review."
+                )
+            } else {
+                text
+            };
             if let Err(e) = bridge
                 .send(&OutboundMessage {
                     platform: Platform::Discord,
@@ -1328,15 +1335,6 @@ impl BridgeManager {
                         && parse_group_command(&inbound_text).is_none()
                         && parse_use_command(&inbound_text).is_none()
                     {
-                        let _ = outbound_tx
-                            .send(OutboundMessage {
-                                platform,
-                                chat_id,
-                                text: "Discord 频道消息需要显式 @alpha；Pack thread 内的消息会直接进入对应的 Pack Channel。".to_string(),
-                                reply_to_id: Some(msg_id),
-                                msg_type: OutboundType::Ack,
-                            })
-                            .await;
                         continue;
                     }
                     let stripped = strip_alpha_mention(&inbound_text);
