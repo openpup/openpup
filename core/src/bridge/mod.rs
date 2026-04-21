@@ -664,18 +664,15 @@ impl BridgeManager {
                         self.emit_conversation_spaces_changed().await;
                     }
                 }
-                let segments = formatter::format_result(&reply);
-                for (i, seg) in segments.into_iter().enumerate() {
-                    let _ = out_tx
-                        .send(OutboundMessage {
-                            platform: platform.clone(),
-                            chat_id: chat_id.clone(),
-                            text: seg,
-                            reply_to_id: if i == 0 { Some(msg_id.clone()) } else { None },
-                            msg_type: OutboundType::Result,
-                        })
-                        .await;
-                }
+                let _ = out_tx
+                    .send(OutboundMessage {
+                        platform: platform.clone(),
+                        chat_id: chat_id.clone(),
+                        text: reply,
+                        reply_to_id: Some(msg_id.clone()),
+                        msg_type: OutboundType::Result,
+                    })
+                    .await;
             }
             Err(e) => {
                 let _ = out_tx
@@ -1156,7 +1153,9 @@ impl BridgeManager {
         handles.push(tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
                 if let Some(route_tx) = outbound_routes.get(&msg.platform) {
-                    let _ = route_tx.send(msg).await;
+                    for segment in formatter::expand_outbound_message(msg) {
+                        let _ = route_tx.send(segment).await;
+                    }
                 }
             }
         }));
@@ -1512,22 +1511,15 @@ impl BridgeManager {
                         .await
                     {
                         Ok(result) => {
-                            let segments = formatter::format_result(&result);
-                            for (i, seg) in segments.into_iter().enumerate() {
-                                let _ = out_tx
-                                    .send(OutboundMessage {
-                                        platform: platform.clone(),
-                                        chat_id: chat_id.clone(),
-                                        text: seg,
-                                        reply_to_id: if i == 0 {
-                                            Some(msg_id.clone())
-                                        } else {
-                                            None
-                                        },
-                                        msg_type: OutboundType::Result,
-                                    })
-                                    .await;
-                            }
+                            let _ = out_tx
+                                .send(OutboundMessage {
+                                    platform: platform.clone(),
+                                    chat_id: chat_id.clone(),
+                                    text: result,
+                                    reply_to_id: Some(msg_id.clone()),
+                                    msg_type: OutboundType::Result,
+                                })
+                                .await;
                         }
                         Err(e) => {
                             let _ = out_tx
