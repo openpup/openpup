@@ -13,6 +13,11 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<InstalledSkil
 }
 
 #[tauri::command]
+pub async fn refresh_skills(state: State<'_, AppState>) -> Result<Vec<InstalledSkill>, String> {
+    Ok(state.app.refresh_skills().await)
+}
+
+#[tauri::command]
 pub async fn set_skill_enabled(
     state: State<'_, AppState>,
     name: String,

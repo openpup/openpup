@@ -361,6 +361,11 @@ impl OpenPupApp {
         self.skill_executor.registry.list_installed().await
     }
 
+    pub async fn refresh_skills(&self) -> Vec<InstalledSkill> {
+        self.skill_executor.registry.refresh().await;
+        self.skill_executor.registry.list_installed().await
+    }
+
     pub async fn set_skill_enabled(&self, name: &str, enabled: bool) -> Result<()> {
         self.skill_executor
             .registry
@@ -390,6 +395,10 @@ impl OpenPupApp {
 
     pub async fn add_mcp_server(&self, entry: McpServerEntry) -> Result<()> {
         self.mcp_orchestrator.add_server(entry).await
+    }
+
+    pub async fn update_mcp_server(&self, name: &str, entry: McpServerEntry) -> Result<()> {
+        self.mcp_orchestrator.update_server(name, entry).await
     }
 
     pub async fn remove_mcp_server(&self, name: &str) -> Result<()> {
@@ -745,6 +754,7 @@ pub async fn build_app(
         let _ = skill_registry.register_from_dir(&scan_root, "local").await;
         skill_registry.add_scan_root(scan_root, "local").await;
     }
+    skill_registry.reconcile_installed_with_registered().await;
 
     let permissions = PermissionChecker::new();
     permissions.set_persist_path(

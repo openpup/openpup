@@ -9,6 +9,7 @@ use super::AppState;
 pub struct McpServerInfo {
     pub name: String,
     pub base_url: String,
+    pub token: String,
     pub description: String,
     pub enabled: bool,
 }
@@ -21,6 +22,7 @@ pub async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<McpServe
         .map(|e| McpServerInfo {
             name: e.name,
             base_url: e.base_url,
+            token: e.token,
             description: e.description,
             enabled: e.enabled,
         })
@@ -49,6 +51,37 @@ pub async fn add_mcp_server(
             description: entry.description,
             enabled: true,
         })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateMcpServerInput {
+    pub original_name: String,
+    pub name: String,
+    pub base_url: String,
+    pub token: String,
+    pub description: String,
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn update_mcp_server(
+    state: State<'_, AppState>,
+    entry: UpdateMcpServerInput,
+) -> Result<(), String> {
+    state
+        .app
+        .update_mcp_server(
+            &entry.original_name,
+            McpServerEntry {
+                name: entry.name,
+                base_url: entry.base_url,
+                token: entry.token,
+                description: entry.description,
+                enabled: entry.enabled,
+            },
+        )
         .await
         .map_err(|e| e.to_string())
 }

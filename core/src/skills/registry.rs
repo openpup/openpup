@@ -375,12 +375,15 @@ impl SkillRegistry {
     }
 
     pub async fn refresh(&self) {
+        self.clear_dynamic_skills().await;
         let roots = self.scan_roots.read().await.clone();
         for (path, source) in roots {
             if let Err(e) = self.register_from_dir(&path, &source).await {
                 warn!("skill refresh {}: {e}", path.display());
             }
         }
+        self.reconcile_installed_with_registered().await;
+        self.save_installed_snapshot();
         self.bump_generation();
     }
 
@@ -509,10 +512,14 @@ impl SkillRegistry {
         let description = skill.metadata.description.clone();
         let category = skill.metadata.category.clone();
         self.skills.write().await.insert(name.clone(), skill);
-        self.installed
-            .write()
-            .await
+        let mut installed = self.installed.write().await;
+        installed
             .entry(name.clone())
+            .and_modify(|meta| {
+                meta.description = description.clone();
+                meta.category = category.clone();
+                meta.source = source.to_string();
+            })
             .or_insert_with(|| InstalledSkill {
                 name,
                 description,
@@ -523,6 +530,32 @@ impl SkillRegistry {
                 enabled: true,
             });
         self.bump_generation();
+    }
+
+    async fn clear_dynamic_skills(&self) {
+        let mut skills = self.skills.write().await;
+        skills.retain(|_, skill| matches!(skill.source, SkillSource::BuiltinToml(_)));
+    }
+
+    pub async fn reconcile_installed_with_registered(&self) {
+        let registered = self.skills.read().await;
+        let mut installed = self.installed.write().await;
+        installed.retain(|name, _| registered.contains_key(name));
+        for (name, skill) in registered.iter() {
+            let description = skill.metadata.description.clone();
+            let category = skill.metadata.category.clone();
+            let source = match skill.source {
+                SkillSource::BuiltinToml(_) => "builtin",
+                SkillSource::TomlFile(_) | SkillSource::SkillHubDir(_) => "local",
+            }
+            .to_string();
+
+            if let Some(meta) = installed.get_mut(name) {
+                meta.description = description;
+                meta.category = category;
+                meta.source = source;
+            }
+        }
     }
 
     fn parse_skill_hub_dir(dir: &Path) -> Result<RegisteredSkill> {
@@ -727,6 +760,7 @@ impl SkillRegistry {
     }
 
     pub async fn list_installed(&self) -> Vec<InstalledSkill> {
+        self.reconcile_installed_with_registered().await;
         let guard = self.installed.read().await;
         let mut v: Vec<InstalledSkill> = guard.values().cloned().collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));

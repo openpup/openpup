@@ -151,6 +151,39 @@ impl MCPOrchestrator {
         Ok(())
     }
 
+    pub async fn update_server(&self, name: &str, entry: McpServerEntry) -> Result<()> {
+        {
+            let mut guard = self.servers.write().await;
+            if !guard.contains_key(name) {
+                return Err(anyhow!("MCP server '{name}' not found"));
+            }
+            if name != entry.name && guard.contains_key(&entry.name) {
+                return Err(anyhow!("MCP server '{}' already exists", entry.name));
+            }
+            guard.remove(name);
+            guard.insert(entry.name.clone(), entry.clone());
+        }
+        self.tool_cache.write().await.remove(name);
+        self.tool_cache.write().await.remove(&entry.name);
+        self.persist().await?;
+        if entry.enabled {
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                match self_clone.discover_server_tools(&entry).await {
+                    Ok(tools) => {
+                        self_clone
+                            .tool_cache
+                            .write()
+                            .await
+                            .insert(entry.name.clone(), tools);
+                    }
+                    Err(e) => warn!("[mcp] auto-discovery for updated '{}' failed: {e}", entry.name),
+                }
+            });
+        }
+        Ok(())
+    }
+
     pub async fn remove_server(&self, name: &str) -> Result<()> {
         self.servers.write().await.remove(name);
         self.tool_cache.write().await.remove(name);
