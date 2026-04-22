@@ -21,14 +21,14 @@
 
 <img src="openpup.png" width="860" alt="OpenPup interface">
 
-
-Ming Dynasty
+<p><strong>Ming Dynasty</strong></p>
 <img src="openpup-ming.png" width="860" alt="Pack Channel collaboration interface">
-[openpup-backup-Ming.zip](./openpup-backup-Ming.zip)
+<p><a href="./openpup-backup-Ming.zip">openpup-backup-Ming.zip</a></p>
 
-AI Trading
+<p><strong>AI Trading</strong></p>
 <img src="openpup-trading.png" width="860" alt="Pack Channel collaboration interface">
-[openpup-backup-Trading.zip](./openpup-backup-Trading.zip)
+<p><a href="./openpup-backup-Trading.zip">openpup-backup-Trading.zip</a></p>
+
 </div>
 
 ---
@@ -61,6 +61,23 @@ All data lives in `~/.openpup/` — plain files, SQLite, no cloud.
 | [docs/roadmap2.0.md](docs/roadmap2.0.md) | Configurable Organization OS |
 | [docs/roadmap2.1.md](docs/roadmap2.1.md) | Agent collaboration spaces |
 | [docs/architecture.md](docs/architecture.md) | Technical design — agent routing, memory system, IPC, data flow |
+
+## Mascot & Merch
+
+OpenPup is also growing a small visual world around the product, from mascot explorations to community merchandise.
+
+<div align="center">
+<table>
+  <tr>
+    <td width="70%" align="center" valign="top">
+      <img src="mascot.png" height="320" alt="OpenPup mascot" style="border-radius: 16px; border: 1px solid rgba(128,128,128,0.2); box-shadow: 0 8px 24px rgba(0,0,0,0.08);">
+    </td>
+    <td width="30%" align="center" valign="top">
+      <img src="merchandise.png" height="320" alt="OpenPup merchandise and community visuals" style="border-radius: 16px; border: 1px solid rgba(128,128,128,0.2); box-shadow: 0 8px 24px rgba(0,0,0,0.08);">
+    </td>
+  </tr>
+</table>
+</div>
 
 ## License
 
