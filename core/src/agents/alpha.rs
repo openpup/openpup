@@ -198,6 +198,9 @@ pub struct AlphaPup {
     per_pup_context_tokens: Arc<RwLock<HashMap<String, u64>>>,
     pup_config_path: Option<PathBuf>,
     msg_count: Arc<std::sync::atomic::AtomicU32>,
+    last_memory_extract_count: Arc<std::sync::atomic::AtomicU32>,
+    last_kb_summary_count: Arc<std::sync::atomic::AtomicU32>,
+    last_artifact_ingest_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
     layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
     /// Whether to auto-ingest pup artifacts and conversation summaries to KB.
@@ -281,6 +284,9 @@ impl AlphaPup {
             per_pup_context_tokens: Arc::new(RwLock::new(HashMap::new())),
             pup_config_path,
             msg_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            last_memory_extract_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            last_kb_summary_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            last_artifact_ingest_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             channel_manager,
             layer_hook: Arc::new(RwLock::new(None)),
             kb_auto_ingest: Arc::new(AtomicBool::new(true)),
@@ -352,7 +358,177 @@ impl AlphaPup {
             // Each exchange = 2 rows (user + assistant); use exchange count.
             let exchanges = (rows / 2) as u32;
             self.msg_count.store(exchanges, Ordering::Relaxed);
+            self.last_memory_extract_count
+                .store(exchanges.saturating_sub(4), Ordering::Relaxed);
+            self.last_kb_summary_count
+                .store(exchanges.saturating_sub(8), Ordering::Relaxed);
+            self.last_artifact_ingest_count
+                .store(exchanges.saturating_sub(8), Ordering::Relaxed);
             debug!("[alpha] init_msg_count: {exchanges} exchanges in DB");
+        }
+    }
+
+    const MEMORY_EXTRACTION_MIN_EXCHANGES: u32 = 8;
+    const KB_SUMMARY_MIN_EXCHANGES: u32 = 16;
+    const ARTIFACT_INGEST_MIN_EXCHANGES: u32 = 16;
+
+    fn looks_like_memory_worthy_turn(msg: &str) -> bool {
+        let trimmed = msg.trim();
+        if trimmed.chars().count() < 18 {
+            return false;
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        let explicit_markers = [
+            "记住", "以后", "不要", "别", "必须", "习惯", "偏好", "喜欢", "讨厌", "我一般", "我通常",
+            "我的", "我是", "我会", "我在", "prefer", "usually", "always", "never", "don't",
+            "must", "remember",
+        ];
+        if explicit_markers
+            .iter()
+            .any(|marker| trimmed.contains(marker) || lower.contains(marker))
+        {
+            return true;
+        }
+
+        let first_person_hits = ["我", "我的", "自己", "本人"]
+            .iter()
+            .filter(|token| trimmed.contains(**token))
+            .count();
+        let sentence_breaks = trimmed.matches('，').count()
+            + trimmed.matches('。').count()
+            + trimmed.matches(',').count()
+            + trimmed.matches('.').count();
+
+        first_person_hits >= 2 || (first_person_hits >= 1 && sentence_breaks >= 1)
+    }
+
+    fn looks_like_summary_worthy_window(transcript: &str) -> bool {
+        let trimmed = transcript.trim();
+        if trimmed.chars().count() < 500 {
+            return false;
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        let markers = [
+            "决定", "结论", "方案", "总结", "计划", "下一步", "行动项", "实现", "修复", "完成", "原因",
+            "分析", "review", "decision", "summary", "plan", "next step", "action item",
+            "resolved", "implemented", "fixed",
+        ];
+
+        markers
+            .iter()
+            .filter(|marker| trimmed.contains(**marker) || lower.contains(*marker))
+            .count()
+            >= 2
+    }
+
+    fn should_query_knowledge_base(query: &str) -> bool {
+        let trimmed = query.trim();
+        if trimmed.chars().count() < 8 {
+            return false;
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        let small_talk = [
+            "hi", "hello", "thanks", "thank you", "ok", "okay", "你好", "谢谢", "在吗", "好的",
+            "继续", "收到",
+        ];
+        if small_talk
+            .iter()
+            .any(|item| lower == *item || trimmed == *item)
+        {
+            return false;
+        }
+
+        trimmed.contains('？')
+            || trimmed.contains('?')
+            || trimmed.contains("怎么")
+            || trimmed.contains("如何")
+            || trimmed.contains("为什么")
+            || trimmed.contains("文档")
+            || trimmed.contains("资料")
+            || trimmed.contains("根据")
+            || trimmed.contains("总结")
+            || trimmed.contains("项目")
+            || trimmed.contains("代码")
+            || lower.contains("how")
+            || lower.contains("why")
+            || lower.contains("what")
+            || lower.contains("doc")
+            || lower.contains("project")
+            || trimmed.chars().count() >= 24
+    }
+
+    fn looks_like_artifact_worthy_output(original_msg: &str, artifact: &str) -> bool {
+        let trimmed = artifact.trim();
+        if trimmed.chars().count() < 280 {
+            return false;
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        let structure_hits = [
+            "```", "\n- ", "\n1. ", "总结", "结论", "下一步", "行动项", "方案", "decision",
+            "summary", "next step", "action item", "implementation", "result",
+        ]
+        .iter()
+        .filter(|marker| trimmed.contains(**marker) || lower.contains(*marker))
+        .count();
+
+        if structure_hits < 2 {
+            return false;
+        }
+
+        Self::should_query_knowledge_base(original_msg)
+    }
+
+    fn should_auto_ingest_artifact(&self, original_msg: &str, artifact: &str) -> bool {
+        if !self.kb_auto_ingest.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        let exchange_count = self.msg_count.load(Ordering::Relaxed);
+        let last = self.last_artifact_ingest_count.load(Ordering::Relaxed);
+        if exchange_count.saturating_sub(last) < Self::ARTIFACT_INGEST_MIN_EXCHANGES {
+            return false;
+        }
+
+        Self::looks_like_artifact_worthy_output(original_msg, artifact)
+    }
+
+    async fn build_knowledge_context(&self, query: &str, limit: usize) -> String {
+        if !Self::should_query_knowledge_base(query) {
+            return String::new();
+        }
+
+        let retriever = crate::knowledge::retriever::KbRetriever::new(self.memory.clone());
+        let results = match retriever.search(query, limit, None).await {
+            Ok(results) => results,
+            Err(_) => return String::new(),
+        };
+
+        if results.is_empty() {
+            return String::new();
+        }
+
+        let snippets = results
+            .into_iter()
+            .take(limit)
+            .map(|r| {
+                let source = r
+                    .heading_path
+                    .as_deref()
+                    .map(|h| format!("{} > {}", r.source_title, h))
+                    .unwrap_or(r.source_title);
+                let excerpt: String = r.content.chars().take(220).collect();
+                format!("- {source} ({:.0}%): {excerpt}", r.score * 100.0)
+            })
+            .collect::<Vec<_>>();
+
+        if snippets.is_empty() {
+            String::new()
+        } else {
+            format!("## Relevant Knowledge Base\n{}", snippets.join("\n"))
         }
     }
 
@@ -441,11 +617,15 @@ impl AlphaPup {
             .await
             .unwrap_or_default();
         let memories_str = MemoryInjector::format_for_injection(&memory_context);
-        let relevant_memories: Vec<String> = if memories_str.is_empty() {
+        let mut relevant_memories: Vec<String> = if memories_str.is_empty() {
             vec![]
         } else {
             vec![memories_str]
         };
+        let knowledge_context = self.build_knowledge_context(msg, 3).await;
+        if !knowledge_context.is_empty() {
+            relevant_memories.push(knowledge_context);
+        }
         // Brief global history for intent classification (last 4 turns, all pups)
         let classify_history = self.router.build_classify_history().await;
         // Load pending tasks for context injection
@@ -2659,11 +2839,15 @@ impl AlphaPup {
             .await
             .unwrap_or_default();
         let mem_str = MemoryInjector::format_for_injection(&memory_ctx);
-        let relevant_memories: Vec<String> = if mem_str.is_empty() {
+        let mut relevant_memories: Vec<String> = if mem_str.is_empty() {
             vec![]
         } else {
             vec![mem_str]
         };
+        let knowledge_context = self.build_knowledge_context(&msg, 3).await;
+        if !knowledge_context.is_empty() {
+            relevant_memories.push(knowledge_context);
+        }
         let pending_tasks = self.memory.list_tasks(5).await.unwrap_or_default();
         let null_events: SharedEventSink = Arc::new(crate::runtime::NullEventSink);
         let reply = self
@@ -2786,13 +2970,24 @@ impl AlphaPup {
         let _ = self.file_layer.append_daily_diary(&[diary_line]);
 
         let count = self.msg_count.fetch_add(1, Ordering::Relaxed);
-        if count % 3 == 0 {
+        let exchange_count = count.saturating_add(1);
+        let last_memory_extract = self.last_memory_extract_count.load(Ordering::Relaxed);
+        if exchange_count.saturating_sub(last_memory_extract) >= Self::MEMORY_EXTRACTION_MIN_EXCHANGES
+            && Self::looks_like_memory_worthy_turn(msg)
+        {
             let _ = self.maybe_extract_memories(pup_key).await;
+            self.last_memory_extract_count
+                .store(exchange_count, Ordering::Relaxed);
         }
 
-        // Auto-ingest conversation summary to KB every 6 messages
-        if count % 6 == 0 && count > 0 && self.kb_auto_ingest.load(Ordering::Relaxed) {
+        // Auto-ingest conversation summary to KB on substantial windows, with spacing.
+        let last_kb_summary = self.last_kb_summary_count.load(Ordering::Relaxed);
+        if exchange_count.saturating_sub(last_kb_summary) >= Self::KB_SUMMARY_MIN_EXCHANGES
+            && self.kb_auto_ingest.load(Ordering::Relaxed)
+        {
             let _ = self.maybe_ingest_conversation_summary(pup_key).await;
+            self.last_kb_summary_count
+                .store(exchange_count, Ordering::Relaxed);
         }
 
         // Priority 5: Multi-layer context compaction.
@@ -2804,7 +2999,7 @@ impl AlphaPup {
         let should_compact = if let Some(tokens) = self.get_context_tokens(pup_key).await {
             tokens > context_limit * 2 / 5 // 40% threshold for any compaction
         } else {
-            count % 10 == 0
+            exchange_count % 10 == 0
         };
         if should_compact {
             let current_tokens = self
@@ -2929,7 +3124,11 @@ impl AlphaPup {
         } else {
             self.context_builder.build_memory_context(msg).await
         };
-        let relevant_memories = ContextBuilder::format_memories_for_prompt(&memories_str);
+        let mut relevant_memories = ContextBuilder::format_memories_for_prompt(&memories_str);
+        let knowledge_context = self.build_knowledge_context(msg, 3).await;
+        if !knowledge_context.is_empty() {
+            relevant_memories.push(knowledge_context);
+        }
 
         // v2: inject shared conversation history so delegated pups have full context
         let shared_history = if let Some(ref ctx) = pup_ctx {
@@ -3067,6 +3266,10 @@ impl AlphaPup {
             .collect::<Vec<_>>()
             .join("\n");
 
+        if transcript.chars().count() < 180 {
+            return Ok(());
+        }
+
         // v0.1.12: use MemoryExtractor with LLM conflict resolution
         let diary_entries = self
             .memory_extractor
@@ -3080,6 +3283,10 @@ impl AlphaPup {
     // ── Artifact auto-ingestion → KB ─────────────────────────────────────────────
 
     async fn auto_ingest_artifact(&self, original_msg: &str, artifact: &str) {
+        if !self.should_auto_ingest_artifact(original_msg, artifact) {
+            return;
+        }
+
         let title_snippet: String = original_msg.chars().take(60).collect();
         let title = format!(
             "协作产出: {} ({})",
@@ -3099,7 +3306,11 @@ impl AlphaPup {
         };
 
         match ingestor.ingest_text(&req).await {
-            Ok(id) => debug!("[alpha] artifact auto-ingested to KB: {id}"),
+            Ok(id) => {
+                self.last_artifact_ingest_count
+                    .store(self.msg_count.load(Ordering::Relaxed), Ordering::Relaxed);
+                debug!("[alpha] artifact auto-ingested to KB: {id}");
+            }
             Err(e) => debug!("[alpha] artifact auto-ingest failed: {e}"),
         }
     }
@@ -3108,7 +3319,7 @@ impl AlphaPup {
 
     async fn maybe_ingest_conversation_summary(&self, pup: &str) -> Result<()> {
         let recent = self.memory.recent_conversations(12).await?;
-        if recent.len() < 4 {
+        if recent.len() < 6 {
             return Ok(()); // not enough content to summarize
         }
 
@@ -3118,6 +3329,10 @@ impl AlphaPup {
             .map(|(role, content, _speaker)| format!("{role}: {content}"))
             .collect::<Vec<_>>()
             .join("\n");
+
+        if !Self::looks_like_summary_worthy_window(&transcript) {
+            return Ok(());
+        }
 
         // Ask the LLM to produce a concise summary worth storing
         let prompt = format!(

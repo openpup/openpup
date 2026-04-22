@@ -135,7 +135,11 @@ Database layer (SQLite at ~/.openpup/database.db)
 
 ### Memory extraction
 
-Every 5 messages, AlphaPup calls `extract_memories()`:
+AlphaPup calls `extract_memories()` only when both conditions are met:
+- a minimum conversation spacing threshold has elapsed
+- the latest user turn looks memory-worthy (preference, rule, stable fact, etc.)
+
+When extraction fires:
 - LLM identifies new facts about the owner
 - Embedding generated locally (all-MiniLM-L6-v2 via `fastembed`)
 - Semantic dedup: new fact is only inserted if cosine similarity to existing memories is below threshold
@@ -331,7 +335,7 @@ Environment variables take precedence: `OPENPUP_API_KEY`, `OPENAI_API_KEY`, `OPE
 1. User types in Chat → React calls invoke("send_message", { content, pup: null })
 2. commands.rs::send_message() → acquires AppState lock → calls alpha.do_stream()
 3. alpha.do_stream():
-   a. Load OWNER.md summary + top-5 memories + recent history
+   a. Load OWNER.md summary + top-5 memories + recent history, and optionally inject lightweight KB retrieval for knowledge-seeking queries
    b. forced_pup? → skip to step d
    c. @mention in message? → set target pup
       else classify_intent(mini_model) → pick pup or "channel:…"
@@ -339,7 +343,7 @@ Environment variables take precedence: `OPENPUP_API_KEY`, `OPENAI_API_KEY`, `OPE
       If single pup: → pup.stream_response() → SSE chunks forwarded
 4. Each LLM token → emit("stream_token", { token }) → React appends to bubble
 5. On finish → emit("stream_done", { pup }) → React marks bubble complete
-6. Memory extraction runs in background every 5 messages
+6. Memory extraction runs in the background only after minimum spacing and a memory-worthy turn signal
 ```
 
 ---

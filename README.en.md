@@ -87,9 +87,9 @@ Core: 7 pre-built autonomous capability packages ("Hands") — lead generation, 
 ## Features
 
 - **Streaming chat** with intelligent multi-agent routing
-- **Long-term memory** — automatically extracts facts, preferences, and rules every 5 messages; Weibull-decay weighted retrieval favors recent memories without forgetting; semantic dedup prevents noise. Long-term memories are shared globally; conversation history is per-pup isolated
+- **Long-term memory** — extracts facts, preferences, and rules using content-aware signals plus minimum spacing; Weibull-decay weighted retrieval favors recent memories without forgetting; semantic dedup prevents noise. Long-term memories are shared globally; conversation history is per-pup isolated
 - **Rules system** — rules in `RULES.md` are force-injected into every conversation, ensuring pups always respect your boundaries and preferences
-- **Knowledge base** — import documents (PDF/TXT/MD) with automatic chunking and indexing; relevant chunks are semantically retrieved and injected into context, grounding pup answers in your private knowledge
+- **Knowledge base** — import documents (PDF/TXT/MD) with automatic chunking and indexing; knowledge-seeking questions get lightweight semantic retrieval into context, while summaries and artifacts are auto-ingested only when they appear reusable
 - **Token budget management** — real-time per-pup context token tracking; auto-trims history at 85% capacity; tool results dynamically truncated proportional to context window; MCP schemas deferred when tool count exceeds 30, saving tokens
 - **Multi-layer context compaction** — three pressure levels (micro/full/persist): light pressure summarizes old turns, heavy pressure extracts key memories to long-term storage and resets context, keeping long conversations coherent
 - **Skills** — installable prompt-chain automations (TOML, [ClaWHub](https://clawhub.ai) compatible)

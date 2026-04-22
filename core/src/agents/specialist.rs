@@ -105,13 +105,32 @@ pub fn build_prompt_with_template(pup_name: &str, default_prompt: &str, task: &T
 
     // 3. Relevant memories
     if !task.relevant_memories.is_empty() {
-        let bullets: String = task
-            .relevant_memories
-            .iter()
-            .map(|m| format!("- {}", truncate_utf8(m, 200)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        system.push_str(&format!("\n\n## Relevant Memories\n{bullets}"));
+        let mut inline_items = Vec::new();
+        let mut blocks = Vec::new();
+
+        for item in &task.relevant_memories {
+            if item.contains("## ") || item.contains('\n') {
+                blocks.push(item.clone());
+            } else {
+                inline_items.push(format!("- {}", truncate_utf8(item, 200)));
+            }
+        }
+
+        if !inline_items.is_empty() {
+            system.push_str(&format!(
+                "\n\n## Relevant Memories\n{}",
+                inline_items.join("\n")
+            ));
+        }
+
+        if !blocks.is_empty() {
+            let block_text = blocks
+                .iter()
+                .map(|b| truncate_utf8(b, 1200))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            system.push_str(&format!("\n\n{block_text}"));
+        }
     }
 
     system
