@@ -425,14 +425,14 @@ impl AlphaPup {
 
     fn should_query_knowledge_base(query: &str) -> bool {
         let trimmed = query.trim();
-        if trimmed.chars().count() < 8 {
+        if trimmed.is_empty() {
             return false;
         }
 
         let lower = trimmed.to_ascii_lowercase();
         let small_talk = [
             "hi", "hello", "thanks", "thank you", "ok", "okay", "你好", "谢谢", "在吗", "好的",
-            "继续", "收到",
+            "继续", "收到", "嗯", "哦", "哈哈", "好的谢谢",
         ];
         if small_talk
             .iter()
@@ -441,23 +441,11 @@ impl AlphaPup {
             return false;
         }
 
-        trimmed.contains('？')
-            || trimmed.contains('?')
-            || trimmed.contains("怎么")
-            || trimmed.contains("如何")
-            || trimmed.contains("为什么")
-            || trimmed.contains("文档")
-            || trimmed.contains("资料")
-            || trimmed.contains("根据")
-            || trimmed.contains("总结")
-            || trimmed.contains("项目")
-            || trimmed.contains("代码")
-            || lower.contains("how")
-            || lower.contains("why")
-            || lower.contains("what")
-            || lower.contains("doc")
-            || lower.contains("project")
-            || trimmed.chars().count() >= 24
+        if trimmed.chars().count() <= 3 {
+            return false;
+        }
+
+        true
     }
 
     fn looks_like_artifact_worthy_output(original_msg: &str, artifact: &str) -> bool {
@@ -513,6 +501,7 @@ impl AlphaPup {
 
         let snippets = results
             .into_iter()
+            .filter(|r| r.score >= 0.015)
             .take(limit)
             .map(|r| {
                 let source = r
