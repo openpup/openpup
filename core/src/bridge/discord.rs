@@ -90,7 +90,10 @@ impl DiscordBridge {
         let response = self
             .client
             .post(&url)
-            .header("Authorization", discord_authorization(&self.config.bot_token))
+            .header(
+                "Authorization",
+                discord_authorization(&self.config.bot_token),
+            )
             .json(&body)
             .send()
             .await?;
@@ -116,7 +119,10 @@ impl DiscordBridge {
         let response = self
             .client
             .post(&url)
-            .header("Authorization", discord_authorization(&self.config.bot_token))
+            .header(
+                "Authorization",
+                discord_authorization(&self.config.bot_token),
+            )
             .json(&body)
             .send()
             .await?;
@@ -187,7 +193,10 @@ impl DiscordBridge {
         let response = self
             .client
             .get(format!("{DISCORD_API}/gateway/bot"))
-            .header("Authorization", discord_authorization(&self.config.bot_token))
+            .header(
+                "Authorization",
+                discord_authorization(&self.config.bot_token),
+            )
             .send()
             .await?;
         let status = response.status();
@@ -366,7 +375,12 @@ fn discord_gateway_ws_url(base_url: &str) -> Result<String> {
 fn format_discord_http_error(action: &str, status: u16, payload: &str) -> String {
     let message = serde_json::from_str::<Value>(payload)
         .ok()
-        .and_then(|value| value.get("message").and_then(|item| item.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(|item| item.as_str())
+                .map(str::to_string)
+        })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| payload.trim().to_string());
     let hint = match status {

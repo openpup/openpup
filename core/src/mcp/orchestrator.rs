@@ -177,7 +177,10 @@ impl MCPOrchestrator {
                             .await
                             .insert(entry.name.clone(), tools);
                     }
-                    Err(e) => warn!("[mcp] auto-discovery for updated '{}' failed: {e}", entry.name),
+                    Err(e) => warn!(
+                        "[mcp] auto-discovery for updated '{}' failed: {e}",
+                        entry.name
+                    ),
                 }
             });
         }

@@ -380,9 +380,28 @@ impl AlphaPup {
 
         let lower = trimmed.to_ascii_lowercase();
         let explicit_markers = [
-            "记住", "以后", "不要", "别", "必须", "习惯", "偏好", "喜欢", "讨厌", "我一般", "我通常",
-            "我的", "我是", "我会", "我在", "prefer", "usually", "always", "never", "don't",
-            "must", "remember",
+            "记住",
+            "以后",
+            "不要",
+            "别",
+            "必须",
+            "习惯",
+            "偏好",
+            "喜欢",
+            "讨厌",
+            "我一般",
+            "我通常",
+            "我的",
+            "我是",
+            "我会",
+            "我在",
+            "prefer",
+            "usually",
+            "always",
+            "never",
+            "don't",
+            "must",
+            "remember",
         ];
         if explicit_markers
             .iter()
@@ -411,9 +430,27 @@ impl AlphaPup {
 
         let lower = trimmed.to_ascii_lowercase();
         let markers = [
-            "决定", "结论", "方案", "总结", "计划", "下一步", "行动项", "实现", "修复", "完成", "原因",
-            "分析", "review", "decision", "summary", "plan", "next step", "action item",
-            "resolved", "implemented", "fixed",
+            "决定",
+            "结论",
+            "方案",
+            "总结",
+            "计划",
+            "下一步",
+            "行动项",
+            "实现",
+            "修复",
+            "完成",
+            "原因",
+            "分析",
+            "review",
+            "decision",
+            "summary",
+            "plan",
+            "next step",
+            "action item",
+            "resolved",
+            "implemented",
+            "fixed",
         ];
 
         markers
@@ -431,8 +468,22 @@ impl AlphaPup {
 
         let lower = trimmed.to_ascii_lowercase();
         let small_talk = [
-            "hi", "hello", "thanks", "thank you", "ok", "okay", "你好", "谢谢", "在吗", "好的",
-            "继续", "收到", "嗯", "哦", "哈哈", "好的谢谢",
+            "hi",
+            "hello",
+            "thanks",
+            "thank you",
+            "ok",
+            "okay",
+            "你好",
+            "谢谢",
+            "在吗",
+            "好的",
+            "继续",
+            "收到",
+            "嗯",
+            "哦",
+            "哈哈",
+            "好的谢谢",
         ];
         if small_talk
             .iter()
@@ -456,8 +507,20 @@ impl AlphaPup {
 
         let lower = trimmed.to_ascii_lowercase();
         let structure_hits = [
-            "```", "\n- ", "\n1. ", "总结", "结论", "下一步", "行动项", "方案", "decision",
-            "summary", "next step", "action item", "implementation", "result",
+            "```",
+            "\n- ",
+            "\n1. ",
+            "总结",
+            "结论",
+            "下一步",
+            "行动项",
+            "方案",
+            "decision",
+            "summary",
+            "next step",
+            "action item",
+            "implementation",
+            "result",
         ]
         .iter()
         .filter(|marker| trimmed.contains(**marker) || lower.contains(*marker))
@@ -2961,7 +3024,8 @@ impl AlphaPup {
         let count = self.msg_count.fetch_add(1, Ordering::Relaxed);
         let exchange_count = count.saturating_add(1);
         let last_memory_extract = self.last_memory_extract_count.load(Ordering::Relaxed);
-        if exchange_count.saturating_sub(last_memory_extract) >= Self::MEMORY_EXTRACTION_MIN_EXCHANGES
+        if exchange_count.saturating_sub(last_memory_extract)
+            >= Self::MEMORY_EXTRACTION_MIN_EXCHANGES
             && Self::looks_like_memory_worthy_turn(msg)
         {
             let _ = self.maybe_extract_memories(pup_key).await;

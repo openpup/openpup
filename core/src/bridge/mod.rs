@@ -467,7 +467,11 @@ impl BridgeManager {
                 .continue_channel_with_payload(
                     &channel_id,
                     &sender,
-                    if comment.is_empty() { "继续" } else { &comment },
+                    if comment.is_empty() {
+                        "继续"
+                    } else {
+                        &comment
+                    },
                     Some(origin.clone()),
                 )
                 .await
@@ -732,7 +736,8 @@ impl BridgeManager {
                 .and_then(|origin| origin.get("platform").and_then(|value| value.as_str()))
                 .filter(|platform| *platform == "discord")
                 .and_then(|_| {
-                    event.event_payload
+                    event
+                        .event_payload
                         .as_ref()
                         .and_then(|payload| payload.get("origin"))
                         .and_then(|origin| origin.get("thread_id"))

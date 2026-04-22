@@ -7,7 +7,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.25...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.26...HEAD)
+
+---
+
+## [0.1.26](https://github.com/openpup/openpup/compare/v0.1.25...v0.1.26) — 2026-04-22
+
+### Added
+- **Lightweight default knowledge retrieval** — main chat and specialist flows now inject a small knowledge-base context block by default for most non-trivial user requests, improving grounding on project and document questions without requiring an explicit tool call first.
+
+### Changed
+- **Memory extraction cadence** — long-term memory writes now use minimum spacing plus memory-worthiness signals instead of fixed per-message cadence, reducing noisy facts from short or transient exchanges.
+- **Conversation summary auto-ingestion** — KB conversation summaries now require broader spacing and more decision-like content before ingesting, reducing repetitive overlapping summaries.
+- **Artifact auto-ingestion policy** — collaboration outputs are now auto-ingested only when they appear structured and reusable, with spacing-based throttling to avoid flooding the knowledge base.
+- **Specialist prompt context formatting** — structured memory and KB context blocks now preserve their headings and layout when passed to specialist pups, making retrieved context easier for the model to use reliably.
+
+### Fixed
+- **Knowledge retrieval under-triggering** — relaxed KB gating so short but meaningful project questions are much more likely to retrieve supporting context before generation.
+- **Release baseline** — desktop app metadata, npm package version, workspace crates, and lockfiles are aligned to `0.1.26`.
 
 ---
 
