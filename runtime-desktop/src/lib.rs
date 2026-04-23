@@ -178,10 +178,7 @@ impl ProcessExecutor for DesktopProcessExecutor {
         } else {
             None
         };
-        let cwd = sandbox_dir
-            .as_ref()
-            .map(|dir| dir.path().to_path_buf())
-            .unwrap_or(req.cwd);
+        let cwd = req.cwd;
 
         let mut cmd = Self::build_shell_command(&req.command);
         cmd.current_dir(&cwd)
@@ -190,6 +187,10 @@ impl ProcessExecutor for DesktopProcessExecutor {
             .stderr(std::process::Stdio::piped());
 
         if req.sandboxed {
+            let sandbox_root = sandbox_dir
+                .as_ref()
+                .map(|dir| dir.path().to_path_buf())
+                .ok_or_else(|| anyhow!("sandbox requested without sandbox directory"))?;
             #[cfg(windows)]
             {
                 cmd.env_clear()
@@ -198,16 +199,16 @@ impl ProcessExecutor for DesktopProcessExecutor {
                         "SYSTEMROOT",
                         std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into()),
                     )
-                    .env("TEMP", &cwd)
-                    .env("TMP", &cwd)
-                    .env("USERPROFILE", &cwd);
+                    .env("TEMP", &sandbox_root)
+                    .env("TMP", &sandbox_root)
+                    .env("USERPROFILE", &sandbox_root);
             }
             #[cfg(not(windows))]
             {
                 cmd.env_clear()
                     .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-                    .env("HOME", &cwd)
-                    .env("TMPDIR", &cwd);
+                    .env("HOME", &sandbox_root)
+                    .env("TMPDIR", &sandbox_root);
             }
         }
 
@@ -243,6 +244,96 @@ impl ProcessExecutor for DesktopProcessExecutor {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalize_path_for_assert(path: &Path) -> String {
+        let raw = path.display().to_string();
+        raw.strip_prefix("/private")
+            .unwrap_or(&raw)
+            .to_string()
+    }
+
+    fn test_command_for_cwd_and_tmp() -> &'static str {
+        #[cfg(windows)]
+        {
+            "@echo %CD% && @echo %TEMP%"
+        }
+        #[cfg(not(windows))]
+        {
+            "printf '%s\n%s\n' \"$PWD\" \"$TMPDIR\""
+        }
+    }
+
+    fn test_command_for_relative_read(filename: &str) -> String {
+        #[cfg(windows)]
+        {
+            format!("type {filename}")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("cat {filename}")
+        }
+    }
+
+    #[tokio::test]
+    async fn sandbox_exec_keeps_workspace_cwd() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let exec = DesktopProcessExecutor;
+        let result = exec
+            .exec(ExecRequest {
+                command: test_command_for_cwd_and_tmp().to_string(),
+                cwd: workspace.path().to_path_buf(),
+                timeout_ms: 5_000,
+                sandboxed: true,
+            })
+            .await
+            .expect("sandbox exec succeeds");
+
+        assert_eq!(result.exit_code, Some(0));
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let mut lines = stdout.lines();
+        let reported_cwd = PathBuf::from(lines.next().expect("cwd line"));
+        let reported_tmp = PathBuf::from(lines.next().expect("tmp line"));
+        let sandbox_dir = result.sandbox_dir.expect("sandbox dir");
+
+        assert_eq!(
+            normalize_path_for_assert(&reported_cwd),
+            normalize_path_for_assert(workspace.path())
+        );
+        assert_eq!(
+            normalize_path_for_assert(&reported_tmp),
+            normalize_path_for_assert(&sandbox_dir)
+        );
+        assert_ne!(reported_cwd, sandbox_dir);
+    }
+
+    #[tokio::test]
+    async fn sandbox_exec_resolves_relative_paths_from_workspace() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let test_file = workspace.path().join("relative-check.txt");
+        tokio::fs::write(&test_file, "sandbox relative path ok")
+            .await
+            .expect("write test file");
+
+        let exec = DesktopProcessExecutor;
+        let result = exec
+            .exec(ExecRequest {
+                command: test_command_for_relative_read("relative-check.txt"),
+                cwd: workspace.path().to_path_buf(),
+                timeout_ms: 5_000,
+                sandboxed: true,
+            })
+            .await
+            .expect("sandbox exec succeeds");
+
+        assert_eq!(result.exit_code, Some(0));
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(stdout.contains("sandbox relative path ok"));
     }
 }
 

@@ -158,7 +158,7 @@ impl ToolRegistry {
         "type": "function",
         "function": {
           "name": "sandbox_shell_exec",
-          "description": "Execute a shell command in a temporary isolated working directory with a reduced environment. Use this to test commands before using shell_exec in the real workspace.",
+          "description": "Execute a shell command with the same workspace-relative current directory as shell_exec, but with a reduced environment and temporary HOME/TMP locations isolated from the real workspace. Use this to test commands before using shell_exec in the real workspace.",
           "parameters": {
             "type": "object",
             "properties": {
