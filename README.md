@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="openpup-icon.svg" width="80" alt="OpenPup">
-
-# OpenPup
+<h1>
+  <img src="openpup-wordmark.png" width="320" alt="OpenPup">
+</h1>
 
 **一只记得你是谁的小狗狗 · The local Pup that remembers who you are**
 
