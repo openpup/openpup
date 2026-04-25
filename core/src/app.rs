@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{anyhow, Context, Result};
 use openpup_capabilities::{Capabilities, CapabilityProfile};
@@ -43,10 +43,25 @@ pub struct OpenPupApp {
     pub mcp_orchestrator: Arc<MCPOrchestrator>,
     pub channel_manager: Arc<ChannelManager>,
     pub bridge_outbox: crate::bridge::types::BridgeOutbox,
+    knowledge_config: Arc<RwLock<crate::config::KnowledgeConfig>>,
     conversation_event_sink: Arc<OnceLock<SharedEventSink>>,
 }
 
 impl OpenPupApp {
+    fn knowledge_config_snapshot(&self) -> crate::config::KnowledgeConfig {
+        self.knowledge_config
+            .read()
+            .expect("knowledge config lock poisoned")
+            .clone()
+    }
+
+    fn persist_knowledge_config(&self) -> Result<()> {
+        let mut cfg = crate::config::load();
+        cfg.knowledge = self.knowledge_config_snapshot();
+        crate::config::save(&cfg)?;
+        Ok(())
+    }
+
     pub fn set_conversation_event_sink(&self, sink: SharedEventSink) {
         let _ = self.conversation_event_sink.set(sink);
     }
@@ -323,16 +338,47 @@ impl OpenPupApp {
         self.memory.delete_knowledge_source(source_id).await
     }
 
-    pub fn kb_auto_ingest(&self) -> bool {
-        self.alpha
-            .kb_auto_ingest
-            .load(std::sync::atomic::Ordering::Relaxed)
+    pub fn kb_auto_ingest_summaries(&self) -> bool {
+        self.knowledge_config_snapshot().auto_ingest_summaries
     }
 
-    pub fn set_kb_auto_ingest(&self, enabled: bool) {
+    pub fn kb_auto_ingest_artifacts(&self) -> bool {
+        self.knowledge_config_snapshot().auto_ingest_artifacts
+    }
+
+    pub fn kb_summary_frequency(&self) -> String {
+        crate::agents::alpha::AlphaPup::normalize_kb_summary_frequency(
+            &self.knowledge_config_snapshot().summary_frequency,
+        )
+        .to_string()
+    }
+
+    pub fn save_kb_settings(
+        &self,
+        auto_ingest_summaries: bool,
+        auto_ingest_artifacts: bool,
+        frequency: &str,
+    ) -> Result<crate::config::KnowledgeConfig> {
+        let normalized =
+            crate::agents::alpha::AlphaPup::normalize_kb_summary_frequency(frequency).to_string();
+        self.alpha.set_kb_summary_frequency(&normalized);
         self.alpha
-            .kb_auto_ingest
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+            .kb_auto_ingest_summaries
+            .store(auto_ingest_summaries, std::sync::atomic::Ordering::Relaxed);
+        self.alpha
+            .kb_auto_ingest_artifacts
+            .store(auto_ingest_artifacts, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut cfg = self
+                .knowledge_config
+                .write()
+                .expect("knowledge config lock poisoned");
+            cfg.auto_ingest_summaries = auto_ingest_summaries;
+            cfg.auto_ingest_artifacts = auto_ingest_artifacts;
+            cfg.summary_frequency = normalized.clone();
+        }
+        self.persist_knowledge_config()?;
+        Ok(self.knowledge_config_snapshot())
     }
 
     pub async fn list_kg_entities(
@@ -803,6 +849,15 @@ pub async fn build_app(
         Some(pup_config_path),
         channel_manager.clone(),
     ));
+    alpha.kb_auto_ingest_summaries.store(
+        cfg.knowledge.auto_ingest_summaries,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    alpha.kb_auto_ingest_artifacts.store(
+        cfg.knowledge.auto_ingest_artifacts,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    alpha.set_kb_summary_frequency(&cfg.knowledge.summary_frequency);
 
     alpha.register_pup(Arc::new(DevPup::new())).await;
     alpha.register_pup(Arc::new(WriterPup::new())).await;
@@ -825,6 +880,7 @@ pub async fn build_app(
         mcp_orchestrator,
         channel_manager,
         bridge_outbox,
+        knowledge_config: Arc::new(RwLock::new(cfg.knowledge.clone())),
         conversation_event_sink: Arc::new(OnceLock::new()),
     })
 }

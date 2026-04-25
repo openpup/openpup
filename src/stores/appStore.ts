@@ -25,12 +25,13 @@ export interface ContextStats {
   };
 }
 
+export type KbSummaryFrequency = 'frequent' | 'standard' | 'conservative';
+
 interface AppState {
   onboardingDone: boolean | null;
   pups: PupConfig[];
   memoryChips: MemoryChip[];
   kbSourceCount: number;
-  kbAutoIngest: boolean;
   permissionRequest: PermissionRequest | null;
   contextStats: ContextStats | null;
   execMode: 'leashed' | 'free_run';
@@ -46,7 +47,6 @@ interface AppState {
   setPups: (pups: PupConfig[]) => void;
   setMemoryChips: (chips: MemoryChip[]) => void;
   setKbSourceCount: (count: number) => void;
-  setKbAutoIngest: (ingest: boolean) => void;
   setPermissionRequest: (req: PermissionRequest | null) => void;
   setContextStats: (stats: ContextStats | null) => void;
   setExecMode: (mode: 'leashed' | 'free_run') => void;
@@ -66,7 +66,6 @@ export const useAppStore = create<AppState>((set) => ({
   pups: [],
   memoryChips: [],
   kbSourceCount: 0,
-  kbAutoIngest: true,
   permissionRequest: null,
   contextStats: null,
   execMode: 'leashed',
@@ -80,7 +79,6 @@ export const useAppStore = create<AppState>((set) => ({
   setPups: (pups) => set({ pups }),
   setMemoryChips: (chips) => set({ memoryChips: chips }),
   setKbSourceCount: (count) => set({ kbSourceCount: count }),
-  setKbAutoIngest: (ingest) => set({ kbAutoIngest: ingest }),
   setPermissionRequest: (req) => set({ permissionRequest: req }),
   setContextStats: (stats) => set({ contextStats: stats }),
   setExecMode: (mode) => set({ execMode: mode }),

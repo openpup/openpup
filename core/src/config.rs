@@ -17,6 +17,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub app: AppSettings,
     #[serde(default)]
+    pub knowledge: KnowledgeConfig,
+    #[serde(default)]
     pub pups: PupsConfig,
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -72,6 +74,19 @@ pub struct AppSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeConfig {
+    /// Whether OpenPup may auto-ingest conversation summaries into KB.
+    #[serde(default = "default_kb_auto_ingest")]
+    pub auto_ingest_summaries: bool,
+    /// Whether OpenPup may auto-ingest collaboration artifacts into KB.
+    #[serde(default = "default_kb_auto_ingest")]
+    pub auto_ingest_artifacts: bool,
+    /// "frequent", "standard", or "conservative".
+    #[serde(default = "default_kb_summary_frequency")]
+    pub summary_frequency: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PupsConfig {
     #[serde(default = "default_enabled_pups")]
     pub enabled: Vec<String>,
@@ -113,6 +128,12 @@ fn default_enabled_pups() -> Vec<String> {
         .map(String::from)
         .collect()
 }
+fn default_kb_auto_ingest() -> bool {
+    true
+}
+fn default_kb_summary_frequency() -> String {
+    "standard".into()
+}
 
 impl Default for LlmConfig {
     fn default() -> Self {
@@ -132,6 +153,15 @@ impl Default for AppSettings {
             execution_mode: default_execution_mode(),
             theme: default_theme(),
             language: default_language(),
+        }
+    }
+}
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            auto_ingest_summaries: default_kb_auto_ingest(),
+            auto_ingest_artifacts: default_kb_auto_ingest(),
+            summary_frequency: default_kb_summary_frequency(),
         }
     }
 }
@@ -307,4 +337,60 @@ pub fn load_with_env() -> AppConfig {
         }
     }
     cfg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{config_path, load, save, AppConfig};
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn knowledge_config_round_trips_through_config_file() {
+        let _guard = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _root = EnvVarGuard::set("OPENPUP_APP_ROOT", temp.path());
+
+        let mut cfg = AppConfig::default();
+        cfg.knowledge.auto_ingest_summaries = false;
+        cfg.knowledge.auto_ingest_artifacts = true;
+        cfg.knowledge.summary_frequency = "conservative".to_string();
+        save(&cfg).expect("save config");
+
+        let saved_path = config_path().expect("config path");
+        assert!(saved_path.exists(), "config file should be written");
+
+        let loaded = load();
+        assert!(!loaded.knowledge.auto_ingest_summaries);
+        assert!(loaded.knowledge.auto_ingest_artifacts);
+        assert_eq!(loaded.knowledge.summary_frequency, "conservative");
+    }
 }

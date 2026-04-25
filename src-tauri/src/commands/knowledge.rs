@@ -3,6 +3,13 @@ use tauri::State;
 
 use super::AppState;
 
+#[derive(Serialize)]
+pub struct KbSettingsInfo {
+    pub auto_ingest_summaries: bool,
+    pub auto_ingest_artifacts: bool,
+    pub summary_frequency: String,
+}
+
 #[tauri::command]
 pub async fn kb_ingest_file(
     state: State<'_, AppState>,
@@ -57,13 +64,30 @@ pub async fn kb_search(
 }
 
 #[tauri::command]
-pub fn kb_get_auto_ingest(state: State<'_, AppState>) -> bool {
-    state.app.kb_auto_ingest()
+pub fn kb_get_settings(state: State<'_, AppState>) -> KbSettingsInfo {
+    KbSettingsInfo {
+        auto_ingest_summaries: state.app.kb_auto_ingest_summaries(),
+        auto_ingest_artifacts: state.app.kb_auto_ingest_artifacts(),
+        summary_frequency: state.app.kb_summary_frequency(),
+    }
 }
 
 #[tauri::command]
-pub fn kb_set_auto_ingest(state: State<'_, AppState>, enabled: bool) {
-    state.app.set_kb_auto_ingest(enabled);
+pub fn kb_save_settings(
+    state: State<'_, AppState>,
+    auto_ingest_summaries: bool,
+    auto_ingest_artifacts: bool,
+    frequency: String,
+) -> Result<KbSettingsInfo, String> {
+    let cfg = state
+        .app
+        .save_kb_settings(auto_ingest_summaries, auto_ingest_artifacts, &frequency)
+        .map_err(|e| e.to_string())?;
+    Ok(KbSettingsInfo {
+        auto_ingest_summaries: cfg.auto_ingest_summaries,
+        auto_ingest_artifacts: cfg.auto_ingest_artifacts,
+        summary_frequency: cfg.summary_frequency,
+    })
 }
 
 // ─── Knowledge Graph ────────────────────────────────────────────────────────

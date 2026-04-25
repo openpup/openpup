@@ -16,6 +16,7 @@ import { PermissionDialog } from './components/PermissionDialog';
 import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
 import { KnowledgeBase } from './components/KnowledgeBase';
+import { KnowledgeSettings } from './components/KnowledgeSettings';
 import { GroupChat } from './components/GroupChat';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
@@ -314,7 +315,7 @@ const AppInner: React.FC = () => {
   const {
     onboardingDone, setOnboardingDone, pups, setPups,
     memoryChips, setMemoryChips, kbSourceCount, setKbSourceCount,
-    kbAutoIngest, setKbAutoIngest, permissionRequest, setPermissionRequest,
+    permissionRequest, setPermissionRequest,
     contextStats, setContextStats, execMode, setExecMode,
     exporting, setExporting, importing, setImporting,
     importPath, setImportPath, settingsMsg, setSettingsMsg,
@@ -420,7 +421,6 @@ const AppInner: React.FC = () => {
     invoke<string>('get_execution_mode').then((m) => setExecMode(m as 'leashed' | 'free_run')).catch(() => {});
     loadPups();
     invoke<{ id: string }[]>('kb_list_sources').then((s) => setKbSourceCount(s.length)).catch(() => {});
-    invoke<boolean>('kb_get_auto_ingest').then(setKbAutoIngest).catch(() => {});
 
     invoke<boolean>('check_onboarding_completed')
       .then((done) => {
@@ -1532,24 +1532,7 @@ const AppInner: React.FC = () => {
 
               <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 
-              <section>
-                <h2 className="mb-3" style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)' }}>{t('kb_settings_title', lang)}</h2>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={kbAutoIngest}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setKbAutoIngest(v);
-                      invoke('kb_set_auto_ingest', { enabled: v }).catch(() => {});
-                    }}
-                    style={{ accentColor: '#1D9E75' }}
-                  />
-                  <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>
-                    {t('kb_auto_ingest_label', lang)}
-                  </span>
-                </label>
-              </section>
+              <KnowledgeSettings />
 
               <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 

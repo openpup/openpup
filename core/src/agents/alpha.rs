@@ -203,8 +203,11 @@ pub struct AlphaPup {
     last_artifact_ingest_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
     layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
-    /// Whether to auto-ingest pup artifacts and conversation summaries to KB.
-    pub kb_auto_ingest: Arc<AtomicBool>,
+    /// Whether to auto-ingest conversation summaries to KB.
+    pub kb_auto_ingest_summaries: Arc<AtomicBool>,
+    /// Whether to auto-ingest collaboration artifacts to KB.
+    pub kb_auto_ingest_artifacts: Arc<AtomicBool>,
+    kb_summary_min_exchanges: Arc<std::sync::atomic::AtomicU32>,
     /// v0.1.12 memory subsystems
     memory_injector: Arc<MemoryInjector>,
     memory_extractor: Arc<MemoryExtractor>,
@@ -289,7 +292,11 @@ impl AlphaPup {
             last_artifact_ingest_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             channel_manager,
             layer_hook: Arc::new(RwLock::new(None)),
-            kb_auto_ingest: Arc::new(AtomicBool::new(true)),
+            kb_auto_ingest_summaries: Arc::new(AtomicBool::new(true)),
+            kb_auto_ingest_artifacts: Arc::new(AtomicBool::new(true)),
+            kb_summary_min_exchanges: Arc::new(std::sync::atomic::AtomicU32::new(
+                Self::kb_summary_frequency_exchanges("standard"),
+            )),
             memory_injector: injector,
             memory_extractor: extractor,
             compaction_engine,
@@ -360,8 +367,11 @@ impl AlphaPup {
             self.msg_count.store(exchanges, Ordering::Relaxed);
             self.last_memory_extract_count
                 .store(exchanges.saturating_sub(4), Ordering::Relaxed);
-            self.last_kb_summary_count
-                .store(exchanges.saturating_sub(8), Ordering::Relaxed);
+            let kb_summary_warm_start = self.kb_summary_min_exchanges.load(Ordering::Relaxed) / 2;
+            self.last_kb_summary_count.store(
+                exchanges.saturating_sub(kb_summary_warm_start),
+                Ordering::Relaxed,
+            );
             self.last_artifact_ingest_count
                 .store(exchanges.saturating_sub(8), Ordering::Relaxed);
             debug!("[alpha] init_msg_count: {exchanges} exchanges in DB");
@@ -369,8 +379,30 @@ impl AlphaPup {
     }
 
     const MEMORY_EXTRACTION_MIN_EXCHANGES: u32 = 8;
-    const KB_SUMMARY_MIN_EXCHANGES: u32 = 16;
     const ARTIFACT_INGEST_MIN_EXCHANGES: u32 = 16;
+
+    pub fn normalize_kb_summary_frequency(value: &str) -> &'static str {
+        match value {
+            "frequent" => "frequent",
+            "conservative" => "conservative",
+            _ => "standard",
+        }
+    }
+
+    pub fn kb_summary_frequency_exchanges(value: &str) -> u32 {
+        match Self::normalize_kb_summary_frequency(value) {
+            "frequent" => 8,
+            "conservative" => 32,
+            _ => 16,
+        }
+    }
+
+    pub fn set_kb_summary_frequency(&self, value: &str) {
+        self.kb_summary_min_exchanges.store(
+            Self::kb_summary_frequency_exchanges(value),
+            Ordering::Relaxed,
+        );
+    }
 
     fn looks_like_memory_worthy_turn(msg: &str) -> bool {
         let trimmed = msg.trim();
@@ -534,7 +566,7 @@ impl AlphaPup {
     }
 
     fn should_auto_ingest_artifact(&self, original_msg: &str, artifact: &str) -> bool {
-        if !self.kb_auto_ingest.load(Ordering::Relaxed) {
+        if !self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
             return false;
         }
 
@@ -1832,7 +1864,7 @@ impl AlphaPup {
         // Auto-ingest aggregated result as artifact to KB
         if let Ok(ref text) = aggregated {
             if text.len() > 100 {
-                if self.kb_auto_ingest.load(Ordering::Relaxed) {
+                if self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
                     self.auto_ingest_artifact(msg, text).await;
                 }
             }
@@ -2580,7 +2612,7 @@ impl AlphaPup {
         // Auto-ingest aggregated result as artifact to KB
         if let Ok(ref text) = aggregated {
             if text.len() > 100 {
-                if self.kb_auto_ingest.load(Ordering::Relaxed) {
+                if self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
                     self.auto_ingest_artifact(msg, text).await;
                 }
             }
@@ -2816,7 +2848,7 @@ impl AlphaPup {
         let _ = self.channel_manager.complete(&channel_id).await;
 
         // Auto-ingest aggregated result as artifact to KB
-        if aggregated.len() > 100 && self.kb_auto_ingest.load(Ordering::Relaxed) {
+        if aggregated.len() > 100 && self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
             self.auto_ingest_artifact(msg, &aggregated).await;
         }
 
@@ -3035,8 +3067,9 @@ impl AlphaPup {
 
         // Auto-ingest conversation summary to KB on substantial windows, with spacing.
         let last_kb_summary = self.last_kb_summary_count.load(Ordering::Relaxed);
-        if exchange_count.saturating_sub(last_kb_summary) >= Self::KB_SUMMARY_MIN_EXCHANGES
-            && self.kb_auto_ingest.load(Ordering::Relaxed)
+        if exchange_count.saturating_sub(last_kb_summary)
+            >= self.kb_summary_min_exchanges.load(Ordering::Relaxed)
+            && self.kb_auto_ingest_summaries.load(Ordering::Relaxed)
         {
             let _ = self.maybe_ingest_conversation_summary(pup_key).await;
             self.last_kb_summary_count
@@ -3579,6 +3612,39 @@ impl AlphaPup {
         }
         fs::write(path, text)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AlphaPup;
+
+    #[test]
+    fn kb_summary_frequency_aliases_normalize_to_supported_values() {
+        assert_eq!(
+            AlphaPup::normalize_kb_summary_frequency("frequent"),
+            "frequent"
+        );
+        assert_eq!(
+            AlphaPup::normalize_kb_summary_frequency("standard"),
+            "standard"
+        );
+        assert_eq!(
+            AlphaPup::normalize_kb_summary_frequency("conservative"),
+            "conservative"
+        );
+        assert_eq!(
+            AlphaPup::normalize_kb_summary_frequency("anything-else"),
+            "standard"
+        );
+    }
+
+    #[test]
+    fn kb_summary_frequency_maps_to_expected_exchange_spacing() {
+        assert_eq!(AlphaPup::kb_summary_frequency_exchanges("frequent"), 8);
+        assert_eq!(AlphaPup::kb_summary_frequency_exchanges("standard"), 16);
+        assert_eq!(AlphaPup::kb_summary_frequency_exchanges("conservative"), 32);
+        assert_eq!(AlphaPup::kb_summary_frequency_exchanges("unknown"), 16);
     }
 }
 
