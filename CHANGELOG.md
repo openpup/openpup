@@ -7,7 +7,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.26...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.30...HEAD)
+
+---
+
+## [0.1.30](https://github.com/openpup/openpup/compare/v0.1.26...v0.1.30) — 2026-04-25
+
+### Added
+- **Brand asset refresh** — README now uses the OpenPup wordmark and adds mascot / merchandise visuals for a stronger project presentation.
+- **Sandbox cwd regression coverage** — desktop runtime tests now verify sandboxed shell commands keep the workspace current directory while isolating temporary paths.
+
+### Changed
+- **Sandbox shell semantics** — `sandbox_shell_exec` now preserves the same workspace-relative cwd as `shell_exec`, while keeping `HOME` / temp locations in an isolated sandbox directory.
+- **Desktop app icons** — Tauri bundle metadata now points at the OpenPup icon assets.
+- **Release baseline** — desktop app metadata, npm package version, XMTP helper package version, workspace crates, and root lockfiles are aligned to `0.1.30`.
+
+### Fixed
+- **Sandbox relative paths** — relative file paths in sandboxed shell commands now resolve from the workspace cwd instead of the temporary sandbox directory.
 
 ---
 

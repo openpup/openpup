@@ -253,9 +253,7 @@ mod tests {
 
     fn normalize_path_for_assert(path: &Path) -> String {
         let raw = path.display().to_string();
-        raw.strip_prefix("/private")
-            .unwrap_or(&raw)
-            .to_string()
+        raw.strip_prefix("/private").unwrap_or(&raw).to_string()
     }
 
     fn test_command_for_cwd_and_tmp() -> &'static str {
