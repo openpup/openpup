@@ -7,7 +7,7 @@
 **The local AI assistant that remembers who you are**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![Tauri](https://img.shields.io/badge/tauri-2.0-blue.svg)](https://tauri.app)
 
@@ -295,4 +295,4 @@ Build as `cdylib`, place in `~/.openpup/plugins/`. See [`plugins/example_pup/REA
 
 ## License
 
-[MIT](LICENSE-MIT) OR [Apache 2.0](LICENSE-APACHE) — © 2026 OpenPup Contributors
+[MIT](LICENSE-MIT) OR [Apache 2.0](LICENSE) — © 2026 OpenPup Contributors

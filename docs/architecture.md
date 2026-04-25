@@ -358,7 +358,7 @@ Environment variables take precedence: `OPENPUP_API_KEY`, `OPENAI_API_KEY`, `OPE
 
 ## License
 
-Licensed under either of [MIT](../LICENSE-MIT) or [Apache 2.0](../LICENSE-APACHE) at your option.
+Licensed under either of [MIT](../LICENSE-MIT) or [Apache 2.0](../LICENSE) at your option.
 
 Key invariants to preserve:
 - All user data stays in `~/.openpup/` — no telemetry, no cloud writes

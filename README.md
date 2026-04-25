@@ -11,7 +11,7 @@
 > The longer you use it, the better it knows you.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![Tauri](https://img.shields.io/badge/tauri-2.0-blue.svg)](https://tauri.app)
 
@@ -81,4 +81,4 @@ OpenPup is also growing a small visual world around the product, from mascot exp
 
 ## License
 
-[MIT](LICENSE-MIT) OR [Apache 2.0](LICENSE-APACHE) — © 2026 OpenPup Contributors
+[MIT](LICENSE-MIT) OR [Apache 2.0](LICENSE) — © 2026 OpenPup Contributors
