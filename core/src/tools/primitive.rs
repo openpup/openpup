@@ -112,6 +112,50 @@ impl ToolRegistry {
         }
     }
 
+    fn maybe_allow_dynamic_root_for_path(&self, path: &std::path::Path) -> Result<()> {
+        if let Err(err) = self.capabilities.fs.allow_root(path) {
+            if !err.to_string().contains("filesystem.allow_root") {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    async fn maybe_allow_dynamic_root_for_tool(&self, name: &str, args: &Value) -> Result<()> {
+        match name {
+            "file_read" => {
+                let path = args["path"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("file_read: missing 'path'"))?;
+                let resolved = self.resolve_path(path);
+                self.maybe_allow_dynamic_root_for_path(&resolved)?;
+            }
+            "file_write" => {
+                let path = args["path"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("file_write: missing 'path'"))?;
+                let resolved = self.resolve_path(path);
+                let root = resolved.parent().unwrap_or(resolved.as_path());
+                self.maybe_allow_dynamic_root_for_path(root)?;
+            }
+            "skill_read_resource" => {
+                let skill_name = args["skill_name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("skill_read_resource: missing 'skill_name'"))?;
+                let relpath = args["relpath"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("skill_read_resource: missing 'relpath'"))?;
+                let resolved = self
+                    .skill_registry
+                    .resolve_skill_resource_path(skill_name, relpath)
+                    .await?;
+                self.maybe_allow_dynamic_root_for_path(&resolved)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub fn policy_request_for_tool(
         &self,
         actor: PolicyActor,
@@ -516,6 +560,7 @@ impl ToolRegistry {
                 let path = args["path"]
                     .as_str()
                     .ok_or_else(|| anyhow!("file_read: missing 'path'"))?;
+                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
                 self.file_read(path).await
             }
             "skill_list_resources" => {
@@ -542,6 +587,7 @@ impl ToolRegistry {
                 let relpath = args["relpath"]
                     .as_str()
                     .ok_or_else(|| anyhow!("skill_read_resource: missing 'relpath'"))?;
+                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
                 self.skill_read_resource(skill_name, relpath).await
             }
             "file_write" => {
@@ -556,6 +602,7 @@ impl ToolRegistry {
                 let content = args["content"]
                     .as_str()
                     .ok_or_else(|| anyhow!("file_write: missing 'content'"))?;
+                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
                 self.file_write(path, content).await
             }
             "http_get" => {

@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::path::{Component, Path};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -89,11 +89,16 @@ pub trait FileSystem: Send + Sync {
     async fn write_string(&self, path: &Path, content: &str) -> anyhow::Result<()>;
     async fn create_dir_all(&self, path: &Path) -> anyhow::Result<()>;
     async fn metadata(&self, path: &Path) -> anyhow::Result<std::fs::Metadata>;
+
+    fn allow_root(&self, _path: &Path) -> anyhow::Result<()> {
+        Err(CapabilityError::Unsupported("filesystem.allow_root").into())
+    }
 }
 
 pub struct RestrictedFileSystem {
     inner: Arc<dyn FileSystem>,
     allowed_roots: Vec<PathBuf>,
+    extra_allowed_roots: Mutex<Vec<PathBuf>>,
 }
 
 impl RestrictedFileSystem {
@@ -116,6 +121,7 @@ impl RestrictedFileSystem {
         Ok(Self {
             inner,
             allowed_roots: normalized_roots,
+            extra_allowed_roots: Mutex::new(Vec::new()),
         })
     }
 
@@ -141,7 +147,13 @@ impl RestrictedFileSystem {
     }
 
     fn is_under_allowed_root(&self, path: &Path) -> bool {
-        self.allowed_roots.iter().any(|root| path.starts_with(root))
+        if self.allowed_roots.iter().any(|root| path.starts_with(root)) {
+            return true;
+        }
+        self.extra_allowed_roots
+            .lock()
+            .map(|roots| roots.iter().any(|root| path.starts_with(root)))
+            .unwrap_or(false)
     }
 }
 
@@ -165,6 +177,21 @@ impl FileSystem for RestrictedFileSystem {
     async fn metadata(&self, path: &Path) -> anyhow::Result<std::fs::Metadata> {
         let path = self.ensure_allowed(path)?;
         self.inner.metadata(&path).await
+    }
+
+    fn allow_root(&self, path: &Path) -> anyhow::Result<()> {
+        let normalized = normalize_path(path)?;
+        let mut roots = self
+            .extra_allowed_roots
+            .lock()
+            .map_err(|_| anyhow!("restricted filesystem extra roots lock poisoned"))?;
+        roots.push(normalized.clone());
+        if let Some(canonical) = canonicalize_existing_prefix(&normalized)? {
+            roots.push(canonical);
+        }
+        roots.sort();
+        roots.dedup();
+        Ok(())
     }
 }
 
@@ -334,5 +361,17 @@ mod tests {
         let fs = RestrictedFileSystem::new(Arc::new(NoopFileSystem), vec![root]).unwrap();
 
         assert!(fs.ensure_allowed(&outside).is_err());
+    }
+
+    #[test]
+    fn restricted_fs_allows_extra_roots() {
+        let root = std::env::temp_dir().join("openpup-workspace");
+        let outside_root = std::env::temp_dir().join("openpup-extra-root");
+        let outside = outside_root.join("secret.txt");
+        let fs = RestrictedFileSystem::new(Arc::new(NoopFileSystem), vec![root]).unwrap();
+
+        assert!(fs.ensure_allowed(&outside).is_err());
+        fs.allow_root(&outside_root).unwrap();
+        assert!(fs.ensure_allowed(&outside).is_ok());
     }
 }
