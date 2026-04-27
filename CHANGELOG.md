@@ -7,7 +7,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.30...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.31...HEAD)
+
+---
+
+## [0.1.31](https://github.com/openpup/openpup/compare/v0.1.30...v0.1.31) — 2026-04-27
+
+### Added
+- **Dynamic file access roots** — policy-approved local file reads and writes can now extend the restricted filesystem boundary at runtime, so allowed local access is actually executable instead of being blocked by static roots alone.
+
+### Changed
+- **Speaker metadata transport** — assistant speaker labels now flow through structured message metadata instead of being prefixed into visible assistant text, preventing repeated `[alpha]` tag accumulation across turns.
+- **Execution policy unification** — `leashed` and `free_run` now run through one shared policy path, with clearer default semantics for local work, side effects, and boundary-crossing actions.
+- **Release baseline** — desktop app metadata, npm workspace version, XMTP helper package version, workspace crates, and root lockfiles are aligned to `0.1.31`.
+
+### Fixed
+- **Conversation history contamination** — assistant history reconstruction no longer teaches the model to echo nested speaker prefixes back to the user.
+- **Policy-approved file access execution** — file reads and writes that current policy allows now update runtime filesystem roots before execution, avoiding false denials for paths outside the static baseline roots.
 
 ---
 
