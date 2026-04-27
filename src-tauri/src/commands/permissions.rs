@@ -10,10 +10,8 @@ pub async fn approve_permission(
     skill_name: String,
     remember: bool,
 ) -> Result<(), String> {
-    if remember {
-        checker.trust_skill(&skill_name).await;
-    }
-    checker.respond(&request_id, true);
+    let _ = skill_name;
+    checker.approve(&request_id, remember).await;
     Ok(())
 }
 
@@ -23,7 +21,7 @@ pub async fn deny_permission(
     checker: State<'_, PermissionChecker>,
     request_id: String,
 ) -> Result<(), String> {
-    checker.respond(&request_id, false);
+    checker.deny(&request_id);
     Ok(())
 }
 
@@ -48,5 +46,11 @@ pub async fn set_execution_mode(
         _ => ExecutionMode::Leashed,
     };
     checker.set_mode(m).await;
+    let mut cfg = crate::config::load();
+    cfg.app.execution_mode = match m {
+        ExecutionMode::Leashed => "leashed".to_string(),
+        ExecutionMode::FreeRun => "free_run".to_string(),
+    };
+    crate::config::save(&cfg).map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -26,6 +26,9 @@ use crate::memory::file_layer::FileLayer;
 use crate::memory::injector::{MemoryBudget, MemoryInjector};
 use crate::memory::retriever::MemoryRetriever;
 use crate::memory::system::{MemorySystem, TaskRecord};
+use crate::policy::{
+    EffectKind, InvocationSource, PolicyActor, PolicyDetails, PolicyRequest, PolicyRisk,
+};
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
 use crate::tools::primitive::ToolPermissions;
@@ -1267,6 +1270,7 @@ impl AlphaPup {
             file_write: tool_perms.file_write,
             network: tool_perms.network,
         };
+        let policy_actor = PolicyActor::from_agent_name(agent_name, InvocationSource::Ui);
 
         let mut available_tools = self.skill_executor.tools.available_tools(&primitive_perms);
 
@@ -1565,6 +1569,28 @@ impl AlphaPup {
                         suggested_action,
                     }));
                 } else if tc.name == "task_update" {
+                    let allowed = self
+                        .skill_executor
+                        .permissions
+                        .authorize(PolicyRequest {
+                            actor: policy_actor.clone(),
+                            tool_name: "task_update".to_string(),
+                            effect: EffectKind::WriteMemory,
+                            risk: PolicyRisk::Low,
+                            scope: Default::default(),
+                            description: format!(
+                                "Update task status with {}",
+                                serde_json::to_string(&tc.arguments).unwrap_or_default()
+                            ),
+                            details: PolicyDetails::default(),
+                        })
+                        .await
+                        .unwrap_or(false);
+                    if !allowed {
+                        return Ok(AgentRunResult::FinalText(
+                            "Permission denied for task_update.".to_string(),
+                        ));
+                    }
                     let id = tc.arguments["id"].as_str().unwrap_or_default();
                     let status = tc.arguments["status"].as_str().unwrap_or("done");
                     let result_text = tc.arguments["result"].as_str();
@@ -1696,14 +1722,34 @@ impl AlphaPup {
                     }
                 } else if tc.name.starts_with("mcp__") {
                     match self.mcp_orchestrator.resolve_fn_name(&tc.name).await {
-                        Some((server, tool)) => self
-                            .mcp_orchestrator
-                            .call_tool(&server, &tool, &tc.arguments)
-                            .await
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|e| {
-                                Self::format_structured_error(&tc.name, &e.to_string(), true)
-                            }),
+                        Some((server, tool)) => {
+                            let allowed = self
+                                .skill_executor
+                                .permissions
+                                .authorize_mcp_call(
+                                    policy_actor.clone(),
+                                    &server,
+                                    &tool,
+                                    &tc.arguments,
+                                )
+                                .await
+                                .unwrap_or(false);
+                            if !allowed {
+                                "Permission denied for MCP tool call.".to_string()
+                            } else {
+                                self.mcp_orchestrator
+                                    .call_tool(&server, &tool, &tc.arguments)
+                                    .await
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|e| {
+                                        Self::format_structured_error(
+                                            &tc.name,
+                                            &e.to_string(),
+                                            true,
+                                        )
+                                    })
+                            }
+                        }
                         None => Self::format_structured_error(
                             &tc.name,
                             &format!("Unknown MCP tool: '{}'", tc.name),
@@ -1711,13 +1757,28 @@ impl AlphaPup {
                         ),
                     }
                 } else {
-                    self.skill_executor
-                        .tools
-                        .execute(&tc.name, &tc.arguments, &primitive_perms)
+                    let request = self.skill_executor.tools.policy_request_for_tool(
+                        policy_actor.clone(),
+                        &tc.name,
+                        &tc.arguments,
+                    );
+                    let allowed = self
+                        .skill_executor
+                        .permissions
+                        .authorize(request)
                         .await
-                        .unwrap_or_else(|e| {
-                            Self::format_structured_error(&tc.name, &e.to_string(), true)
-                        })
+                        .unwrap_or(false);
+                    if !allowed {
+                        "Permission denied for tool call.".to_string()
+                    } else {
+                        self.skill_executor
+                            .tools
+                            .execute(&tc.name, &tc.arguments, &primitive_perms)
+                            .await
+                            .unwrap_or_else(|e| {
+                                Self::format_structured_error(&tc.name, &e.to_string(), true)
+                            })
+                    }
                 };
 
                 // Priority 3: Dynamic tool result truncation proportional to context window.

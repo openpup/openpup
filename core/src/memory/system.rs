@@ -19,6 +19,10 @@ use crate::conversation::types::{
     ConversationTransportRecord,
 };
 use crate::llm::client::LlmClient;
+use crate::policy::{
+    ActorKind, EffectKind, ExecutionMode, InvocationSource, PolicyAuditRecord, PolicyDecision,
+    PolicyGrant, PolicyRequest, PolicyRisk, PolicyScope,
+};
 
 #[derive(Clone)]
 pub struct MemorySystem {
@@ -110,6 +114,66 @@ impl MemorySystem {
             r#"
       CREATE INDEX IF NOT EXISTS idx_conversations_timestamp
       ON conversations(timestamp);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // policy grants and audit log
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS policy_grants (
+        id TEXT PRIMARY KEY,
+        actor_kind TEXT NOT NULL,
+        actor_name TEXT NOT NULL,
+        effect_kind TEXT NOT NULL,
+        tool_name TEXT,
+        scope TEXT NOT NULL DEFAULT '{}',
+        risk_ceiling TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        created_by TEXT NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_policy_grants_match
+      ON policy_grants(actor_kind, actor_name, effect_kind, tool_name, mode, expires_at);
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE TABLE IF NOT EXISTS policy_audit (
+        id TEXT PRIMARY KEY,
+        actor_kind TEXT NOT NULL,
+        actor_name TEXT NOT NULL,
+        source TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        effect_kind TEXT NOT NULL,
+        risk TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        args_summary TEXT NOT NULL,
+        result_status TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+      CREATE INDEX IF NOT EXISTS idx_policy_audit_created
+      ON policy_audit(created_at);
       "#,
         )
         .execute(&self.pool)
@@ -1043,6 +1107,131 @@ impl MemorySystem {
     /// Expose the LLM client for sub-systems that need embeddings.
     pub fn llm(&self) -> &Arc<LlmClient> {
         &self.llm
+    }
+
+    pub async fn insert_policy_grant(&self, grant: &PolicyGrant) -> Result<()> {
+        let scope = serde_json::to_string(&grant.scope)?;
+        sqlx::query(
+            r#"
+      INSERT INTO policy_grants
+        (id, actor_kind, actor_name, effect_kind, tool_name, scope, risk_ceiling, mode, expires_at, created_at, created_by)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+      ON CONFLICT(id) DO UPDATE SET
+        actor_kind = excluded.actor_kind,
+        actor_name = excluded.actor_name,
+        effect_kind = excluded.effect_kind,
+        tool_name = excluded.tool_name,
+        scope = excluded.scope,
+        risk_ceiling = excluded.risk_ceiling,
+        mode = excluded.mode,
+        expires_at = excluded.expires_at,
+        created_at = excluded.created_at,
+        created_by = excluded.created_by;
+      "#,
+        )
+        .bind(&grant.id)
+        .bind(grant.actor_kind.as_str())
+        .bind(&grant.actor_name)
+        .bind(grant.effect_kind.as_str())
+        .bind(grant.tool_name.as_deref())
+        .bind(scope)
+        .bind(grant.risk_ceiling.as_str())
+        .bind(&grant.mode)
+        .bind(grant.expires_at)
+        .bind(grant.created_at)
+        .bind(grant.created_by.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn matching_policy_grants(
+        &self,
+        request: &PolicyRequest,
+        mode: ExecutionMode,
+    ) -> Result<Vec<PolicyGrant>> {
+        let now = Utc::now().timestamp();
+        let rows = sqlx::query(
+            r#"
+      SELECT id, actor_kind, actor_name, effect_kind, tool_name, scope, risk_ceiling, mode, expires_at, created_at, created_by
+      FROM policy_grants
+      WHERE actor_kind = ?1
+        AND actor_name = ?2
+        AND effect_kind = ?3
+        AND (tool_name IS NULL OR tool_name = ?4)
+        AND (mode = ?5 OR mode = 'both')
+        AND (expires_at IS NULL OR expires_at > ?6);
+      "#,
+        )
+        .bind(request.actor.kind.as_str())
+        .bind(&request.actor.name)
+        .bind(request.effect.as_str())
+        .bind(&request.tool_name)
+        .bind(mode.as_str())
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let scope_json: String = row.get("scope");
+                let scope = serde_json::from_str::<PolicyScope>(&scope_json).ok()?;
+                let created_by = match row.get::<String, _>("created_by").as_str() {
+                    "cli" => InvocationSource::Cli,
+                    "bridge" => InvocationSource::Bridge,
+                    "scheduler" => InvocationSource::Scheduler,
+                    "system" => InvocationSource::System,
+                    _ => InvocationSource::Ui,
+                };
+                let grant = PolicyGrant {
+                    id: row.get("id"),
+                    actor_kind: ActorKind::from_str(row.get::<String, _>("actor_kind").as_str()),
+                    actor_name: row.get("actor_name"),
+                    effect_kind: EffectKind::from_str(row.get::<String, _>("effect_kind").as_str()),
+                    tool_name: row.get("tool_name"),
+                    scope,
+                    risk_ceiling: PolicyRisk::from_str(
+                        row.get::<String, _>("risk_ceiling").as_str(),
+                    ),
+                    mode: row.get("mode"),
+                    expires_at: row.get("expires_at"),
+                    created_at: row.get("created_at"),
+                    created_by,
+                };
+                grant.matches_request(request, mode, now).then_some(grant)
+            })
+            .collect())
+    }
+
+    pub async fn record_policy_audit(&self, record: &PolicyAuditRecord) -> Result<()> {
+        let decision = match record.decision {
+            PolicyDecision::Allow => "allow",
+            PolicyDecision::Ask => "ask",
+            PolicyDecision::Deny => "deny",
+        };
+        sqlx::query(
+            r#"
+      INSERT INTO policy_audit
+        (id, actor_kind, actor_name, source, tool_name, effect_kind, risk, decision, mode, args_summary, result_status, created_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);
+      "#,
+        )
+        .bind(&record.id)
+        .bind(record.actor_kind.as_str())
+        .bind(&record.actor_name)
+        .bind(record.source.as_str())
+        .bind(&record.tool_name)
+        .bind(record.effect_kind.as_str())
+        .bind(record.risk.as_str())
+        .bind(decision)
+        .bind(record.mode.as_str())
+        .bind(&record.args_summary)
+        .bind(&record.result_status)
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // ── Pack Channel ──────────────────────────────────────────────────────────

@@ -6,7 +6,8 @@ use tracing::debug;
 
 use crate::llm::client::LlmClient;
 use crate::mcp::orchestrator::MCPOrchestrator;
-use crate::skills::permissions::{Action, PermissionChecker};
+use crate::policy::{InvocationSource, PolicyActor};
+use crate::skills::permissions::PermissionChecker;
 use crate::skills::registry::{LoadedSkillPrompt, SkillPermissions, SkillRegistry};
 use crate::tools::primitive::{ToolPermissions, ToolRegistry};
 
@@ -23,19 +24,41 @@ impl SkillExecutor {
     /// Load a skill's prompt and permissions for context injection.
     /// Confirms dangerous skills with the user before returning.
     pub async fn load_skill_prompt(&self, name: &str) -> Result<(String, SkillPermissions)> {
-        let loaded = self.load_skill_bundle(name).await?;
+        self.load_skill_prompt_from_source(name, InvocationSource::Ui)
+            .await
+    }
+
+    pub async fn load_skill_prompt_from_source(
+        &self,
+        name: &str,
+        source: InvocationSource,
+    ) -> Result<(String, SkillPermissions)> {
+        let loaded = self.load_skill_bundle_from_source(name, source).await?;
         Ok((loaded.render_with_preamble(), loaded.permissions.clone()))
     }
 
     pub async fn load_skill_bundle(&self, name: &str) -> Result<LoadedSkillPrompt> {
+        self.load_skill_bundle_from_source(name, InvocationSource::Ui)
+            .await
+    }
+
+    pub async fn load_skill_bundle_from_source(
+        &self,
+        name: &str,
+        source: InvocationSource,
+    ) -> Result<LoadedSkillPrompt> {
         let loaded = self.registry.load_skill_prompt(name).await?;
 
         if loaded.permissions.dangerous || loaded.permissions.dangerous_operations {
             let allowed = self
                 .permissions
-                .check_permission(
+                .authorize_skill_activation(
+                    PolicyActor::from_agent_name(
+                        &format!("skill:{}", loaded.metadata.name),
+                        source,
+                    ),
                     &loaded.metadata.name,
-                    &Action::Other(format!("execute skill {}", loaded.metadata.name)),
+                    true,
                 )
                 .await?;
             if !allowed {
@@ -56,6 +79,16 @@ impl SkillExecutor {
         self.execute_skill_stream(name, input, |_| {}).await
     }
 
+    pub async fn execute_skill_from_source(
+        &self,
+        name: &str,
+        input: &str,
+        source: InvocationSource,
+    ) -> Result<String> {
+        self.execute_skill_stream_from_source(name, input, source, |_| {})
+            .await
+    }
+
     /// Like `execute_skill` but accepts an `on_token` callback for streaming
     /// intermediate LLM output to the caller.
     pub async fn execute_skill_stream(
@@ -64,8 +97,20 @@ impl SkillExecutor {
         input: &str,
         on_token: impl Fn(&str) + Send + Sync,
     ) -> Result<String> {
-        let (prompt_text, permissions) = self.load_skill_prompt(name).await?;
+        self.execute_skill_stream_from_source(name, input, InvocationSource::Ui, on_token)
+            .await
+    }
+
+    pub async fn execute_skill_stream_from_source(
+        &self,
+        name: &str,
+        input: &str,
+        source: InvocationSource,
+        on_token: impl Fn(&str) + Send + Sync,
+    ) -> Result<String> {
+        let (prompt_text, permissions) = self.load_skill_prompt_from_source(name, source).await?;
         let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let policy_actor = PolicyActor::from_agent_name(&format!("skill:{name}"), source);
 
         let tool_perms = ToolPermissions {
             shell: permissions.shell,
@@ -127,19 +172,44 @@ impl SkillExecutor {
 
                 let result = if tc.name.starts_with("mcp__") {
                     match self.mcp.resolve_fn_name(&tc.name).await {
-                        Some((server, tool)) => self
-                            .mcp
-                            .call_tool(&server, &tool, &tc.arguments)
-                            .await
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|e| format!("MCP error: {e}")),
+                        Some((server, tool)) => {
+                            let allowed = self
+                                .permissions
+                                .authorize_mcp_call(
+                                    policy_actor.clone(),
+                                    &server,
+                                    &tool,
+                                    &tc.arguments,
+                                )
+                                .await
+                                .unwrap_or(false);
+                            if !allowed {
+                                "Permission denied for MCP tool call.".to_string()
+                            } else {
+                                self.mcp
+                                    .call_tool(&server, &tool, &tc.arguments)
+                                    .await
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|e| format!("MCP error: {e}"))
+                            }
+                        }
                         None => format!("Unknown MCP tool: '{}'", tc.name),
                     }
                 } else {
-                    self.tools
-                        .execute(&tc.name, &tc.arguments, &tool_perms)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"))
+                    let request = self.tools.policy_request_for_tool(
+                        policy_actor.clone(),
+                        &tc.name,
+                        &tc.arguments,
+                    );
+                    let allowed = self.permissions.authorize(request).await.unwrap_or(false);
+                    if !allowed {
+                        "Permission denied for tool call.".to_string()
+                    } else {
+                        self.tools
+                            .execute(&tc.name, &tc.arguments, &tool_perms)
+                            .await
+                            .unwrap_or_else(|e| format!("Error: {e}"))
+                    }
                 };
 
                 messages.push(serde_json::json!({

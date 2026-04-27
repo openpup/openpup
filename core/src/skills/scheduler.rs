@@ -11,6 +11,7 @@ use crate::bridge::types::{BridgeOutbox, OutboundMessage, OutboundType, Platform
 use crate::llm::client::LlmMessage;
 use crate::memory::file_layer::FileLayer;
 use crate::memory::system::MemorySystem;
+use crate::policy::InvocationSource;
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
 use crate::skills::job_registry::{
@@ -270,7 +271,9 @@ async fn run_sequential(
         } else {
             step.input.clone()
         };
-        prev_output = executor.execute_skill(&step.skill, &input).await?;
+        prev_output = executor
+            .execute_skill_from_source(&step.skill, &input, InvocationSource::Scheduler)
+            .await?;
     }
     Ok(prev_output)
 }
@@ -291,7 +294,9 @@ async fn run_parallel(job: &ScheduledJob, executor: &Arc<SkillExecutor>) -> anyh
                         "skill '{skill}' not found in scheduled job '{job_name}'"
                     ));
                 }
-                executor.execute_skill(&skill, &input).await
+                executor
+                    .execute_skill_from_source(&skill, &input, InvocationSource::Scheduler)
+                    .await
             }
         })
         .collect();

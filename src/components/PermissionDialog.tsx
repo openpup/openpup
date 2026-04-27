@@ -6,6 +6,11 @@ export interface PermissionRequest {
   skill_name: string;
   action_description: string;
   risk_level: 'low' | 'medium' | 'high';
+  actor_kind?: string;
+  actor_name?: string;
+  tool_name?: string;
+  effect_kind?: string;
+  scope?: unknown;
   details: {
     affected_files?: string[];
     network_destinations?: string[];
@@ -63,6 +68,11 @@ export const PermissionDialog: React.FC<Props> = ({ request, onApprove, onDeny }
             <div style={{ fontSize: '11.5px', color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
               {request.action_description}
             </div>
+            {(request.tool_name || request.effect_kind) && (
+              <div style={{ marginTop: '6px', fontSize: '10.5px', color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                {[request.actor_name, request.tool_name, request.effect_kind].filter(Boolean).join(' · ')}
+              </div>
+            )}
           </div>
           <span style={{
             flexShrink: 0,

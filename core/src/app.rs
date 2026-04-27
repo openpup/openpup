@@ -803,11 +803,7 @@ pub async fn build_app(
     skill_registry.reconcile_installed_with_registered().await;
 
     let permissions = PermissionChecker::new();
-    permissions.set_persist_path(
-        workspace_root
-            .join("skills_state")
-            .join("trusted_skills.json"),
-    );
+    permissions.set_policy_memory(memory.clone());
     permissions
         .set_mode(match cfg.app.execution_mode.to_lowercase().as_str() {
             "freerun" | "free_run" | "free-run" => ExecutionMode::FreeRun,

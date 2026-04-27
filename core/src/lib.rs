@@ -11,6 +11,7 @@ pub mod knowledge;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
+pub mod policy;
 pub mod runtime;
 pub mod skills;
 pub mod tools;

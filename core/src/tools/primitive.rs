@@ -16,6 +16,9 @@ use tracing::debug;
 use super::risk::{assess_command_risk, format_risk_warning};
 use crate::bridge::types::BridgeOutbox;
 use crate::memory::system::MemorySystem;
+use crate::policy::{
+    summarize_json, EffectKind, PolicyActor, PolicyDetails, PolicyRequest, PolicyRisk, PolicyScope,
+};
 use crate::skills::registry::SkillRegistry;
 
 // Re-export risk types for external consumers
@@ -66,6 +69,14 @@ pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
+fn policy_risk_from_command(risk: CommandRiskLevel) -> PolicyRisk {
+    match risk {
+        CommandRiskLevel::Low => PolicyRisk::Low,
+        CommandRiskLevel::Medium => PolicyRisk::Medium,
+        CommandRiskLevel::High => PolicyRisk::High,
+    }
+}
+
 impl ToolRegistry {
     pub fn new(
         workspace_root: PathBuf,
@@ -98,6 +109,112 @@ impl ToolRegistry {
         CommandRiskContext {
             kind,
             allowed_roots,
+        }
+    }
+
+    pub fn policy_request_for_tool(
+        &self,
+        actor: PolicyActor,
+        name: &str,
+        args: &Value,
+    ) -> PolicyRequest {
+        let mut details = PolicyDetails::default();
+        let mut scope = PolicyScope::default();
+        let (effect, risk, description) = match name {
+            "shell_exec" => {
+                let cmd = args["command"].as_str().unwrap_or_default();
+                let risk = assess_command_risk(cmd, &self.command_risk_context(ShellKind::Real));
+                scope.command_prefix = Some(cmd.to_string());
+                (
+                    EffectKind::Shell,
+                    policy_risk_from_command(risk),
+                    format!("Execute shell command: {}", truncate_chars(cmd, 240)),
+                )
+            }
+            "sandbox_shell_exec" => {
+                let cmd = args["command"].as_str().unwrap_or_default();
+                let risk = assess_command_risk(cmd, &self.command_risk_context(ShellKind::Sandbox));
+                scope.command_prefix = Some(cmd.to_string());
+                (
+                    EffectKind::Shell,
+                    policy_risk_from_command(risk),
+                    format!(
+                        "Execute sandbox shell command: {}",
+                        truncate_chars(cmd, 240)
+                    ),
+                )
+            }
+            "file_read" | "skill_list_resources" | "skill_read_resource" => (
+                EffectKind::ReadLocal,
+                PolicyRisk::Low,
+                format!("Read local data with `{name}`"),
+            ),
+            "file_write" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                let resolved = self.resolve_path(path);
+                let resolved_s = resolved.display().to_string();
+                details.affected_files.push(resolved_s.clone());
+                scope.path = Some(resolved_s.clone());
+                if resolved.starts_with(&self.workspace_root) {
+                    scope.path_prefix = Some(self.workspace_root.display().to_string());
+                    (
+                        EffectKind::WriteWorkspace,
+                        PolicyRisk::Medium,
+                        format!("Write workspace file: {resolved_s}"),
+                    )
+                } else {
+                    (
+                        EffectKind::WriteOutsideWorkspace,
+                        PolicyRisk::High,
+                        format!("Write file outside workspace: {resolved_s}"),
+                    )
+                }
+            }
+            "http_get" | "web_fetch" => {
+                let url = args["url"].as_str().unwrap_or_default();
+                scope.url = Some(url.to_string());
+                details.network_destinations.push(url.to_string());
+                (
+                    EffectKind::NetworkRead,
+                    PolicyRisk::Low,
+                    format!("Fetch network resource: {url}"),
+                )
+            }
+            "memory_search" | "search_knowledge_base" | "search_knowledge_graph" => (
+                EffectKind::ReadMemory,
+                PolicyRisk::Low,
+                format!("Read local memory or knowledge with `{name}`"),
+            ),
+            "memory_store" => (
+                EffectKind::WriteMemory,
+                PolicyRisk::Low,
+                "Store a long-term memory".to_string(),
+            ),
+            "bridge_send" => {
+                if let Some(platform) = args["platform"].as_str() {
+                    scope.platform = Some(platform.to_string());
+                }
+                (
+                    EffectKind::ExternalSend,
+                    PolicyRisk::Medium,
+                    format!("Send bridge message: {}", summarize_json(args, 240)),
+                )
+            }
+            _ => (
+                EffectKind::McpCall,
+                PolicyRisk::Medium,
+                format!("Call tool `{name}` with {}", summarize_json(args, 240)),
+            ),
+        };
+
+        PolicyRequest {
+            actor,
+            tool_name: name.to_string(),
+            effect,
+            risk,
+            scope,
+            description,
+            details,
         }
     }
 
