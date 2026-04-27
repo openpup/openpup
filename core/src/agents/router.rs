@@ -107,6 +107,7 @@ impl Router {
         let mut classifier_msgs = vec![LlmMessage {
             role: "system".into(),
             content: system_prompt,
+            name: None,
         }];
         if let Some(last) = history.last() {
             classifier_msgs.push(last.clone());
@@ -114,6 +115,7 @@ impl Router {
         classifier_msgs.push(LlmMessage {
             role: "user".into(),
             content: format!("Message to classify: \"{msg}\""),
+            name: None,
         });
 
         let raw = match self.llm_client.chat_mini(classifier_msgs).await {
@@ -183,7 +185,11 @@ impl Router {
         recent
             .into_iter()
             .rev()
-            .map(|(role, content)| LlmMessage { role, content })
+            .map(|(role, content)| LlmMessage {
+                role,
+                content,
+                name: None,
+            })
             .collect()
     }
 

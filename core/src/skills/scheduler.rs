@@ -343,10 +343,12 @@ async fn tick_alpha_heartbeat(
                     content: "You are Alpha, a loyal personal AI assistant. Analyze interaction \
                               patterns and extract behavioral rules for your owner."
                         .to_string(),
+                    name: None,
                 },
                 LlmMessage {
                     role: "user".to_string(),
                     content: prompt,
+                    name: None,
                 },
             ],
             |_, _| {},

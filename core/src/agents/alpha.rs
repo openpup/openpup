@@ -789,7 +789,7 @@ impl AlphaPup {
             let mut msgs: Vec<serde_json::Value> =
                 vec![serde_json::json!({ "role": "system", "content": system_prompt })];
             for m in &pup_history {
-                msgs.push(serde_json::json!({ "role": m.role, "content": m.content }));
+                msgs.push(m.to_json());
             }
             msgs.push(serde_json::json!({ "role": "user", "content": msg }));
 
@@ -903,6 +903,7 @@ impl AlphaPup {
                     .map(|m| Message {
                         role: m.role.clone(),
                         content: m.content.clone(),
+                        name: m.name.clone(),
                     })
                     .collect(),
                 owner_context: owner_summary.clone(),
@@ -926,7 +927,7 @@ impl AlphaPup {
             let mut msgs: Vec<serde_json::Value> =
                 vec![serde_json::json!({ "role": "system", "content": system_prompt })];
             for m in &task.context {
-                msgs.push(serde_json::json!({ "role": m.role, "content": m.content }));
+                msgs.push(m.to_json());
             }
             msgs.push(serde_json::json!({ "role": "user", "content": task.intent }));
 
@@ -1029,7 +1030,7 @@ impl AlphaPup {
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({ "role": "system", "content": system_content })];
         for m in history {
-            messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
+            messages.push(m.to_json());
         }
         messages.push(serde_json::json!({ "role": "user", "content": msg }));
 
@@ -1917,10 +1918,12 @@ impl AlphaPup {
                 LlmMessage {
                     role: "system".into(),
                     content: system_prompt,
+                    name: None,
                 },
                 LlmMessage {
                     role: "user".into(),
                     content: user_prompt,
+                    name: None,
                 },
             ])
             .await
@@ -3231,6 +3234,7 @@ impl AlphaPup {
                 .map(|m| Message {
                     role: m.role.clone(),
                     content: m.content.clone(),
+                    name: m.name.clone(),
                 })
                 .collect(),
             owner_context: owner_summary.to_string(),
@@ -3252,7 +3256,7 @@ impl AlphaPup {
         let mut msgs: Vec<serde_json::Value> =
             vec![serde_json::json!({ "role": "system", "content": system_prompt })];
         for m in &task.context {
-            msgs.push(serde_json::json!({ "role": m.role, "content": m.content }));
+            msgs.push(m.to_json());
         }
         msgs.push(serde_json::json!({ "role": "user", "content": task.intent }));
 
@@ -3301,10 +3305,12 @@ impl AlphaPup {
                         role: "system".into(),
                         content: "你是 Alpha Pup，负责整合多 Pup 协作成果并输出清晰的最终回复。"
                             .into(),
+                        name: None,
                     },
                     LlmMessage {
                         role: "user".into(),
                         content: prompt,
+                        name: None,
                     },
                 ],
                 |tok, _is_reasoning| {
@@ -3431,6 +3437,7 @@ impl AlphaPup {
             .chat_mini(vec![LlmMessage {
                 role: "user".into(),
                 content: prompt,
+                name: None,
             }])
             .await?;
 
@@ -3490,6 +3497,7 @@ impl AlphaPup {
             .chat_mini(vec![LlmMessage {
                 role: "user".into(),
                 content: prompt,
+                name: None,
             }])
             .await
         {

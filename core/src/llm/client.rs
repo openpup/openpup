@@ -69,6 +69,21 @@ impl CumulativeUsage {
 pub struct LlmMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl LlmMessage {
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "role": self.role.as_str(),
+            "content": self.content.as_str(),
+        });
+        if let Some(name) = &self.name {
+            value["name"] = serde_json::Value::String(name.clone());
+        }
+        value
+    }
 }
 
 // ── Tool-call types (used by chat_with_tools) ────────────────────────────────
@@ -966,10 +981,7 @@ fn chat_url(api_base: &Option<String>) -> String {
 }
 
 fn messages_json(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect()
+    messages.iter().map(LlmMessage::to_json).collect()
 }
 
 /// Extract token usage from an OpenAI-compatible API response JSON.

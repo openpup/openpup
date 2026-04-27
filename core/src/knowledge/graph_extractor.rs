@@ -125,10 +125,12 @@ impl GraphExtractor {
                 LlmMessage {
                     role: "system".into(),
                     content: system.into(),
+                    name: None,
                 },
                 LlmMessage {
                     role: "user".into(),
                     content: text.chars().take(6000).collect(),
+                    name: None,
                 },
             ])
             .await?;

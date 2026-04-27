@@ -192,6 +192,7 @@ impl MemoryExtractor {
             .chat_mini(vec![LlmMessage {
                 role: "user".into(),
                 content: prompt,
+                name: None,
             }])
             .await?;
 
@@ -254,10 +255,12 @@ impl MemoryExtractor {
                 LlmMessage {
                     role: "system".into(),
                     content: "你是记忆冲突分析引擎，只输出 JSON。".into(),
+                    name: None,
                 },
                 LlmMessage {
                     role: "user".into(),
                     content: prompt,
+                    name: None,
                 },
             ])
             .await?;

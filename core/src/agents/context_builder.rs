@@ -31,6 +31,25 @@ pub struct ContextBuilder {
 /// How many recent turns to keep verbatim.
 const VERBATIM_ROWS: i64 = 20;
 
+fn sanitize_llm_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let cleaned: String = cleaned.trim_matches('_').chars().take(64).collect();
+    if cleaned.is_empty() {
+        "assistant".to_string()
+    } else {
+        cleaned
+    }
+}
+
 impl ContextBuilder {
     pub fn new(
         memory: Arc<MemorySystem>,
@@ -67,6 +86,7 @@ impl ContextBuilder {
                 .chat_mini(vec![LlmMessage {
                     role: "user".into(),
                     content: prompt,
+                    name: None,
                 }])
                 .await
             {
@@ -82,8 +102,8 @@ impl ContextBuilder {
     }
 
     /// Shared conversation history: rolling compressed summary + last VERBATIM_ROWS turns.
-    /// v2: all agents share one history stream. Speaker identity is annotated
-    /// in assistant messages so the LLM knows who said what.
+    /// v2: all agents share one history stream. Speaker identity is carried
+    /// through the Chat Completions `name` field so content stays pure.
     pub async fn build_history(&self) -> Vec<LlmMessage> {
         let mut msgs: Vec<LlmMessage> = Vec::new();
 
@@ -92,23 +112,26 @@ impl ContextBuilder {
             msgs.push(LlmMessage {
                 role: "system".into(),
                 content: format!("## Earlier conversation summary\n{summary}"),
+                name: None,
             });
         }
 
-        // Append most recent verbatim turns with speaker annotation
+        // Append most recent verbatim turns with speaker metadata.
         let recent = self
             .memory
             .recent_conversations(VERBATIM_ROWS)
             .await
             .unwrap_or_default();
         msgs.extend(recent.into_iter().rev().map(|(role, content, speaker)| {
-            if role == "assistant" {
-                LlmMessage {
-                    role,
-                    content: format!("[{speaker}] {content}"),
-                }
+            let name = if role == "assistant" {
+                Some(sanitize_llm_name(&speaker))
             } else {
-                LlmMessage { role, content }
+                None
+            };
+            LlmMessage {
+                role,
+                content,
+                name,
             }
         }));
         msgs

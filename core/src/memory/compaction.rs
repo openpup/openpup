@@ -275,6 +275,7 @@ impl CompactionEngine {
             .chat_mini(vec![LlmMessage {
                 role: "user".into(),
                 content: prompt,
+                name: None,
             }])
             .await?;
 

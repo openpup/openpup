@@ -14,6 +14,21 @@ pub enum TaskStatus {
 pub struct Message {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Message {
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "role": self.role.as_str(),
+            "content": self.content.as_str(),
+        });
+        if let Some(name) = &self.name {
+            value["name"] = serde_json::Value::String(name.clone());
+        }
+        value
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +36,7 @@ pub struct Task {
     pub id: String,
     /// The current user message.
     pub intent: String,
-    /// Recent conversation history (role/content pairs, no system messages).
+    /// Recent conversation history (role/content plus optional speaker name, no system messages).
     pub context: Vec<Message>,
     /// OWNER.md content — passed through so specialists can personalise their response.
     pub owner_context: String,
