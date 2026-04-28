@@ -93,6 +93,10 @@ pub trait FileSystem: Send + Sync {
     fn allow_root(&self, _path: &Path) -> anyhow::Result<()> {
         Err(CapabilityError::Unsupported("filesystem.allow_root").into())
     }
+
+    fn is_path_allowed(&self, _path: &Path) -> anyhow::Result<bool> {
+        Err(CapabilityError::Unsupported("filesystem.is_path_allowed").into())
+    }
 }
 
 pub struct RestrictedFileSystem {
@@ -192,6 +196,11 @@ impl FileSystem for RestrictedFileSystem {
         roots.sort();
         roots.dedup();
         Ok(())
+    }
+
+    fn is_path_allowed(&self, path: &Path) -> anyhow::Result<bool> {
+        let normalized = normalize_path(path)?;
+        Ok(self.is_under_allowed_root(&normalized))
     }
 }
 

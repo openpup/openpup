@@ -19,6 +19,7 @@ use crate::memory::system::MemorySystem;
 use crate::policy::{
     summarize_json, EffectKind, PolicyActor, PolicyDetails, PolicyRequest, PolicyRisk, PolicyScope,
 };
+use crate::skills::permissions::{ExecutionMode, PermissionChecker};
 use crate::skills::registry::SkillRegistry;
 
 // Re-export risk types for external consumers
@@ -121,14 +122,50 @@ impl ToolRegistry {
         Ok(())
     }
 
-    async fn maybe_allow_dynamic_root_for_tool(&self, name: &str, args: &Value) -> Result<()> {
+    fn path_is_already_allowed(&self, path: &std::path::Path) -> Result<bool> {
+        match self.capabilities.fs.is_path_allowed(path) {
+            Ok(allowed) => Ok(allowed),
+            Err(err) if err.to_string().contains("filesystem.is_path_allowed") => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn maybe_allow_dynamic_root_for_tool(
+        &self,
+        name: &str,
+        args: &Value,
+        permissions: &PermissionChecker,
+        actor: &PolicyActor,
+    ) -> Result<()> {
+        let mode = permissions.get_mode().await;
         match name {
             "file_read" => {
                 let path = args["path"]
                     .as_str()
                     .ok_or_else(|| anyhow!("file_read: missing 'path'"))?;
                 let resolved = self.resolve_path(path);
-                self.maybe_allow_dynamic_root_for_path(&resolved)?;
+                if self.path_is_already_allowed(&resolved)? {
+                    return Ok(());
+                }
+                match mode {
+                    ExecutionMode::FreeRun => self.maybe_allow_dynamic_root_for_path(&resolved)?,
+                    ExecutionMode::Leashed => {
+                        let approved = permissions
+                            .authorize_boundary_access(
+                                actor.clone(),
+                                name,
+                                &resolved.display().to_string(),
+                            )
+                            .await?;
+                        if !approved {
+                            return Err(anyhow!(
+                                "file_read: boundary access denied for '{}'",
+                                resolved.display()
+                            ));
+                        }
+                        self.maybe_allow_dynamic_root_for_path(&resolved)?;
+                    }
+                }
             }
             "file_write" => {
                 let path = args["path"]
@@ -136,7 +173,9 @@ impl ToolRegistry {
                     .ok_or_else(|| anyhow!("file_write: missing 'path'"))?;
                 let resolved = self.resolve_path(path);
                 let root = resolved.parent().unwrap_or(resolved.as_path());
-                self.maybe_allow_dynamic_root_for_path(root)?;
+                if !self.path_is_already_allowed(root)? {
+                    self.maybe_allow_dynamic_root_for_path(root)?;
+                }
             }
             "skill_read_resource" => {
                 let skill_name = args["skill_name"]
@@ -149,7 +188,28 @@ impl ToolRegistry {
                     .skill_registry
                     .resolve_skill_resource_path(skill_name, relpath)
                     .await?;
-                self.maybe_allow_dynamic_root_for_path(&resolved)?;
+                if self.path_is_already_allowed(&resolved)? {
+                    return Ok(());
+                }
+                match mode {
+                    ExecutionMode::FreeRun => self.maybe_allow_dynamic_root_for_path(&resolved)?,
+                    ExecutionMode::Leashed => {
+                        let approved = permissions
+                            .authorize_boundary_access(
+                                actor.clone(),
+                                name,
+                                &resolved.display().to_string(),
+                            )
+                            .await?;
+                        if !approved {
+                            return Err(anyhow!(
+                                "skill_read_resource: boundary access denied for '{}'",
+                                resolved.display()
+                            ));
+                        }
+                        self.maybe_allow_dynamic_root_for_path(&resolved)?;
+                    }
+                }
             }
             _ => {}
         }
@@ -517,6 +577,8 @@ impl ToolRegistry {
         name: &str,
         args: &Value,
         perms: &ToolPermissions,
+        permissions: &PermissionChecker,
+        actor: &PolicyActor,
     ) -> Result<String> {
         match name {
             "shell_exec" => {
@@ -560,7 +622,8 @@ impl ToolRegistry {
                 let path = args["path"]
                     .as_str()
                     .ok_or_else(|| anyhow!("file_read: missing 'path'"))?;
-                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
+                self.maybe_allow_dynamic_root_for_tool(name, args, permissions, actor)
+                    .await?;
                 self.file_read(path).await
             }
             "skill_list_resources" => {
@@ -587,7 +650,8 @@ impl ToolRegistry {
                 let relpath = args["relpath"]
                     .as_str()
                     .ok_or_else(|| anyhow!("skill_read_resource: missing 'relpath'"))?;
-                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
+                self.maybe_allow_dynamic_root_for_tool(name, args, permissions, actor)
+                    .await?;
                 self.skill_read_resource(skill_name, relpath).await
             }
             "file_write" => {
@@ -602,7 +666,8 @@ impl ToolRegistry {
                 let content = args["content"]
                     .as_str()
                     .ok_or_else(|| anyhow!("file_write: missing 'content'"))?;
-                self.maybe_allow_dynamic_root_for_tool(name, args).await?;
+                self.maybe_allow_dynamic_root_for_tool(name, args, permissions, actor)
+                    .await?;
                 self.file_write(path, content).await
             }
             "http_get" => {

@@ -1773,7 +1773,13 @@ impl AlphaPup {
                     } else {
                         self.skill_executor
                             .tools
-                            .execute(&tc.name, &tc.arguments, &primitive_perms)
+                            .execute(
+                                &tc.name,
+                                &tc.arguments,
+                                &primitive_perms,
+                                &self.skill_executor.permissions,
+                                &policy_actor,
+                            )
                             .await
                             .unwrap_or_else(|e| {
                                 Self::format_structured_error(&tc.name, &e.to_string(), true)

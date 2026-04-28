@@ -206,6 +206,30 @@ impl PermissionChecker {
         .await
     }
 
+    pub async fn authorize_boundary_access(
+        &self,
+        actor: PolicyActor,
+        tool_name: &str,
+        path: &str,
+    ) -> Result<bool> {
+        self.authorize(PolicyRequest {
+            actor,
+            tool_name: format!("boundary:{tool_name}"),
+            effect: EffectKind::WriteOutsideWorkspace,
+            risk: PolicyRisk::High,
+            scope: crate::policy::PolicyScope {
+                path: Some(path.to_string()),
+                ..Default::default()
+            },
+            description: format!("Access local path outside allowed roots: {path}"),
+            details: PolicyDetails {
+                affected_files: vec![path.to_string()],
+                ..Default::default()
+            },
+        })
+        .await
+    }
+
     pub async fn approve(&self, request_id: &str, remember: bool) {
         let pending = self.pending.lock().unwrap().remove(request_id);
         if let Some(pending) = pending {

@@ -206,7 +206,13 @@ impl SkillExecutor {
                         "Permission denied for tool call.".to_string()
                     } else {
                         self.tools
-                            .execute(&tc.name, &tc.arguments, &tool_perms)
+                            .execute(
+                                &tc.name,
+                                &tc.arguments,
+                                &tool_perms,
+                                &self.permissions,
+                                &policy_actor,
+                            )
                             .await
                             .unwrap_or_else(|e| format!("Error: {e}"))
                     }
