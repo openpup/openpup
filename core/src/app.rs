@@ -753,6 +753,7 @@ pub async fn build_app(
 
     let mcp_config_path = workspace_root.join("mcp_servers.json");
     let mcp_orchestrator = Arc::new(MCPOrchestrator::load(mcp_config_path));
+    mcp_orchestrator.set_embedder(llm_client.clone()).await;
     if let Ok(base_url) = std::env::var("OPENPUP_MCP_SERVER_URL") {
         let token = std::env::var("OPENPUP_MCP_TOKEN").unwrap_or_else(|_| "dev-token".to_string());
         let _ = mcp_orchestrator

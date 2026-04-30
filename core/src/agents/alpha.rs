@@ -1210,6 +1210,29 @@ impl AlphaPup {
         }
     }
 
+    fn build_mcp_task_hint(messages: &[serde_json::Value]) -> String {
+        let recent_user_messages: Vec<String> = messages
+            .iter()
+            .rev()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .take(3)
+            .map(ToOwned::to_owned)
+            .collect();
+
+        if recent_user_messages.is_empty() {
+            String::new()
+        } else {
+            recent_user_messages
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+
     /// Format a tool error as structured JSON so the LLM can reason about
     /// recoverability and decide whether to retry, use an alternative, or report.
     fn format_structured_error(tool: &str, message: &str, recoverable: bool) -> String {
@@ -1383,32 +1406,36 @@ impl AlphaPup {
         // Track whether we're using deferred MCP loading (single fetch_mcp_tool instead of all schemas)
         let mut mcp_deferred = false;
         if tool_perms.mcp {
-            // Extract the task from the last user message to drive tool selection
-            let task_hint = messages
-                .iter()
-                .rev()
-                .find(|m| m["role"] == "user")
-                .and_then(|m| m["content"].as_str())
-                .unwrap_or("");
+            // Build a slightly richer hint from the recent user turns so short
+            // follow-ups like "继续" or "用那个删掉" still have enough context.
+            let task_hint = Self::build_mcp_task_hint(&messages);
             let all_mcp = self.mcp_orchestrator.tools_as_openai_specs().await;
             if all_mcp.len() > Self::MAX_MCP_TOOLS {
                 // Deferred pattern: inject a lightweight catalog tool instead of all schemas.
                 // Saves ~100-200 tokens per tool × (total - MAX_MCP_TOOLS) tools.
                 let catalog = self
                     .mcp_orchestrator
-                    .deferred_tool_catalog(task_hint, Self::MAX_MCP_TOOLS * 2)
+                    .deferred_tool_catalog_best_effort_from_specs(
+                        &all_mcp,
+                        &task_hint,
+                        Self::MAX_MCP_TOOLS * 2,
+                    )
                     .await;
                 debug!(
                     "[{agent_name}] deferred MCP: {} total tools → catalog with {} entries",
                     all_mcp.len(),
-                    Self::MAX_MCP_TOOLS * 2,
+                    all_mcp.len().min(Self::MAX_MCP_TOOLS * 2),
                 );
                 available_tools.extend(catalog);
                 mcp_deferred = true;
             } else {
                 let mcp_specs = self
                     .mcp_orchestrator
-                    .tools_for_task(task_hint, Self::MAX_MCP_TOOLS)
+                    .tools_for_task_best_effort_from_specs(
+                        &all_mcp,
+                        &task_hint,
+                        Self::MAX_MCP_TOOLS,
+                    )
                     .await;
                 debug!(
                     "[{agent_name}] injecting {} MCP tools (all fit)",
