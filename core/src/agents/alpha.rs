@@ -1596,27 +1596,31 @@ impl AlphaPup {
                         suggested_action,
                     }));
                 } else if tc.name == "task_update" {
-                    let allowed = self
+                    let request = PolicyRequest {
+                        actor: policy_actor.clone(),
+                        tool_name: "task_update".to_string(),
+                        effect: EffectKind::WriteMemory,
+                        risk: PolicyRisk::Low,
+                        scope: Default::default(),
+                        description: format!(
+                            "Update task status with {}",
+                            serde_json::to_string(&tc.arguments).unwrap_or_default()
+                        ),
+                        details: PolicyDetails::default(),
+                    };
+                    let authorized = self
                         .skill_executor
                         .permissions
-                        .authorize(PolicyRequest {
-                            actor: policy_actor.clone(),
-                            tool_name: "task_update".to_string(),
-                            effect: EffectKind::WriteMemory,
-                            risk: PolicyRisk::Low,
-                            scope: Default::default(),
-                            description: format!(
-                                "Update task status with {}",
-                                serde_json::to_string(&tc.arguments).unwrap_or_default()
-                            ),
-                            details: PolicyDetails::default(),
-                        })
+                        .authorize(request.clone())
                         .await
                         .unwrap_or(false);
-                    if !allowed {
-                        return Ok(AgentRunResult::FinalText(
-                            "Permission denied for task_update.".to_string(),
-                        ));
+                    if !authorized {
+                        let diag = self
+                            .skill_executor
+                            .permissions
+                            .denial_diagnostics("Permission denied for task_update", &request)
+                            .await;
+                        return Ok(AgentRunResult::FinalText(diag));
                     }
                     let id = tc.arguments["id"].as_str().unwrap_or_default();
                     let status = tc.arguments["status"].as_str().unwrap_or("done");
@@ -1750,19 +1754,27 @@ impl AlphaPup {
                 } else if tc.name.starts_with("mcp__") {
                     match self.mcp_orchestrator.resolve_fn_name(&tc.name).await {
                         Some((server, tool)) => {
-                            let allowed = self
-                                .skill_executor
-                                .permissions
-                                .authorize_mcp_call(
+                            let request =
+                                self.skill_executor.permissions.policy_request_for_mcp_call(
                                     policy_actor.clone(),
                                     &server,
                                     &tool,
                                     &tc.arguments,
-                                )
+                                );
+                            let allowed = self
+                                .skill_executor
+                                .permissions
+                                .authorize(request.clone())
                                 .await
                                 .unwrap_or(false);
                             if !allowed {
-                                "Permission denied for MCP tool call.".to_string()
+                                self.skill_executor
+                                    .permissions
+                                    .denial_diagnostics(
+                                        "Permission denied for MCP tool call",
+                                        &request,
+                                    )
+                                    .await
                             } else {
                                 self.mcp_orchestrator
                                     .call_tool(&server, &tool, &tc.arguments)
@@ -1792,11 +1804,14 @@ impl AlphaPup {
                     let allowed = self
                         .skill_executor
                         .permissions
-                        .authorize(request)
+                        .authorize(request.clone())
                         .await
                         .unwrap_or(false);
                     if !allowed {
-                        "Permission denied for tool call.".to_string()
+                        self.skill_executor
+                            .permissions
+                            .denial_diagnostics("Permission denied for tool call", &request)
+                            .await
                     } else {
                         self.skill_executor
                             .tools

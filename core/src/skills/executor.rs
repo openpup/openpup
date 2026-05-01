@@ -173,24 +173,37 @@ impl SkillExecutor {
                 let result = if tc.name.starts_with("mcp__") {
                     match self.mcp.resolve_fn_name(&tc.name).await {
                         Some((server, tool)) => {
-                            let allowed = self
-                                .permissions
-                                .authorize_mcp_call(
-                                    policy_actor.clone(),
-                                    &server,
-                                    &tool,
-                                    &tc.arguments,
-                                )
-                                .await
-                                .unwrap_or(false);
-                            if !allowed {
-                                "Permission denied for MCP tool call.".to_string()
-                            } else {
-                                self.mcp
+                            let request = self.permissions.policy_request_for_mcp_call(
+                                policy_actor.clone(),
+                                &server,
+                                &tool,
+                                &tc.arguments,
+                            );
+                            match self.permissions.authorize(request.clone()).await {
+                                Ok(true) => self
+                                    .mcp
                                     .call_tool(&server, &tool, &tc.arguments)
                                     .await
                                     .map(|v| v.to_string())
-                                    .unwrap_or_else(|e| format!("MCP error: {e}"))
+                                    .unwrap_or_else(|e| format!("MCP error: {e}")),
+                                Ok(false) => {
+                                    self.permissions
+                                        .denial_diagnostics(
+                                            "Permission denied for MCP tool call",
+                                            &request,
+                                        )
+                                        .await
+                                }
+                                Err(e) => {
+                                    let diag = self
+                                        .permissions
+                                        .denial_diagnostics(
+                                            "Permission check failed for MCP tool call",
+                                            &request,
+                                        )
+                                        .await;
+                                    format!("{diag}; error={e}")
+                                }
                             }
                         }
                         None => format!("Unknown MCP tool: '{}'", tc.name),
@@ -201,11 +214,9 @@ impl SkillExecutor {
                         &tc.name,
                         &tc.arguments,
                     );
-                    let allowed = self.permissions.authorize(request).await.unwrap_or(false);
-                    if !allowed {
-                        "Permission denied for tool call.".to_string()
-                    } else {
-                        self.tools
+                    match self.permissions.authorize(request.clone()).await {
+                        Ok(true) => self
+                            .tools
                             .execute(
                                 &tc.name,
                                 &tc.arguments,
@@ -214,7 +225,22 @@ impl SkillExecutor {
                                 &policy_actor,
                             )
                             .await
-                            .unwrap_or_else(|e| format!("Error: {e}"))
+                            .unwrap_or_else(|e| format!("Error: {e}")),
+                        Ok(false) => {
+                            self.permissions
+                                .denial_diagnostics("Permission denied for tool call", &request)
+                                .await
+                        }
+                        Err(e) => {
+                            let diag = self
+                                .permissions
+                                .denial_diagnostics(
+                                    "Permission check failed for tool call",
+                                    &request,
+                                )
+                                .await;
+                            format!("{diag}; error={e}")
+                        }
                     }
                 };
 

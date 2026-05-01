@@ -186,8 +186,19 @@ impl PermissionChecker {
         tool: &str,
         args: &Value,
     ) -> Result<bool> {
+        let request = self.policy_request_for_mcp_call(actor, server, tool, args);
+        self.authorize(request).await
+    }
+
+    pub fn policy_request_for_mcp_call(
+        &self,
+        actor: PolicyActor,
+        server: &str,
+        tool: &str,
+        args: &Value,
+    ) -> PolicyRequest {
         let (effect, risk) = classify_mcp_tool(tool);
-        self.authorize(PolicyRequest {
+        PolicyRequest {
             actor,
             tool_name: format!("mcp::{server}::{tool}"),
             effect,
@@ -202,8 +213,31 @@ impl PermissionChecker {
                 summarize_json(args, 240)
             ),
             details: PolicyDetails::default(),
-        })
-        .await
+        }
+    }
+
+    pub async fn denial_diagnostics(&self, prefix: &str, request: &PolicyRequest) -> String {
+        let mode = self.get_mode().await;
+        let baseline = baseline_policy_decision(mode, request);
+        let reason = match baseline {
+            PolicyDecision::Allow => "authorization returned false despite baseline allow",
+            PolicyDecision::Ask => {
+                "no matching remembered grant, or confirmation was denied/timed out"
+            }
+            PolicyDecision::Deny => "blocked by baseline policy",
+        };
+        format!(
+            "{prefix}: actor={} source={} mode={} tool={} effect={} risk={} baseline_decision={} reason={} description={}",
+            request.actor.label(),
+            request.actor.source.as_str(),
+            mode.as_str(),
+            request.tool_name,
+            request.effect.as_str(),
+            request.risk.as_str(),
+            baseline.as_str(),
+            reason,
+            request.description,
+        )
     }
 
     pub async fn authorize_boundary_access(
