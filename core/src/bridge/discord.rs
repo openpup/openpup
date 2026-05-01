@@ -72,7 +72,7 @@ impl DiscordBridge {
     pub async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         let url = format!("{DISCORD_API}/channels/{}/messages", msg.chat_id);
         let mut body = json!({
-            "content": truncate_discord_message(&msg.text),
+            "content": msg.text,
             "allowed_mentions": { "parse": [] },
         });
         if let Some(reply_id) = msg.reply_to_id.as_deref().filter(|value| !value.is_empty()) {
@@ -85,7 +85,7 @@ impl DiscordBridge {
         debug!(
             "[discord] send to {}: {} chars",
             msg.chat_id,
-            msg.text.len()
+            msg.text.chars().count()
         );
         let response = self
             .client
@@ -327,18 +327,6 @@ impl DiscordBridge {
                 .await;
         }
     }
-}
-
-fn truncate_discord_message(text: &str) -> String {
-    let mut result = String::new();
-    for ch in text.chars() {
-        if result.len() + ch.len_utf8() > 1900 {
-            result.push_str("\n…");
-            break;
-        }
-        result.push(ch);
-    }
-    result
 }
 
 fn truncate_thread_name(name: &str) -> String {

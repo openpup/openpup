@@ -753,17 +753,18 @@ impl BridgeManager {
             } else {
                 text
             };
-            if let Err(e) = bridge
-                .send(&OutboundMessage {
-                    platform: Platform::Discord,
-                    chat_id: target_chat_id,
-                    text,
-                    reply_to_id: None,
-                    msg_type: OutboundType::Progress,
-                })
-                .await
-            {
-                warn!("[discord] failed to project channel event: {e}");
+            let outbound = OutboundMessage {
+                platform: Platform::Discord,
+                chat_id: target_chat_id,
+                text,
+                reply_to_id: None,
+                msg_type: OutboundType::Progress,
+            };
+            for segment in formatter::expand_outbound_message(outbound) {
+                if let Err(e) = bridge.send(&segment).await {
+                    warn!("[discord] failed to project channel event: {e}");
+                    break;
+                }
             }
             if event.kind == "completed" {
                 if let Some(thread_id) = self.discord_thread_for_channel(&event.channel_id).await {

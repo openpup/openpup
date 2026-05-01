@@ -169,30 +169,37 @@ async fn run_job(
     };
 
     if should_notify && !job.notify.channels.is_empty() {
-        let message = if status == "completed" {
-            let preview: String = output.chars().take(500).collect();
-            format!(
-                "✅ {} 完成 · 耗时 {}s\n──\n{}",
-                job.name, elapsed_secs, preview
-            )
-        } else {
-            let next_time = next_fire_time(&job.schedule)
-                .map(|t| {
-                    chrono::DateTime::from_timestamp(t, 0)
-                        .map(|dt| dt.with_timezone(&Local).format("%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| t.to_string())
-                })
-                .unwrap_or_else(|| "-".to_string());
-            format!(
-                "❌ {} 失败\n{}\n──\ncron: {}\n下次执行: {}",
-                job.name, output, job.schedule, next_time
-            )
-        };
-
+        let message = format_job_notification(&job, &status, &output, elapsed_secs);
         if let Some(outbox) = bridge_outbox.as_ref() {
             send_job_notification(outbox, &job.notify.channels, &message).await;
         }
     }
+}
+
+fn format_job_notification(
+    job: &ScheduledJob,
+    status: &str,
+    output: &str,
+    elapsed_secs: u64,
+) -> String {
+    if status == "completed" {
+        return format!(
+            "✅ {} 完成 · 耗时 {}s\n──\n{}",
+            job.name, elapsed_secs, output
+        );
+    }
+
+    let next_time = next_fire_time(&job.schedule)
+        .map(|t| {
+            chrono::DateTime::from_timestamp(t, 0)
+                .map(|dt| dt.with_timezone(&Local).format("%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| t.to_string())
+        })
+        .unwrap_or_else(|| "-".to_string());
+    format!(
+        "❌ {} 失败\n{}\n──\ncron: {}\n下次执行: {}",
+        job.name, output, job.schedule, next_time
+    )
 }
 
 /// Send a notification message to the specified bridge channels.
@@ -390,5 +397,40 @@ async fn tick_alpha_heartbeat(
         .await;
     if let Some(sink) = events.as_ref() {
         emit_event(sink.as_ref(), "heartbeat_completed", serde_json::json!({}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::job_registry::{JobMode, JobStep, NotifyConfig, NotifyWhen};
+
+    fn sample_job() -> ScheduledJob {
+        ScheduledJob {
+            id: "job_test".to_string(),
+            name: "测试任务".to_string(),
+            schedule: "0 8 * * *".to_string(),
+            enabled: true,
+            created_at: 0,
+            mode: JobMode::Single,
+            steps: vec![JobStep {
+                skill: "test_skill".to_string(),
+                input: String::new(),
+            }],
+            notify: NotifyConfig {
+                when: NotifyWhen::Always,
+                channels: vec!["telegram".to_string()],
+            },
+        }
+    }
+
+    #[test]
+    fn completed_job_notification_preserves_full_output() {
+        let output = format!("{}TAIL", "内容".repeat(400));
+        let message = format_job_notification(&sample_job(), "completed", &output, 12);
+
+        assert!(message.starts_with("✅ 测试任务 完成 · 耗时 12s"));
+        assert!(message.contains(&output));
+        assert!(message.ends_with("TAIL"));
     }
 }

@@ -35,7 +35,10 @@ pub fn expand_outbound_message(msg: OutboundMessage) -> Vec<OutboundMessage> {
     };
     let append_segment_index = matches!(
         msg.msg_type,
-        OutboundType::Result | OutboundType::Error | OutboundType::PermRequest
+        OutboundType::Result
+            | OutboundType::Progress
+            | OutboundType::Error
+            | OutboundType::PermRequest
     );
     let segments = split_text(&msg.text, max_chars, append_segment_index);
     if segments.is_empty() {
@@ -83,13 +86,13 @@ fn split_text(output: &str, segment_max_chars: usize, append_segment_index: bool
             .unwrap_or(remaining.len());
         let window = &remaining[..byte_limit];
 
-        // Try to split at a paragraph boundary.
+        // Try to split after a paragraph boundary.
         let split_byte = window
             .rmatch_indices("\n\n")
             .next()
-            .map(|(i, _)| i)
-            // Fall back to a line boundary.
-            .or_else(|| window.rfind('\n'))
+            .map(|(i, marker)| i + marker.len())
+            // Fall back to after a line boundary.
+            .or_else(|| window.rfind('\n').map(|i| i + '\n'.len_utf8()))
             // Last resort: split exactly at the char boundary.
             .unwrap_or(byte_limit);
 
@@ -101,7 +104,7 @@ fn split_text(output: &str, segment_max_chars: usize, append_segment_index: bool
         };
 
         segments.push(remaining[..split_byte].to_string());
-        remaining = remaining[split_byte..].trim_start_matches('\n');
+        remaining = &remaining[split_byte..];
     }
 
     // Add segment indicators when there are multiple parts.
@@ -120,4 +123,86 @@ pub fn format_perm_request(action_desc: &str, skill: &str) -> String {
         "\u{26a0}\u{fe0f} {} needs your permission\n\n{}\n\nReply yes to allow, no to deny",
         skill, action_desc
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(platform: Platform, text: String, msg_type: OutboundType) -> OutboundMessage {
+        OutboundMessage {
+            platform,
+            chat_id: "chat".to_string(),
+            text,
+            reply_to_id: Some("reply".to_string()),
+            msg_type,
+        }
+    }
+
+    fn join_segment_text(segments: &[OutboundMessage]) -> String {
+        let total = segments.len();
+        segments
+            .iter()
+            .enumerate()
+            .map(|(i, segment)| {
+                let marker = format!("\n\n[{}/{}]", i + 1, total);
+                segment
+                    .text
+                    .strip_suffix(&marker)
+                    .unwrap_or(&segment.text)
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn discord_result_segments_preserve_multibyte_text() {
+        let text = "未缓存修改".repeat(500);
+        let segments = expand_outbound_message(message(
+            Platform::Discord,
+            text.clone(),
+            OutboundType::Result,
+        ));
+
+        assert!(segments.len() > 1);
+        assert_eq!(join_segment_text(&segments), text);
+        assert!(segments
+            .iter()
+            .all(|segment| { segment.text.chars().count() <= DISCORD_SEGMENT_MAX_CHARS + 16 }));
+        assert!(segments[0].reply_to_id.is_some());
+        assert!(segments[1..]
+            .iter()
+            .all(|segment| segment.reply_to_id.is_none()));
+    }
+
+    #[test]
+    fn long_progress_segments_are_indexed() {
+        let text = "progress line\n".repeat(400);
+        let segments =
+            expand_outbound_message(message(Platform::Telegram, text, OutboundType::Progress));
+
+        assert!(segments.len() > 1);
+        assert!(segments[0]
+            .text
+            .ends_with(&format!("\n\n[1/{}]", segments.len())));
+    }
+
+    #[test]
+    fn segmentation_preserves_newline_boundaries() {
+        let text = format!(
+            "{}\n\n{}\n{}",
+            "第一段内容".repeat(450),
+            "第二段内容".repeat(450),
+            "第三段内容".repeat(450)
+        );
+        let segments = expand_outbound_message(message(
+            Platform::Telegram,
+            text.clone(),
+            OutboundType::Result,
+        ));
+
+        assert!(segments.len() > 1);
+        assert_eq!(join_segment_text(&segments), text);
+    }
 }
