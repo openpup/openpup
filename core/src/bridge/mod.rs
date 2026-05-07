@@ -1215,7 +1215,7 @@ impl BridgeManager {
                     None
                 };
 
-                let auth_result = if let Some(_) = discord_bound_channel {
+                let auth_result = if discord_bound_channel.is_some() {
                     manager.authorize_bound_discord_thread(&inbound, &chat_id).await
                 } else {
                     OwnerAuth::new(manager.current_config()).verify(&inbound)

@@ -1002,6 +1002,12 @@ impl MCPOrchestrator {
     }
 }
 
+impl Default for MCPOrchestrator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Call a remote MCP tool via streamable HTTP transport.
 async fn call_remote(entry: &McpServerEntry, tool: &str, params: &Value) -> Result<Value> {
     rmcp_call_tool(&entry.base_url, entry, tool, params).await
@@ -1083,13 +1089,7 @@ async fn rmcp_call_tool(
     let text = result
         .content
         .iter()
-        .filter_map(|c| {
-            if let Some(t) = c.as_text() {
-                Some(t.text.as_str())
-            } else {
-                None
-            }
-        })
+        .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
         .collect::<Vec<_>>()
         .join("\n");
 

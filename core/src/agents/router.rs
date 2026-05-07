@@ -132,14 +132,12 @@ impl Router {
         if key == "alpha" || enabled_pups.iter().any(|p| p == key) {
             return key.to_string();
         }
-        if key.starts_with("skill:") {
-            let skill_name = &key["skill:".len()..];
+        if let Some(skill_name) = key.strip_prefix("skill:") {
             if skill_entries.iter().any(|(n, _)| n == skill_name) {
                 return key.to_string();
             }
         }
-        if key.starts_with("channel:") {
-            let pups_str = &key["channel:".len()..];
+        if let Some(pups_str) = key.strip_prefix("channel:") {
             let valid_pups: Vec<String> = pups_str
                 .split(',')
                 .map(|s| s.trim().to_string())

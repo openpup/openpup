@@ -1,3 +1,9 @@
+#![allow(
+    clippy::large_enum_variant,
+    clippy::should_implement_trait,
+    clippy::too_many_arguments
+)]
+
 pub mod agents;
 pub mod app;
 pub mod bridge;

@@ -15,7 +15,6 @@ const MAX_QR_REFRESH_COUNT: usize = 3;
 
 #[derive(Debug, Clone)]
 struct ActiveLogin {
-    session_key: String,
     qrcode: String,
     qrcode_url: String,
     started_at_ms: i64,
@@ -60,7 +59,6 @@ impl LoginManager {
             .fetch_qrcode(bot_type.or(Some(DEFAULT_ILINK_BOT_TYPE)))
             .await?;
         let login = ActiveLogin {
-            session_key: session_key.clone(),
             qrcode: qr.qrcode.clone(),
             qrcode_url: qr.qrcode_img_content.clone(),
             started_at_ms: now_ms(),
@@ -154,7 +152,6 @@ impl LoginManager {
                     self.active_logins.write().await.insert(
                         session_key.to_string(),
                         ActiveLogin {
-                            session_key: session_key.to_string(),
                             qrcode: refreshed.qrcode.clone(),
                             qrcode_url: refreshed.qrcode_img_content.clone(),
                             started_at_ms: now_ms(),

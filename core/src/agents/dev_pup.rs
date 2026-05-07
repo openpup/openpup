@@ -2,6 +2,7 @@ use crate::agents::specialist::{
     build_prompt_with_template, PupToolPermissions, SpecialistPup, Task,
 };
 
+#[derive(Default)]
 pub struct DevPup;
 
 impl DevPup {

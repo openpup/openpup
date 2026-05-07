@@ -24,7 +24,7 @@ pub struct SkillMetadata {
     pub triggers: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct SkillPermissions {
     #[serde(default)]
     pub shell: bool,
@@ -42,21 +42,6 @@ pub struct SkillPermissions {
     pub dangerous: bool,
     #[serde(default)]
     pub dangerous_operations: bool,
-}
-
-impl Default for SkillPermissions {
-    fn default() -> Self {
-        Self {
-            shell: false,
-            sandbox_shell: false,
-            file_read: false,
-            file_write: false,
-            network: false,
-            mcp: false,
-            dangerous: false,
-            dangerous_operations: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

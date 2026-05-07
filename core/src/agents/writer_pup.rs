@@ -1,5 +1,6 @@
 use crate::agents::specialist::{build_prompt_with_template, SpecialistPup, Task};
 
+#[derive(Default)]
 pub struct WriterPup;
 
 impl WriterPup {

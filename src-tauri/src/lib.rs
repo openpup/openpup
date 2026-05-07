@@ -459,8 +459,6 @@ fn display_name_for_remote_actor(
             .map(|key| if key == "alpha" { "Alpha" } else { key })
             .unwrap_or(actor_display_name);
         format!("{actor} · {client_display_name}")
-    } else if actor_kind == "human" {
-        format!("{client_display_name} / {actor_display_name}")
     } else {
         format!("{client_display_name} / {actor_display_name}")
     }

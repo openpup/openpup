@@ -4,6 +4,7 @@
 use anyhow::{anyhow, Result};
 
 /// Placeholder that always returns an error directing users to the remote API.
+#[derive(Default)]
 pub struct LocalEmbedder;
 
 impl LocalEmbedder {

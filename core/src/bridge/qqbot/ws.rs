@@ -386,7 +386,7 @@ impl QQBotGateway {
                 warn!("[qqbot] rate limited (4008), waiting 60s");
                 LoopAction::Reconnect
             }
-            Some(c) if matches!(c, 4006 | 4007 | 4009 | 4900..=4913) => LoopAction::ReconnectFresh,
+            Some(4006 | 4007 | 4009 | 4900..=4913) => LoopAction::ReconnectFresh,
             _ => LoopAction::Reconnect,
         }
     }

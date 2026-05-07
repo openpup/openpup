@@ -387,6 +387,12 @@ impl PermissionChecker {
     }
 }
 
+impl Default for PermissionChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn classify_mcp_tool(tool: &str) -> (EffectKind, PolicyRisk) {
     let lower = tool.to_ascii_lowercase();
     let read_only = [
@@ -397,15 +403,11 @@ fn classify_mcp_tool(tool: &str) -> (EffectKind, PolicyRisk) {
     if read_only {
         return (EffectKind::McpCall, PolicyRisk::Low);
     }
-    let side_effect = [
+    let _side_effect = [
         "create", "update", "delete", "send", "post", "write", "patch", "merge", "close", "open",
         "run", "execute",
     ]
     .iter()
     .any(|prefix| lower.starts_with(prefix) || lower.contains(&format!("_{prefix}")));
-    if side_effect {
-        (EffectKind::McpCall, PolicyRisk::Medium)
-    } else {
-        (EffectKind::McpCall, PolicyRisk::Medium)
-    }
+    (EffectKind::McpCall, PolicyRisk::Medium)
 }

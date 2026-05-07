@@ -34,6 +34,7 @@ use crate::skills::executor::SkillExecutor;
 use crate::tools::primitive::ToolPermissions;
 
 type BridgeProgressHook = Arc<dyn Fn(String) + Send + Sync>;
+type LayerHook = Arc<dyn Fn(usize, Vec<String>) + Send + Sync>;
 
 // ─── Pup configuration ────────────────────────────────────────────────────────
 
@@ -205,7 +206,7 @@ pub struct AlphaPup {
     last_kb_summary_count: Arc<std::sync::atomic::AtomicU32>,
     last_artifact_ingest_count: Arc<std::sync::atomic::AtomicU32>,
     pub channel_manager: Arc<ChannelManager>,
-    layer_hook: Arc<RwLock<Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>>>,
+    layer_hook: Arc<RwLock<Option<LayerHook>>>,
     /// Whether to auto-ingest conversation summaries to KB.
     pub kb_auto_ingest_summaries: Arc<AtomicBool>,
     /// Whether to auto-ingest collaboration artifacts to KB.
@@ -309,10 +310,7 @@ impl AlphaPup {
         }
     }
 
-    pub async fn set_layer_hook(
-        &self,
-        hook: Option<Arc<dyn Fn(usize, Vec<String>) + Send + Sync>>,
-    ) {
+    pub async fn set_layer_hook(&self, hook: Option<LayerHook>) {
         *self.layer_hook.write().await = hook;
     }
 
@@ -1973,10 +1971,8 @@ impl AlphaPup {
 
         // Auto-ingest aggregated result as artifact to KB
         if let Ok(ref text) = aggregated {
-            if text.len() > 100 {
-                if self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
-                    self.auto_ingest_artifact(msg, text).await;
-                }
+            if text.len() > 100 && self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
+                self.auto_ingest_artifact(msg, text).await;
             }
         }
 
@@ -2178,15 +2174,12 @@ impl AlphaPup {
                         &pup_key,
                         &full_msg,
                         &owner_ctx,
-                        {
-                            let review_tool = if deps.is_empty() {
-                                None
-                            } else {
-                                Some(ReviewToolContext {
-                                    allowed_targets: deps.clone(),
-                                })
-                            };
-                            review_tool
+                        if deps.is_empty() {
+                            None
+                        } else {
+                            Some(ReviewToolContext {
+                                allowed_targets: deps.clone(),
+                            })
                         },
                         {
                             let cm_activity = cm_clone.clone();
@@ -2308,10 +2301,21 @@ impl AlphaPup {
                     .map(|pup| pup_display_name(pup))
                     .unwrap_or_else(|| "当前协作结果".to_string());
                 format!(
-                    "- {} 对 {} 有异议：{}",
+                    "- {} 对 {} 有异议{}：{}{}",
                     pup_display_name(&request.requester_pup),
                     target,
-                    request.summary
+                    if request.blocking {
+                        "（阻塞）"
+                    } else {
+                        "（非阻塞）"
+                    },
+                    request.summary,
+                    request
+                        .suggested_action
+                        .as_deref()
+                        .filter(|action| !action.trim().is_empty())
+                        .map(|action| format!("；建议：{action}"))
+                        .unwrap_or_default()
                 )
             })
             .collect::<Vec<_>>()
@@ -2603,7 +2607,7 @@ impl AlphaPup {
                                 let refreshed = self
                                     .execute_channel_layer(
                                         &channel_id,
-                                        &[target_subtask.clone()],
+                                        std::slice::from_ref(target_subtask),
                                         &dep_context,
                                         &owner_summary,
                                         events.clone(),
@@ -2723,10 +2727,8 @@ impl AlphaPup {
 
         // Auto-ingest aggregated result as artifact to KB
         if let Ok(ref text) = aggregated {
-            if text.len() > 100 {
-                if self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
-                    self.auto_ingest_artifact(msg, text).await;
-                }
+            if text.len() > 100 && self.kb_auto_ingest_artifacts.load(Ordering::Relaxed) {
+                self.auto_ingest_artifact(msg, text).await;
             }
         }
 
@@ -3197,7 +3199,7 @@ impl AlphaPup {
         let should_compact = if let Some(tokens) = self.get_context_tokens(pup_key).await {
             tokens > context_limit * 2 / 5 // 40% threshold for any compaction
         } else {
-            exchange_count % 10 == 0
+            exchange_count.is_multiple_of(10)
         };
         if should_compact {
             let current_tokens = self
@@ -3226,33 +3228,6 @@ impl AlphaPup {
         Ok(())
     }
 
-    /// Run multiple pups and collect results without channel overhead (bridge path).
-    async fn run_pups_for_results(&self, msg: &str, pup_keys: &[String]) -> Vec<(String, String)> {
-        let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
-        let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
-        let handles: Vec<_> = pup_keys
-            .iter()
-            .map(|key| {
-                let s = self.clone();
-                let k = key.clone();
-                let m = msg.to_string();
-                let o = owner_summary.clone();
-                tokio::spawn(async move {
-                    let result = s
-                        .run_pup_for_channel(&k, &m, &o, &|_, _| {}, None)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"));
-                    (k, result)
-                })
-            })
-            .collect();
-        futures_util::future::join_all(handles)
-            .await
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .collect()
-    }
-
     /// Run a specialist pup's tool-call loop for a channel task (no streaming to chat).
     ///
     /// Returns a boxed future to allow recursive pup_to_pup delegation without
@@ -3272,7 +3247,7 @@ impl AlphaPup {
                     msg,
                     owner_summary,
                     None,
-                    |kind, label| on_activity(kind, label),
+                    on_activity,
                     pup_ctx,
                 )
                 .await?
@@ -3890,9 +3865,7 @@ pub fn infer_context_limit_for_model(model: &str) -> u64 {
         65_536
     } else if m.contains("claude-3") || m.contains("claude-4") {
         200_000
-    } else if m.contains("qwen") {
-        131_072
-    } else if m.contains("llama-3") || m.contains("llama3") {
+    } else if m.contains("qwen") || m.contains("llama-3") || m.contains("llama3") {
         131_072
     } else if m.contains("gemma") {
         8_192

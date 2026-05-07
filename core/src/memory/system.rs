@@ -3125,7 +3125,7 @@ impl MemorySystem {
         }
 
         let mut q = sqlx::query(&sql);
-        if let Some(p) = params.get(0) {
+        if let Some(p) = params.first() {
             q = q.bind(p);
         }
         q = q.bind(limit).bind(offset);

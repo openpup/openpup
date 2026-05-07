@@ -56,7 +56,7 @@ impl LocalMcpServer {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn require_str<'a>(params: &'a Value, key: &str) -> Result<String> {
+fn require_str(params: &Value, key: &str) -> Result<String> {
     params
         .get(key)
         .and_then(|v| v.as_str())
@@ -69,8 +69,8 @@ fn safe_path(raw: &str) -> Result<PathBuf> {
     let app_root = crate::config::app_root()?;
 
     // Expand leading ~
-    let expanded = if raw.starts_with("~/") {
-        app_root.join(&raw[2..])
+    let expanded = if let Some(stripped) = raw.strip_prefix("~/") {
+        app_root.join(stripped)
     } else {
         PathBuf::from(raw)
     };

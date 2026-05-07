@@ -177,11 +177,11 @@ impl Default for PupsConfig {
 /// Falls back to `OPENPUP_APP_ROOT` on platforms where `dirs::home_dir()`
 /// is unavailable (e.g. Android / iOS).
 pub fn expand_tilde(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         let home = dirs::home_dir()
             .or_else(|| std::env::var("OPENPUP_APP_ROOT").ok().map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("."));
-        home.join(&path[2..])
+        home.join(stripped)
     } else {
         PathBuf::from(path)
     }
