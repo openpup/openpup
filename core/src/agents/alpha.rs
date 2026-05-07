@@ -1197,15 +1197,71 @@ impl AlphaPup {
         // Target 85% of limit to leave headroom for the response
         let budget = (limit as f64 * 0.85) as u64;
         while Self::estimate_context_tokens(msgs, tools) > budget && msgs.len() > 2 {
-            // Find the first non-system message to remove (preserve system + last user)
-            if let Some(idx) = msgs.iter().position(|m| m["role"] != "system") {
-                if idx < msgs.len() - 1 {
-                    msgs.remove(idx);
-                    continue;
-                }
-            }
-            break;
+            // Preserve the active user turn and everything after it. Tool-call
+            // protocols require assistant(tool_calls) + tool result messages to
+            // stay paired, so only trim older context before the active turn.
+            let preserve_from = msgs
+                .iter()
+                .rposition(|m| Self::message_role(m) == Some("user"))
+                .unwrap_or_else(|| msgs.len().saturating_sub(1));
+            let Some(idx) = msgs.iter().enumerate().position(|(idx, m)| {
+                idx < preserve_from && Self::message_role(m) != Some("system")
+            }) else {
+                break;
+            };
+
+            Self::remove_context_entry_preserving_tool_groups(msgs, idx, preserve_from);
         }
+    }
+
+    fn message_role(message: &serde_json::Value) -> Option<&str> {
+        message.get("role").and_then(|role| role.as_str())
+    }
+
+    fn assistant_has_tool_calls(message: &serde_json::Value) -> bool {
+        Self::message_role(message) == Some("assistant")
+            && message
+                .get("tool_calls")
+                .and_then(|tool_calls| tool_calls.as_array())
+                .is_some_and(|tool_calls| !tool_calls.is_empty())
+    }
+
+    fn tool_group_start_for_tool_message(
+        msgs: &[serde_json::Value],
+        tool_idx: usize,
+    ) -> Option<usize> {
+        if Self::message_role(msgs.get(tool_idx)?) != Some("tool") {
+            return None;
+        }
+
+        let mut first_tool = tool_idx;
+        while first_tool > 0 && Self::message_role(&msgs[first_tool - 1]) == Some("tool") {
+            first_tool -= 1;
+        }
+
+        first_tool
+            .checked_sub(1)
+            .filter(|idx| Self::assistant_has_tool_calls(&msgs[*idx]))
+    }
+
+    fn remove_context_entry_preserving_tool_groups(
+        msgs: &mut Vec<serde_json::Value>,
+        idx: usize,
+        preserve_from: usize,
+    ) {
+        if idx >= preserve_from || idx >= msgs.len() {
+            return;
+        }
+
+        let start = Self::tool_group_start_for_tool_message(msgs, idx).unwrap_or(idx);
+        let mut end = start + 1;
+        if Self::assistant_has_tool_calls(&msgs[start]) {
+            while end < preserve_from && Self::message_role(&msgs[end]) == Some("tool") {
+                end += 1;
+            }
+        }
+
+        msgs.drain(start..end);
     }
 
     fn build_mcp_task_hint(messages: &[serde_json::Value]) -> String {
@@ -3710,6 +3766,7 @@ impl AlphaPup {
 #[cfg(test)]
 mod tests {
     use super::AlphaPup;
+    use serde_json::json;
 
     #[test]
     fn kb_summary_frequency_aliases_normalize_to_supported_values() {
@@ -3737,6 +3794,65 @@ mod tests {
         assert_eq!(AlphaPup::kb_summary_frequency_exchanges("standard"), 16);
         assert_eq!(AlphaPup::kb_summary_frequency_exchanges("conservative"), 32);
         assert_eq!(AlphaPup::kb_summary_frequency_exchanges("unknown"), 16);
+    }
+
+    #[test]
+    fn context_trimming_preserves_current_tool_call_group() {
+        let mut messages = vec![
+            json!({ "role": "system", "content": "system" }),
+            json!({ "role": "user", "content": "old request" }),
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_old",
+                    "type": "function",
+                    "function": { "name": "old_tool", "arguments": "{}" }
+                }]
+            }),
+            json!({ "role": "tool", "tool_call_id": "call_old", "content": "old result" }),
+            json!({ "role": "user", "content": "current request" }),
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_current",
+                    "type": "function",
+                    "function": { "name": "current_tool", "arguments": "{}" }
+                }]
+            }),
+            json!({ "role": "tool", "tool_call_id": "call_current", "content": "current result" }),
+        ];
+
+        AlphaPup::trim_context_to_budget(&mut messages, &[], 1);
+
+        let roles: Vec<&str> = messages.iter().filter_map(AlphaPup::message_role).collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "tool"]);
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_current");
+        assert_eq!(messages[3]["tool_call_id"], "call_current");
+    }
+
+    #[test]
+    fn removing_tool_result_removes_the_preceding_tool_call_group() {
+        let mut messages = vec![
+            json!({ "role": "system", "content": "system" }),
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_old",
+                    "type": "function",
+                    "function": { "name": "old_tool", "arguments": "{}" }
+                }]
+            }),
+            json!({ "role": "tool", "tool_call_id": "call_old", "content": "old result" }),
+            json!({ "role": "user", "content": "current request" }),
+        ];
+
+        AlphaPup::remove_context_entry_preserving_tool_groups(&mut messages, 2, 3);
+
+        let roles: Vec<&str> = messages.iter().filter_map(AlphaPup::message_role).collect();
+        assert_eq!(roles, vec!["system", "user"]);
     }
 }
 
