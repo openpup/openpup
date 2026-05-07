@@ -7,7 +7,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.31...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.32...HEAD)
+
+---
+
+## [0.1.32](https://github.com/openpup/openpup/compare/v0.1.31...v0.1.32) — 2026-05-07
+
+### Added
+- **Semantic MCP tool retrieval** — MCP tool selection can now use semantic retrieval so large tool catalogs surface more relevant tools without flooding the model context.
+
+### Changed
+- **Dynamic file-root policy gating** — dynamic filesystem roots are now gated by execution mode, keeping elevated local access aligned with the active policy boundary.
+- **Permission denial diagnostics** — denial messages now include clearer policy context so blocked tool calls are easier to understand and resolve.
+- **Release baseline** — desktop app metadata, npm workspace version, XMTP helper package version, workspace crates, and root lockfiles are aligned to `0.1.32`.
+
+### Fixed
+- **DeepSeek thinking tool rounds** — streaming tool-call loops now preserve `reasoning_content` in reconstructed assistant messages, fixing DeepSeek thinking-mode 400 errors when skills or tools run across multiple rounds.
+- **Bridge message segmentation** — bridge outbound messages are segmented more reliably for delivery across supported chat platforms.
 
 ---
 
