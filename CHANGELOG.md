@@ -23,6 +23,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - **DeepSeek thinking tool rounds** — streaming tool-call loops now preserve `reasoning_content` in reconstructed assistant messages, fixing DeepSeek thinking-mode 400 errors when skills or tools run across multiple rounds.
+- **Tool-call context trimming** — context-budget trimming now preserves assistant `tool_calls` and matching `tool` responses as protocol groups, avoiding orphaned tool messages that strict providers reject.
 - **Bridge message segmentation** — bridge outbound messages are segmented more reliably for delivery across supported chat platforms.
 
 ---
