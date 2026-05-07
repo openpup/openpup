@@ -703,6 +703,7 @@ impl LlmClient {
         let mut byte_stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full_content = String::new();
+        let mut full_reasoning_content = String::new();
         let mut chunk_count: usize = 0;
         let mut stream_usage: Option<TokenUsage> = None;
 
@@ -766,10 +767,14 @@ impl LlmClient {
                                 }
                             }
 
-                            // Reasoning tokens (DeepSeek etc.) — skip for now
+                            // Reasoning tokens (DeepSeek etc.) are not final
+                            // answer text, but some providers require them to
+                            // be replayed in the assistant message before tool
+                            // results are submitted on the next round.
                             if let Some(tok) = delta["reasoning_content"].as_str() {
                                 if !tok.is_empty() {
                                     chunk_count += 1;
+                                    full_reasoning_content.push_str(tok);
                                 }
                             }
 
@@ -829,32 +834,8 @@ impl LlmClient {
             })
             .collect();
 
-        // Reconstruct the raw assistant message for conversation history
-        let content_val = if full_content.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String(full_content.clone())
-        };
-        let mut raw_message = serde_json::json!({
-            "role": "assistant",
-            "content": content_val,
-        });
-        if !tool_calls.is_empty() {
-            let tc_arr: Vec<serde_json::Value> = tool_calls
-                .iter()
-                .map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                        }
-                    })
-                })
-                .collect();
-            raw_message["tool_calls"] = serde_json::Value::Array(tc_arr);
-        }
+        let raw_message =
+            build_assistant_raw_message(&full_content, &full_reasoning_content, &tool_calls);
 
         let content = if full_content.is_empty() {
             None
@@ -994,6 +975,46 @@ fn parse_usage(val: &serde_json::Value) -> Option<TokenUsage> {
     })
 }
 
+fn build_assistant_raw_message(
+    full_content: &str,
+    full_reasoning_content: &str,
+    tool_calls: &[ToolCall],
+) -> serde_json::Value {
+    let content_val = if full_content.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(full_content.to_string())
+    };
+    let mut raw_message = serde_json::json!({
+        "role": "assistant",
+        "content": content_val,
+    });
+
+    if !full_reasoning_content.is_empty() {
+        raw_message["reasoning_content"] =
+            serde_json::Value::String(full_reasoning_content.to_string());
+    }
+
+    if !tool_calls.is_empty() {
+        let tc_arr: Vec<serde_json::Value> = tool_calls
+            .iter()
+            .map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                    }
+                })
+            })
+            .collect();
+        raw_message["tool_calls"] = serde_json::Value::Array(tc_arr);
+    }
+
+    raw_message
+}
+
 const EMBED_MAX_CHARS_PER_CHUNK: usize = 24_000;
 const EMBED_CHUNK_OVERLAP_CHARS: usize = 512;
 
@@ -1098,7 +1119,12 @@ fn average_embeddings(embeddings: &[Vec<f32>]) -> Result<Vec<f32>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{average_embeddings, split_embedding_input, EMBED_MAX_CHARS_PER_CHUNK};
+    use serde_json::json;
+
+    use super::{
+        average_embeddings, build_assistant_raw_message, split_embedding_input, ToolCall,
+        EMBED_MAX_CHARS_PER_CHUNK,
+    };
 
     #[test]
     fn split_embedding_input_keeps_small_text_single_chunk() {
@@ -1120,5 +1146,37 @@ mod tests {
     fn average_embeddings_returns_mean_vector() {
         let avg = average_embeddings(&[vec![1.0, 3.0], vec![3.0, 5.0]]).unwrap();
         assert_eq!(avg, vec![2.0, 4.0]);
+    }
+
+    #[test]
+    fn assistant_raw_message_preserves_reasoning_content_for_tool_rounds() {
+        let raw = build_assistant_raw_message(
+            "",
+            "I should call a tool first.",
+            &[ToolCall {
+                id: "call_1".to_string(),
+                name: "file_read".to_string(),
+                arguments: json!({ "path": "/tmp/example.txt" }),
+            }],
+        );
+
+        assert_eq!(raw["role"], "assistant");
+        assert_eq!(raw["content"], serde_json::Value::Null);
+        assert_eq!(raw["reasoning_content"], "I should call a tool first.");
+        assert_eq!(raw["tool_calls"][0]["id"], "call_1");
+        assert_eq!(raw["tool_calls"][0]["function"]["name"], "file_read");
+        assert_eq!(
+            raw["tool_calls"][0]["function"]["arguments"],
+            "{\"path\":\"/tmp/example.txt\"}"
+        );
+    }
+
+    #[test]
+    fn assistant_raw_message_omits_empty_reasoning_content() {
+        let raw = build_assistant_raw_message("done", "", &[]);
+
+        assert_eq!(raw["content"], "done");
+        assert!(raw.get("reasoning_content").is_none());
+        assert!(raw.get("tool_calls").is_none());
     }
 }
