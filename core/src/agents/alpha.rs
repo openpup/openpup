@@ -1084,10 +1084,15 @@ impl AlphaPup {
     ///
     /// The loop uses non-streaming `chat_with_tools` for tool rounds.
     /// The final text response is emitted via `on_token` as a single chunk.
-    /// Maximum MCP tools to inject per call — prevents context bloat and
-    /// hitting provider tool-count limits. When the user has more MCP tools
-    /// than this, `tools_for_task` keeps only the most relevant ones.
-    const MAX_MCP_TOOLS: usize = 30;
+    /// Maximum MCP tool schemas to expose in a single Alpha run. This keeps
+    /// the tool list broad enough for general work while avoiding excessive
+    /// prompt growth and provider-side tool-count pressure.
+    const MAX_MCP_TOOLS: usize = 32;
+
+    /// Maximum assistant -> tool -> assistant rounds for the main Alpha loop.
+    /// Alpha gets a slightly larger budget than a standalone skill run, then
+    /// switches to a forced wrap-up instead of hard-failing.
+    const MAX_TOOL_ROUNDS: usize = 24;
 
     /// Build the skill catalog: a single `activate_skill` tool whose description
     /// lists all enabled skills.  When the LLM calls `activate_skill(name)`,
@@ -1500,7 +1505,6 @@ impl AlphaPup {
         }
 
         let mut msgs = messages;
-        const MAX_ITER: usize = 20;
         let context_limit = self.get_context_limit();
 
         // ── Inject current time into system message ──
@@ -1509,7 +1513,7 @@ impl AlphaPup {
         // ── Skill catalog: single `activate_skill` tool listing all enabled skills ──
         let (mut cached_skill_tools, mut cached_skill_gen) = self.build_skill_catalog().await;
 
-        for iter in 0..MAX_ITER {
+        for iter in 0..Self::MAX_TOOL_ROUNDS {
             if abort.load(Ordering::Relaxed) {
                 debug!("[{agent_name}] aborted at iteration {iter}");
                 return Ok(AgentRunResult::FinalText(String::new()));
@@ -1913,13 +1917,17 @@ impl AlphaPup {
 
         // Soft limit: inject a system message asking the LLM to wrap up,
         // rather than hard-failing. This lets the model produce a partial answer.
-        debug!("[{agent_name}] reached MAX_ITER ({MAX_ITER}), requesting wrap-up");
+        debug!(
+            "[{agent_name}] reached MAX_TOOL_ROUNDS ({}), requesting wrap-up",
+            Self::MAX_TOOL_ROUNDS
+        );
         msgs.push(serde_json::json!({
             "role": "system",
             "content": format!(
-                "You have reached the maximum number of tool-call iterations ({MAX_ITER}). \
+                "You have reached the maximum number of tool-call rounds ({}). \
                  You MUST now produce a final text response. Summarise what you have accomplished \
-                 so far and note any remaining steps the user should complete manually."
+                 so far and note any remaining steps the user should complete manually.",
+                Self::MAX_TOOL_ROUNDS
             )
         }));
         // One final LLM call without tools to get a wrap-up response

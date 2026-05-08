@@ -21,6 +21,16 @@ pub struct SkillExecutor {
 }
 
 impl SkillExecutor {
+    /// Maximum MCP tool schemas injected into a standalone skill run.
+    /// Skills usually operate on a narrower task than Alpha, so we keep the
+    /// pool smaller to reduce prompt bloat and improve tool selection quality.
+    const MAX_MCP_TOOLS: usize = 24;
+
+    /// Maximum assistant -> tool -> assistant rounds in a standalone skill run.
+    /// This is a hard stop because scheduled/command-driven skill execution has
+    /// no broader conversation loop to gracefully wrap up inside.
+    const MAX_TOOL_ROUNDS: usize = 24;
+
     /// Load a skill's prompt and permissions for context injection.
     /// Confirms dangerous skills with the user before returning.
     pub async fn load_skill_prompt(&self, name: &str) -> Result<(String, SkillPermissions)> {
@@ -123,8 +133,7 @@ impl SkillExecutor {
         let mut available_tools = self.tools.available_tools(&tool_perms);
 
         if permissions.mcp {
-            const MAX_MCP: usize = 20;
-            let mcp_specs = self.mcp.tools_for_task(input, MAX_MCP).await;
+            let mcp_specs = self.mcp.tools_for_task(input, Self::MAX_MCP_TOOLS).await;
             debug!("[skill/{name}] injecting {} MCP tools", mcp_specs.len());
             available_tools.extend(mcp_specs);
         }
@@ -134,9 +143,7 @@ impl SkillExecutor {
             serde_json::json!({ "role": "user", "content": input }),
         ];
 
-        const MAX_ITERATIONS: usize = 20;
-
-        for iteration in 0..MAX_ITERATIONS {
+        for iteration in 0..Self::MAX_TOOL_ROUNDS {
             if abort.load(Ordering::Relaxed) {
                 debug!("[skill/{name}] aborted at iteration {iteration}");
                 return Ok(String::new());
@@ -257,7 +264,8 @@ impl SkillExecutor {
         }
 
         Err(anyhow!(
-            "skill '{name}' exceeded maximum tool-call iterations ({MAX_ITERATIONS})"
+            "skill '{name}' exceeded maximum tool-call rounds ({})",
+            Self::MAX_TOOL_ROUNDS
         ))
     }
 }
