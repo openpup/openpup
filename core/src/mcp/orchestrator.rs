@@ -62,8 +62,8 @@ pub struct MCPOrchestrator {
     servers: Arc<RwLock<HashMap<String, McpServerEntry>>>,
     /// Cache of tools discovered from remote servers.
     tool_cache: Arc<RwLock<HashMap<String, Vec<McpToolInfo>>>>,
-    /// Maps sanitized fn_name → (original_server, original_tool_name) for dispatch.
-    fn_name_map: Arc<RwLock<HashMap<String, (String, String)>>>,
+    /// Productized MCP catalog snapshot containing raw tools plus derived views.
+    catalog: Arc<RwLock<Arc<McpCatalogSnapshot>>>,
     /// Optional embedder used to rank MCP tools semantically.
     embedder: Arc<RwLock<Option<Arc<LlmClient>>>>,
     /// In-memory semantic retrieval cache keyed by OpenAI function name.
@@ -75,6 +75,25 @@ pub struct MCPOrchestrator {
 struct ToolEmbedding {
     doc_hash: u64,
     vector: Vec<f32>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedMcpTool {
+    raw: McpToolInfo,
+    fn_name: String,
+    openai_spec: serde_json::Value,
+    retrieval_doc: String,
+    parameter_names: String,
+    parameter_descriptions: String,
+    doc_hash: u64,
+}
+
+#[derive(Debug, Default)]
+struct McpCatalogSnapshot {
+    entries: Vec<Arc<CachedMcpTool>>,
+    by_fn_name: HashMap<String, Arc<CachedMcpTool>>,
+    fn_name_map: HashMap<String, (String, String)>,
+    openai_specs: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,12 +119,18 @@ struct ToolSelection<'a> {
     source: ToolSelectionSource,
 }
 
+struct CatalogToolSelection<'a> {
+    tools: Vec<&'a CachedMcpTool>,
+    best_lexical_score: usize,
+    source: ToolSelectionSource,
+}
+
 impl MCPOrchestrator {
     pub fn new() -> Self {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
-            fn_name_map: Arc::new(RwLock::new(HashMap::new())),
+            catalog: Arc::new(RwLock::new(Arc::new(McpCatalogSnapshot::default()))),
             embedder: Arc::new(RwLock::new(None)),
             tool_embedding_cache: Arc::new(RwLock::new(HashMap::new())),
             config_path: None,
@@ -130,7 +155,7 @@ impl MCPOrchestrator {
         let orchestrator = Self {
             servers: Arc::new(RwLock::new(servers.clone())),
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
-            fn_name_map: Arc::new(RwLock::new(HashMap::new())),
+            catalog: Arc::new(RwLock::new(Arc::new(McpCatalogSnapshot::default()))),
             embedder: Arc::new(RwLock::new(None)),
             tool_embedding_cache: Arc::new(RwLock::new(HashMap::new())),
             config_path: Some(path),
@@ -147,12 +172,7 @@ impl MCPOrchestrator {
                             tools.len(),
                             entry.name
                         );
-                        self_clone
-                            .tool_cache
-                            .write()
-                            .await
-                            .insert(entry.name.clone(), tools);
-                        self_clone.spawn_warm_tool_embeddings_from_cache().await;
+                        self_clone.replace_server_tools(&entry.name, tools).await;
                     }
                     Err(e) => warn!("[mcp] startup discovery for '{}' failed: {e}", entry.name),
                 }
@@ -185,12 +205,7 @@ impl MCPOrchestrator {
                         tools.len(),
                         entry.name
                     );
-                    self_clone
-                        .tool_cache
-                        .write()
-                        .await
-                        .insert(entry.name.clone(), tools);
-                    self_clone.spawn_warm_tool_embeddings_from_cache().await;
+                    self_clone.replace_server_tools(&entry.name, tools).await;
                 }
                 Err(e) => warn!("[mcp] auto-discovery for '{}' failed: {e}", entry.name),
             }
@@ -210,20 +225,17 @@ impl MCPOrchestrator {
             guard.remove(name);
             guard.insert(entry.name.clone(), entry.clone());
         }
-        self.tool_cache.write().await.remove(name);
-        self.tool_cache.write().await.remove(&entry.name);
+        self.remove_server_tools(name).await;
+        if name != entry.name {
+            self.remove_server_tools(&entry.name).await;
+        }
         self.persist().await?;
         if entry.enabled {
             let self_clone = self.clone();
             tokio::spawn(async move {
                 match self_clone.discover_server_tools(&entry).await {
                     Ok(tools) => {
-                        self_clone
-                            .tool_cache
-                            .write()
-                            .await
-                            .insert(entry.name.clone(), tools);
-                        self_clone.spawn_warm_tool_embeddings_from_cache().await;
+                        self_clone.replace_server_tools(&entry.name, tools).await;
                     }
                     Err(e) => warn!(
                         "[mcp] auto-discovery for updated '{}' failed: {e}",
@@ -237,7 +249,7 @@ impl MCPOrchestrator {
 
     pub async fn remove_server(&self, name: &str) -> Result<()> {
         self.servers.write().await.remove(name);
-        self.tool_cache.write().await.remove(name);
+        self.remove_server_tools(name).await;
         self.persist().await
     }
 
@@ -252,19 +264,14 @@ impl MCPOrchestrator {
             }
         };
         if !enabled {
-            self.tool_cache.write().await.remove(name);
+            self.remove_server_tools(name).await;
         } else if let Some(entry) = entry_opt {
             // Re-enabled — re-discover tools in background
             let self_clone = self.clone();
             tokio::spawn(async move {
                 match self_clone.discover_server_tools(&entry).await {
                     Ok(tools) => {
-                        self_clone
-                            .tool_cache
-                            .write()
-                            .await
-                            .insert(entry.name.clone(), tools);
-                        self_clone.spawn_warm_tool_embeddings_from_cache().await;
+                        self_clone.replace_server_tools(&entry.name, tools).await;
                     }
                     Err(e) => warn!("[mcp] re-discovery for '{}' failed: {e}", entry.name),
                 }
@@ -294,11 +301,7 @@ impl MCPOrchestrator {
             if server.enabled {
                 match self.discover_server_tools(&server).await {
                     Ok(tools) => {
-                        self.tool_cache
-                            .write()
-                            .await
-                            .insert(server.name.clone(), tools);
-                        self.spawn_warm_tool_embeddings_from_cache().await;
+                        self.replace_server_tools(&server.name, tools).await;
                     }
                     Err(e) => {
                         warn!("MCP tool discovery for '{}' failed: {e}", server.name);
@@ -350,9 +353,11 @@ impl MCPOrchestrator {
     /// This costs ~10-20 tokens per tool instead of ~100-200 for full schemas.
     /// Use with `deferred_tool_schema()` to fetch the full schema on demand.
     pub async fn deferred_tool_catalog(&self, task: &str, max: usize) -> Vec<serde_json::Value> {
-        let all_specs = self.tools_as_openai_specs().await;
-        self.deferred_tool_catalog_best_effort_from_specs(&all_specs, task, max)
-            .await
+        let catalog = self.catalog_snapshot().await;
+        let selection = self
+            .select_catalog_tools_best_effort(&catalog.entries, task, max)
+            .await;
+        self.build_deferred_tool_catalog_from_entries(catalog.entries.len(), selection)
     }
 
     pub async fn deferred_tool_catalog_best_effort_from_specs(
@@ -427,13 +432,61 @@ impl MCPOrchestrator {
         })]
     }
 
+    fn build_deferred_tool_catalog_from_entries(
+        &self,
+        total_tools: usize,
+        selection: CatalogToolSelection<'_>,
+    ) -> Vec<serde_json::Value> {
+        if selection.tools.is_empty() {
+            return vec![];
+        }
+        debug!(
+            "[mcp] deferred_tool_catalog: total={} → catalog entries={} (source={}, best_lexical_score={})",
+            total_tools,
+            selection.tools.len(),
+            selection.source.as_str(),
+            selection.best_lexical_score
+        );
+
+        let catalog_lines: Vec<String> = selection
+            .tools
+            .iter()
+            .map(|entry| {
+                let desc: String = entry.raw.description.chars().take(80).collect();
+                format!("- {}: {}", entry.fn_name, desc)
+            })
+            .collect();
+        let catalog = catalog_lines.join("\n");
+
+        vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "fetch_mcp_tool",
+                "description": format!(
+                    "Load the full schema of an MCP tool so you can call it. Available MCP tools:\n{catalog}\n\nCall this with the tool name to get the full parameter schema, then call the tool directly."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "The MCP tool function name (e.g. mcp__server__tool) from the catalog above"
+                        }
+                    },
+                    "required": ["tool_name"]
+                }
+            }
+        })]
+    }
+
     /// Fetch the full OpenAI-compatible schema for a specific MCP tool.
     /// Called when the LLM uses the `fetch_mcp_tool` tool.
     pub async fn deferred_tool_schema(&self, fn_name: &str) -> Result<serde_json::Value> {
-        let all_specs = self.tools_as_openai_specs().await;
-        all_specs
-            .into_iter()
-            .find(|s| s["function"]["name"].as_str() == Some(fn_name))
+        self.catalog_snapshot()
+            .await
+            .by_fn_name
+            .get(fn_name)
+            .map(|entry| entry.openai_spec.clone())
             .ok_or_else(|| anyhow!("MCP tool not found: '{fn_name}'"))
     }
 
@@ -447,9 +500,21 @@ impl MCPOrchestrator {
     /// iteration order.
     /// This keeps the context window tight and avoids hitting provider tool limits.
     pub async fn tools_for_task(&self, task: &str, max: usize) -> Vec<serde_json::Value> {
-        let all = self.tools_as_openai_specs().await;
-        self.tools_for_task_best_effort_from_specs(&all, task, max)
-            .await
+        let catalog = self.catalog_snapshot().await;
+        let selection = self
+            .select_catalog_tools_best_effort(&catalog.entries, task, max)
+            .await;
+        debug!(
+            "[mcp] tools_for_task: total={} → selecting top {max} (source={}, best_lexical_score={})",
+            catalog.entries.len(),
+            selection.source.as_str(),
+            selection.best_lexical_score
+        );
+        selection
+            .tools
+            .into_iter()
+            .map(|entry| entry.openai_spec.clone())
+            .collect()
     }
 
     pub async fn tools_for_task_best_effort_from_specs(
@@ -570,6 +635,85 @@ impl MCPOrchestrator {
                 debug!("[mcp] semantic tool retrieval unavailable: {e}; falling back to lexical");
                 Self::select_tools_for_task(specs, task, max)
             }
+        }
+    }
+
+    async fn select_catalog_tools_best_effort<'a>(
+        &self,
+        entries: &'a [Arc<CachedMcpTool>],
+        task: &str,
+        max: usize,
+    ) -> CatalogToolSelection<'a> {
+        if entries.is_empty() || max == 0 {
+            return CatalogToolSelection {
+                tools: vec![],
+                best_lexical_score: 0,
+                source: ToolSelectionSource::DiverseFallback,
+            };
+        }
+
+        match self
+            .try_select_catalog_tools_semantic(entries, task, max)
+            .await
+        {
+            Ok(selection) => selection,
+            Err(e) => {
+                debug!("[mcp] semantic tool retrieval unavailable: {e}; falling back to lexical");
+                Self::select_catalog_tools(entries, task, max)
+            }
+        }
+    }
+
+    fn select_catalog_tools<'a>(
+        entries: &'a [Arc<CachedMcpTool>],
+        task: &str,
+        max: usize,
+    ) -> CatalogToolSelection<'a> {
+        if entries.is_empty() || max == 0 {
+            return CatalogToolSelection {
+                tools: vec![],
+                best_lexical_score: 0,
+                source: ToolSelectionSource::DiverseFallback,
+            };
+        }
+
+        let task_words = Self::task_words(task);
+        if task_words.is_empty() {
+            return CatalogToolSelection {
+                tools: Self::select_diverse_catalog_tools(entries, max),
+                best_lexical_score: 0,
+                source: ToolSelectionSource::DiverseFallback,
+            };
+        }
+
+        let mut scored: Vec<(usize, String, &CachedMcpTool)> = entries
+            .iter()
+            .map(|entry| {
+                (
+                    Self::catalog_tool_score(entry, &task_words),
+                    entry.fn_name.clone(),
+                    entry.as_ref(),
+                )
+            })
+            .collect();
+        let best_score = scored.iter().map(|(score, _, _)| *score).max().unwrap_or(0);
+        if best_score == 0 {
+            return CatalogToolSelection {
+                tools: Self::select_diverse_catalog_tools(entries, max),
+                best_lexical_score: 0,
+                source: ToolSelectionSource::DiverseFallback,
+            };
+        }
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        CatalogToolSelection {
+            tools: scored
+                .into_iter()
+                .take(max)
+                .map(|(_, _, entry)| entry)
+                .collect(),
+            best_lexical_score: best_score,
+            source: ToolSelectionSource::Lexical,
         }
     }
 
@@ -711,6 +855,39 @@ impl MCPOrchestrator {
         selected
     }
 
+    fn select_diverse_catalog_tools(
+        entries: &[Arc<CachedMcpTool>],
+        max: usize,
+    ) -> Vec<&CachedMcpTool> {
+        let mut by_server: BTreeMap<String, Vec<&CachedMcpTool>> = BTreeMap::new();
+        for entry in entries {
+            by_server
+                .entry(entry.raw.server.clone())
+                .or_default()
+                .push(entry.as_ref());
+        }
+        for tools in by_server.values_mut() {
+            tools.sort_by(|a, b| a.fn_name.cmp(&b.fn_name));
+        }
+
+        let mut selected = Vec::new();
+        loop {
+            let before = selected.len();
+            for tools in by_server.values_mut() {
+                if selected.len() >= max {
+                    return selected;
+                }
+                if !tools.is_empty() {
+                    selected.push(tools.remove(0));
+                }
+            }
+            if selected.len() == before {
+                break;
+            }
+        }
+        selected
+    }
+
     fn task_words(task: &str) -> HashSet<String> {
         task.split(|c: char| !c.is_alphanumeric())
             .filter(|w| w.len() >= 2)
@@ -728,6 +905,13 @@ impl MCPOrchestrator {
             + Self::match_count(&description, task_words) * 3
             + Self::match_count(&parameter_names, task_words) * 2
             + Self::match_count(&parameter_descriptions, task_words)
+    }
+
+    fn catalog_tool_score(entry: &CachedMcpTool, task_words: &HashSet<String>) -> usize {
+        Self::match_count(&entry.fn_name.to_lowercase(), task_words) * 5
+            + Self::match_count(&entry.raw.description.to_lowercase(), task_words) * 3
+            + Self::match_count(&entry.parameter_names, task_words) * 2
+            + Self::match_count(&entry.parameter_descriptions, task_words)
     }
 
     fn match_count(text: &str, task_words: &HashSet<String>) -> usize {
@@ -805,9 +989,109 @@ impl MCPOrchestrator {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
+    async fn try_select_catalog_tools_semantic<'a>(
+        &self,
+        entries: &'a [Arc<CachedMcpTool>],
+        task: &str,
+        max: usize,
+    ) -> Result<CatalogToolSelection<'a>> {
+        if task.trim().is_empty() {
+            bail!("empty task");
+        }
+
+        let embedder = self
+            .embedder
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("embedder not configured"))?;
+
+        let missing = {
+            let cache = self.tool_embedding_cache.read().await;
+            entries
+                .iter()
+                .filter(|entry| {
+                    !matches!(
+                        cache.get(entry.fn_name.as_str()),
+                        Some(existing) if existing.doc_hash == entry.doc_hash
+                    )
+                })
+                .count()
+        };
+        if missing > 0 {
+            self.spawn_warm_tool_embeddings_from_catalog_entries(entries.to_vec());
+            bail!(
+                "tool embedding cache incomplete: {missing}/{} missing or stale",
+                entries.len()
+            );
+        }
+
+        let query_vector = Self::embed_text_with_timeout(embedder, task).await?;
+        let cache = self.tool_embedding_cache.read().await;
+        Self::select_catalog_tools_by_embedding_cache(entries, task, max, &query_vector, &cache)
+    }
+
+    fn select_catalog_tools_by_embedding_cache<'a>(
+        entries: &'a [Arc<CachedMcpTool>],
+        task: &str,
+        max: usize,
+        query_vector: &[f32],
+        cache: &HashMap<String, ToolEmbedding>,
+    ) -> Result<CatalogToolSelection<'a>> {
+        if query_vector.is_empty() {
+            bail!("empty query embedding");
+        }
+
+        let task_words = Self::task_words(task);
+        let mut rows: Vec<(f32, String, usize, &'a CachedMcpTool)> = Vec::new();
+        let mut best_lexical_score = 0;
+
+        for entry in entries {
+            let Some(embedding) = cache.get(entry.fn_name.as_str()) else {
+                bail!("missing cached embedding for {}", entry.fn_name);
+            };
+            if embedding.doc_hash != entry.doc_hash {
+                bail!("stale cached embedding for {}", entry.fn_name);
+            }
+            if embedding.vector.len() != query_vector.len() {
+                bail!(
+                    "embedding dimension mismatch for {}: query={} tool={}",
+                    entry.fn_name,
+                    query_vector.len(),
+                    embedding.vector.len()
+                );
+            }
+
+            let lexical_score = Self::catalog_tool_score(entry, &task_words);
+            best_lexical_score = best_lexical_score.max(lexical_score);
+            let semantic_score = Self::cosine_similarity(query_vector, &embedding.vector);
+            rows.push((semantic_score, entry.fn_name.clone(), lexical_score, entry));
+        }
+
+        if rows.is_empty() {
+            bail!("no semantic tool candidates");
+        }
+
+        rows.sort_by(|a, b| {
+            let a_score = Self::hybrid_semantic_score(a.0, a.2, best_lexical_score);
+            let b_score = Self::hybrid_semantic_score(b.0, b.2, best_lexical_score);
+            b_score.total_cmp(&a_score).then_with(|| a.1.cmp(&b.1))
+        });
+
+        Ok(CatalogToolSelection {
+            tools: rows
+                .into_iter()
+                .take(max)
+                .map(|(_, _, _, entry)| entry)
+                .collect(),
+            best_lexical_score,
+            source: ToolSelectionSource::Semantic,
+        })
+    }
+
     async fn spawn_warm_tool_embeddings_from_cache(&self) {
-        let specs = self.tools_as_openai_specs().await;
-        self.spawn_warm_tool_embeddings_for_specs(specs);
+        let entries = self.catalog_snapshot().await.entries.clone();
+        self.spawn_warm_tool_embeddings_from_catalog_entries(entries);
     }
 
     fn spawn_warm_tool_embeddings_for_specs(&self, specs: Vec<serde_json::Value>) {
@@ -818,6 +1102,22 @@ impl MCPOrchestrator {
         let orchestrator = self.clone();
         tokio::spawn(async move {
             if let Err(e) = orchestrator.warm_tool_embeddings_for_specs(&specs).await {
+                debug!("[mcp] tool embedding warmup skipped: {e}");
+            }
+        });
+    }
+
+    fn spawn_warm_tool_embeddings_from_catalog_entries(&self, entries: Vec<Arc<CachedMcpTool>>) {
+        if entries.is_empty() {
+            return;
+        }
+
+        let orchestrator = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = orchestrator
+                .warm_tool_embeddings_for_entries(&entries)
+                .await
+            {
                 debug!("[mcp] tool embedding warmup skipped: {e}");
             }
         });
@@ -846,6 +1146,50 @@ impl MCPOrchestrator {
                         Some(existing) if existing.doc_hash == doc_hash => None,
                         _ => Some((fn_name.to_string(), doc_hash, doc)),
                     }
+                })
+                .collect()
+        };
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        debug!("[mcp] warming {} MCP tool embeddings", missing.len());
+        for (fn_name, doc_hash, doc) in missing {
+            match Self::embed_text_with_timeout(embedder.clone(), &doc).await {
+                Ok(vector) if !vector.is_empty() => {
+                    self.tool_embedding_cache
+                        .write()
+                        .await
+                        .insert(fn_name, ToolEmbedding { doc_hash, vector });
+                }
+                Ok(_) => debug!("[mcp] empty embedding for tool {fn_name}"),
+                Err(e) => debug!("[mcp] embedding failed for tool {fn_name}: {e}"),
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn warm_tool_embeddings_for_entries(&self, entries: &[Arc<CachedMcpTool>]) -> Result<()> {
+        let embedder = self
+            .embedder
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("embedder not configured"))?;
+
+        let missing: Vec<(String, u64, String)> = {
+            let cache = self.tool_embedding_cache.read().await;
+            entries
+                .iter()
+                .filter_map(|entry| match cache.get(entry.fn_name.as_str()) {
+                    Some(existing) if existing.doc_hash == entry.doc_hash => None,
+                    _ => Some((
+                        entry.fn_name.clone(),
+                        entry.doc_hash,
+                        entry.retrieval_doc.clone(),
+                    )),
                 })
                 .collect()
         };
@@ -930,40 +1274,17 @@ impl MCPOrchestrator {
     /// Each tool is named `mcp__{server}__{tool}` (sanitized) so the executor can route it
     /// back to the right MCP server without ambiguity.
     pub async fn tools_as_openai_specs(&self) -> Vec<serde_json::Value> {
-        let cache = self.tool_cache.read().await;
-        let mut specs = Vec::new();
-        let mut map = self.fn_name_map.write().await;
-        for tools in cache.values() {
-            for t in tools {
-                let fn_name = format!(
-                    "mcp__{}__{}",
-                    sanitize_tool_name(&t.server),
-                    sanitize_tool_name(&t.name)
-                );
-                // Store reverse mapping so dispatch can find the original names
-                map.insert(fn_name.clone(), (t.server.clone(), t.name.clone()));
-                let schema = if t.input_schema.is_null() {
-                    serde_json::json!({ "type": "object", "properties": {} })
-                } else {
-                    t.input_schema.clone()
-                };
-                specs.push(serde_json::json!({
-                  "type": "function",
-                  "function": {
-                    "name": fn_name,
-                    "description": format!("[{}] {}", t.server, t.description),
-                    "parameters": schema,
-                  }
-                }));
-            }
-        }
-        specs
+        self.catalog_snapshot().await.openai_specs.clone()
     }
 
     /// Resolve a sanitized fn_name (as returned by the LLM) back to the original
     /// (server, tool_name) pair needed to call the remote MCP server.
     pub async fn resolve_fn_name(&self, fn_name: &str) -> Option<(String, String)> {
-        self.fn_name_map.read().await.get(fn_name).cloned()
+        self.catalog_snapshot()
+            .await
+            .fn_name_map
+            .get(fn_name)
+            .cloned()
     }
 
     // ── Tool dispatch ───────────────────────────────────────────────────────────
@@ -999,6 +1320,120 @@ impl MCPOrchestrator {
         drop(guard);
         fs::write(path, json)?;
         Ok(())
+    }
+
+    async fn catalog_snapshot(&self) -> Arc<McpCatalogSnapshot> {
+        self.catalog.read().await.clone()
+    }
+
+    async fn replace_server_tools(&self, server_name: &str, tools: Vec<McpToolInfo>) {
+        self.tool_cache
+            .write()
+            .await
+            .insert(server_name.to_string(), tools);
+        self.rebuild_catalog_snapshot().await;
+        self.spawn_warm_tool_embeddings_from_cache().await;
+    }
+
+    async fn remove_server_tools(&self, server_name: &str) {
+        self.tool_cache.write().await.remove(server_name);
+        self.rebuild_catalog_snapshot().await;
+    }
+
+    async fn rebuild_catalog_snapshot(&self) {
+        let cache = self.tool_cache.read().await.clone();
+        let snapshot = Self::build_catalog_snapshot(&cache);
+        self.prune_embedding_cache_for_snapshot(&snapshot).await;
+        *self.catalog.write().await = Arc::new(snapshot);
+    }
+
+    async fn prune_embedding_cache_for_snapshot(&self, snapshot: &McpCatalogSnapshot) {
+        let valid_hashes: HashMap<&str, u64> = snapshot
+            .entries
+            .iter()
+            .map(|entry| (entry.fn_name.as_str(), entry.doc_hash))
+            .collect();
+        self.tool_embedding_cache
+            .write()
+            .await
+            .retain(|fn_name, embedding| {
+                valid_hashes
+                    .get(fn_name.as_str())
+                    .is_some_and(|hash| *hash == embedding.doc_hash)
+            });
+    }
+
+    fn build_catalog_snapshot(cache: &HashMap<String, Vec<McpToolInfo>>) -> McpCatalogSnapshot {
+        let mut tools: Vec<McpToolInfo> = cache
+            .values()
+            .flat_map(|tool_list| tool_list.iter().cloned())
+            .collect();
+        tools.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)));
+
+        let mut entries = Vec::with_capacity(tools.len());
+        let mut by_fn_name = HashMap::with_capacity(tools.len());
+        let mut fn_name_map = HashMap::with_capacity(tools.len());
+        let mut openai_specs = Vec::with_capacity(tools.len());
+
+        for tool in tools {
+            let entry = Arc::new(Self::catalog_entry_from_tool(tool));
+            openai_specs.push(entry.openai_spec.clone());
+            fn_name_map.insert(
+                entry.fn_name.clone(),
+                (entry.raw.server.clone(), entry.raw.name.clone()),
+            );
+            by_fn_name.insert(entry.fn_name.clone(), entry.clone());
+            entries.push(entry);
+        }
+
+        McpCatalogSnapshot {
+            entries,
+            by_fn_name,
+            fn_name_map,
+            openai_specs,
+        }
+    }
+
+    fn catalog_entry_from_tool(tool: McpToolInfo) -> CachedMcpTool {
+        let fn_name = format!(
+            "mcp__{}__{}",
+            sanitize_tool_name(&tool.server),
+            sanitize_tool_name(&tool.name)
+        );
+        let schema = if tool.input_schema.is_null() {
+            serde_json::json!({ "type": "object", "properties": {} })
+        } else {
+            tool.input_schema.clone()
+        };
+        let openai_spec = serde_json::json!({
+          "type": "function",
+          "function": {
+            "name": fn_name,
+            "description": format!("[{}] {}", tool.server, tool.description),
+            "parameters": schema,
+          }
+        });
+        let (parameter_names, parameter_descriptions) =
+            Self::parameter_retrieval_text(&openai_spec["function"]["parameters"]);
+        let retrieval_doc = format!(
+            "name: {}\nserver: {}\ndescription: {}\nparameter_names: {}\nparameter_descriptions: {}",
+            openai_spec["function"]["name"].as_str().unwrap_or(""),
+            tool.server,
+            openai_spec["function"]["description"].as_str().unwrap_or(""),
+            parameter_names,
+            parameter_descriptions
+        );
+        let doc_hash = Self::hash_text(&retrieval_doc);
+
+        CachedMcpTool {
+            raw: tool,
+            fn_name,
+            openai_spec,
+            retrieval_doc,
+            parameter_names,
+            parameter_descriptions,
+            doc_hash,
+        }
     }
 }
 
@@ -1279,6 +1714,96 @@ mod tests {
             selected[0]["function"]["name"].as_str(),
             Some("mcp__database__run")
         );
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_serves_schema_and_dispatch_views() {
+        let orchestrator = MCPOrchestrator::new();
+        orchestrator
+            .replace_server_tools(
+                "git",
+                vec![McpToolInfo {
+                    server: "git".into(),
+                    name: "diff".into(),
+                    description: "Show unstaged changes".into(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Repository path" }
+                        }
+                    }),
+                }],
+            )
+            .await;
+
+        let fn_name = "mcp__git__diff";
+        let schema = orchestrator.deferred_tool_schema(fn_name).await.unwrap();
+        let specs = orchestrator.tools_as_openai_specs().await;
+        let resolved = orchestrator.resolve_fn_name(fn_name).await;
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(schema["function"]["name"].as_str(), Some(fn_name));
+        assert_eq!(resolved, Some(("git".into(), "diff".into())));
+        assert_eq!(
+            schema["function"]["parameters"]["properties"]["path"]["description"].as_str(),
+            Some("Repository path")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_prunes_stale_embedding_cache_entries() {
+        let orchestrator = MCPOrchestrator::new();
+        let before = spec(
+            "mcp__git__diff",
+            "[git] Show changes",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                }
+            }),
+        );
+        let after = spec(
+            "mcp__git__diff",
+            "[git] Show changes",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Repository path"
+                    }
+                }
+            }),
+        );
+        let stale_hash =
+            MCPOrchestrator::hash_text(&MCPOrchestrator::tool_retrieval_document(&before));
+        let fresh_hash =
+            MCPOrchestrator::hash_text(&MCPOrchestrator::tool_retrieval_document(&after));
+
+        orchestrator.tool_embedding_cache.write().await.insert(
+            "mcp__git__diff".into(),
+            ToolEmbedding {
+                doc_hash: stale_hash,
+                vector: vec![1.0, 2.0],
+            },
+        );
+
+        orchestrator
+            .replace_server_tools(
+                "git",
+                vec![McpToolInfo {
+                    server: "git".into(),
+                    name: "diff".into(),
+                    description: "Show changes".into(),
+                    input_schema: after["function"]["parameters"].clone(),
+                }],
+            )
+            .await;
+
+        let cache = orchestrator.tool_embedding_cache.read().await;
+        assert_ne!(stale_hash, fresh_hash);
+        assert!(cache.get("mcp__git__diff").is_none());
     }
 
     #[test]
