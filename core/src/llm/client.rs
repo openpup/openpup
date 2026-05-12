@@ -18,6 +18,8 @@ struct EmbedResponse {
 }
 #[derive(Deserialize)]
 struct EmbedData {
+    #[serde(default)]
+    index: usize,
     embedding: Vec<f32>,
 }
 
@@ -140,8 +142,6 @@ pub struct LlmClient {
     pub usage: Arc<CumulativeUsage>,
     /// Usage from the most recent API call (for per-pup tracking).
     last_call_usage: Arc<Mutex<Option<TokenUsage>>>,
-    /// Local embedding fallback (fastembed) — lazy-initialized on first API failure.
-    local_embedder: Arc<crate::llm::local_embed::LocalEmbedder>,
 }
 
 impl LlmClient {
@@ -195,7 +195,6 @@ impl LlmClient {
             http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
             last_call_usage: Arc::new(Mutex::new(None)),
-            local_embedder: Arc::new(crate::llm::local_embed::LocalEmbedder::new()),
         }
     }
 
@@ -860,23 +859,7 @@ impl LlmClient {
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let chunks = split_embedding_input(text);
-
-        // Try remote API first
-        match self.embed_remote_chunks(&chunks).await {
-            Ok(v) => Ok(v),
-            Err(api_err) => {
-                // Fallback to local fastembed
-                warn!(
-                    "[embed] API failed ({}), falling back to local fastembed",
-                    api_err
-                );
-                let embedder = self.local_embedder.clone();
-                let input = text.to_string();
-                tokio::task::spawn_blocking(move || embedder.embed(&input))
-                    .await
-                    .map_err(|e| anyhow!("local embed join: {e}"))?
-            }
-        }
+        self.embed_remote_chunks(&chunks).await
     }
 
     async fn embed_remote_chunks(&self, chunks: &[String]) -> Result<Vec<f32>> {
@@ -884,18 +867,37 @@ impl LlmClient {
             bail!("embed: no input chunks");
         }
 
-        if chunks.len() == 1 {
-            return self.embed_remote_single(&chunks[0]).await;
+        let batches = batch_embedding_inputs(chunks);
+        let mut embeddings = Vec::with_capacity(chunks.len());
+
+        for batch in batches {
+            let mut batch_embeddings = self.embed_remote_batch(&batch).await?;
+            embeddings.append(&mut batch_embeddings);
         }
 
-        let mut embeddings = Vec::with_capacity(chunks.len());
-        for chunk in chunks {
-            embeddings.push(self.embed_remote_single(chunk).await?);
+        if embeddings.len() != chunks.len() {
+            bail!(
+                "embed: response count mismatch (expected {}, got {})",
+                chunks.len(),
+                embeddings.len()
+            );
         }
+
+        if embeddings.len() == 1 {
+            return embeddings
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("embed: missing embedding"));
+        }
+
         average_embeddings(&embeddings)
     }
 
-    async fn embed_remote_single(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed_remote_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            bail!("embed: empty batch");
+        }
+
         let (api_key, api_base, embed_model) = {
             let g = self.config.read().unwrap();
             (g.api_key.clone(), g.api_base.clone(), g.embed_model.clone())
@@ -906,7 +908,7 @@ impl LlmClient {
 
         let mut req = self.http.post(&url).json(&serde_json::json!({
           "model": embed_model,
-          "input": text,
+          "input": texts,
           "encoding_format": "float",
         }));
         if let Some(k) = &api_key {
@@ -922,13 +924,16 @@ impl LlmClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("embed API {status}: {body}"));
         }
-        let parsed: EmbedResponse = resp.json().await.map_err(|e| anyhow!("embed parse: {e}"))?;
-        parsed
-            .data
-            .into_iter()
-            .next()
-            .map(|d| d.embedding)
-            .ok_or_else(|| anyhow!("embed: empty data array"))
+        let mut parsed: Vec<EmbedData> = resp
+            .json::<EmbedResponse>()
+            .await
+            .map_err(|e| anyhow!("embed parse: {e}"))?
+            .data;
+        if parsed.is_empty() {
+            bail!("embed: empty data array");
+        }
+        parsed.sort_by_key(|item| item.index);
+        Ok(parsed.into_iter().map(|item| item.embedding).collect())
     }
 
     // ── Cache helpers ─────────────────────────────────────────────────────────
@@ -1017,6 +1022,8 @@ fn build_assistant_raw_message(
 
 const EMBED_MAX_CHARS_PER_CHUNK: usize = 24_000;
 const EMBED_CHUNK_OVERLAP_CHARS: usize = 512;
+const EMBED_MAX_CHARS_PER_BATCH: usize = 48_000;
+const EMBED_MAX_ITEMS_PER_BATCH: usize = 8;
 
 fn split_embedding_input(text: &str) -> Vec<String> {
     let trimmed = text.trim();
@@ -1067,6 +1074,34 @@ fn split_embedding_input(text: &str) -> Vec<String> {
     } else {
         chunks
     }
+}
+
+fn batch_embedding_inputs(chunks: &[String]) -> Vec<Vec<String>> {
+    let mut batches = Vec::new();
+    let mut current = Vec::new();
+    let mut current_chars = 0usize;
+
+    for chunk in chunks {
+        let chunk_chars = chunk.chars().count();
+        let exceeds_items = current.len() >= EMBED_MAX_ITEMS_PER_BATCH;
+        let exceeds_chars =
+            !current.is_empty() && current_chars + chunk_chars > EMBED_MAX_CHARS_PER_BATCH;
+
+        if exceeds_items || exceeds_chars {
+            batches.push(current);
+            current = Vec::new();
+            current_chars = 0;
+        }
+
+        current_chars += chunk_chars;
+        current.push(chunk.clone());
+    }
+
+    if !current.is_empty() {
+        batches.push(current);
+    }
+
+    batches
 }
 
 fn find_embedding_boundary(chars: &[char], search_start: usize, end: usize) -> Option<usize> {
@@ -1122,8 +1157,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        average_embeddings, build_assistant_raw_message, split_embedding_input, ToolCall,
-        EMBED_MAX_CHARS_PER_CHUNK,
+        average_embeddings, batch_embedding_inputs, build_assistant_raw_message,
+        split_embedding_input, ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
+        EMBED_MAX_ITEMS_PER_BATCH,
     };
 
     #[test]
@@ -1146,6 +1182,38 @@ mod tests {
     fn average_embeddings_returns_mean_vector() {
         let avg = average_embeddings(&[vec![1.0, 3.0], vec![3.0, 5.0]]).unwrap();
         assert_eq!(avg, vec![2.0, 4.0]);
+    }
+
+    #[test]
+    fn batch_embedding_inputs_keeps_small_chunk_list_together() {
+        let chunks = vec!["a".repeat(100), "b".repeat(100)];
+        let batches = batch_embedding_inputs(&chunks);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0], chunks);
+    }
+
+    #[test]
+    fn batch_embedding_inputs_respects_batch_limits() {
+        let chunks = vec![
+            "a".repeat(EMBED_MAX_CHARS_PER_BATCH / 2),
+            "b".repeat(EMBED_MAX_CHARS_PER_BATCH / 2),
+            "c".repeat(32),
+        ];
+        let batches = batch_embedding_inputs(&chunks);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), 2);
+        assert_eq!(batches[1].len(), 1);
+    }
+
+    #[test]
+    fn batch_embedding_inputs_respects_max_items() {
+        let chunks = (0..(EMBED_MAX_ITEMS_PER_BATCH + 1))
+            .map(|idx| format!("chunk-{idx}"))
+            .collect::<Vec<_>>();
+        let batches = batch_embedding_inputs(&chunks);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), EMBED_MAX_ITEMS_PER_BATCH);
+        assert_eq!(batches[1].len(), 1);
     }
 
     #[test]

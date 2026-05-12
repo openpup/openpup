@@ -1400,11 +1400,7 @@ impl MCPOrchestrator {
             sanitize_tool_name(&tool.server),
             sanitize_tool_name(&tool.name)
         );
-        let schema = if tool.input_schema.is_null() {
-            serde_json::json!({ "type": "object", "properties": {} })
-        } else {
-            tool.input_schema.clone()
-        };
+        let schema = Self::normalize_input_schema(&tool.input_schema);
         let openai_spec = serde_json::json!({
           "type": "function",
           "function": {
@@ -1434,6 +1430,34 @@ impl MCPOrchestrator {
             parameter_descriptions,
             doc_hash,
         }
+    }
+
+    fn normalize_input_schema(schema: &serde_json::Value) -> serde_json::Value {
+        if schema.is_null() {
+            return serde_json::json!({ "type": "object", "properties": {} });
+        }
+
+        let mut normalized = schema.clone();
+        if let Some(object) = normalized.as_object_mut() {
+            let is_object_schema = object
+                .get("type")
+                .and_then(|value| match value {
+                    serde_json::Value::String(kind) => Some(kind == "object"),
+                    serde_json::Value::Array(kinds) => Some(
+                        kinds
+                            .iter()
+                            .any(|kind| kind.as_str().is_some_and(|kind| kind == "object")),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(false);
+
+            if is_object_schema && !object.contains_key("properties") {
+                object.insert("properties".into(), serde_json::json!({}));
+            }
+        }
+
+        normalized
     }
 }
 
@@ -1804,6 +1828,39 @@ mod tests {
         let cache = orchestrator.tool_embedding_cache.read().await;
         assert_ne!(stale_hash, fresh_hash);
         assert!(cache.get("mcp__git__diff").is_none());
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_normalizes_object_schema_without_properties() {
+        let orchestrator = MCPOrchestrator::new();
+        orchestrator
+            .replace_server_tools(
+                "jin10",
+                vec![McpToolInfo {
+                    server: "jin10".into(),
+                    name: "list_calendar".into(),
+                    description: "Get this week's calendar".into(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "additionalProperties": false
+                    }),
+                }],
+            )
+            .await;
+
+        let schema = orchestrator
+            .deferred_tool_schema("mcp__jin10__list_calendar")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            schema["function"]["parameters"],
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })
+        );
     }
 
     #[test]
