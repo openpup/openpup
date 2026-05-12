@@ -7,7 +7,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.32...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.33...HEAD)
+
+---
+
+## [0.1.33](https://github.com/openpup/openpup/compare/v0.1.32...v0.1.33) — 2026-05-12
+
+### Added
+- **MCP catalog snapshots** — MCP tools now build into a cached catalog snapshot with unified schema and dispatch views, reducing repeated recomputation across selection and execution paths.
+
+### Changed
+- **Shared tool-loop runtime** — Alpha and SkillExecutor now run through one shared tool loop with aligned context budgeting, trimming, and tool-result truncation behavior.
+- **Remote embedding batching** — remote embedding requests now batch chunk inputs before averaging results, reducing per-document request overhead.
+- **Release baseline** — desktop app metadata, npm workspace version, XMTP helper package version, workspace crates, and root lockfiles are aligned to `0.1.33`.
+
+### Fixed
+- **Embedding fallback clarity** — removed the stale local-embedding fallback path so embedding failures now report the real remote API error directly.
+- **Strict MCP tool schema compatibility** — object input schemas that omit `properties` are now normalized before being exposed as OpenAI-compatible tools, avoiding 400 errors from strict providers.
 
 ---
 
