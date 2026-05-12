@@ -20,6 +20,7 @@ pub mod memory;
 pub mod policy;
 pub mod runtime;
 pub mod skills;
+pub mod tool_loop;
 pub mod tools;
 pub mod workspace;
 pub mod xmtp_helper;

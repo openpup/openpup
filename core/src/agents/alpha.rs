@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -31,6 +32,14 @@ use crate::policy::{
 };
 use crate::runtime::{emit_event, SharedEventSink};
 use crate::skills::executor::SkillExecutor;
+#[cfg(test)]
+use crate::tool_loop::{
+    message_role as shared_message_role,
+    remove_context_entry_preserving_tool_groups as shared_remove_context_entry_preserving_tool_groups,
+};
+use crate::tool_loop::{
+    run_tool_loop, ContextBudget, PreparedToolLoopIteration, ToolLoopControl, ToolLoopDelegate,
+};
 use crate::tools::primitive::ToolPermissions;
 
 type BridgeProgressHook = Arc<dyn Fn(String) + Send + Sync>;
@@ -182,6 +191,464 @@ struct ToolReviewRequest {
     summary: String,
     blocking: bool,
     suggested_action: Option<String>,
+}
+
+struct AlphaToolLoopState<'a> {
+    pup: &'a AlphaPup,
+    agent_name: &'a str,
+    msgs: Vec<serde_json::Value>,
+    available_tools: Vec<serde_json::Value>,
+    primitive_perms: ToolPermissions,
+    policy_actor: PolicyActor,
+    review_tool: Option<&'a ReviewToolContext>,
+    on_token: &'a (dyn Fn(String) + Send + Sync),
+    on_activity: &'a (dyn Fn(String, String) + Send + Sync),
+    mcp_deferred: bool,
+    cached_skill_tools: Vec<serde_json::Value>,
+    cached_skill_gen: u64,
+    budget: ContextBudget,
+}
+
+#[async_trait]
+impl ToolLoopDelegate for AlphaToolLoopState<'_> {
+    type Output = AgentRunResult;
+
+    fn loop_label(&self) -> &str {
+        self.agent_name
+    }
+
+    fn messages(&self) -> &Vec<serde_json::Value> {
+        &self.msgs
+    }
+
+    fn messages_mut(&mut self) -> &mut Vec<serde_json::Value> {
+        &mut self.msgs
+    }
+
+    fn max_tool_rounds(&self) -> usize {
+        AlphaPup::MAX_TOOL_ROUNDS
+    }
+
+    fn context_budget(&self) -> ContextBudget {
+        self.budget
+    }
+
+    async fn prepare_iteration(&mut self, _iteration: usize) -> Result<PreparedToolLoopIteration> {
+        let current_gen = self.pup.skill_executor.registry.generation();
+        if current_gen != self.cached_skill_gen {
+            let (new_tools, new_gen) = self.pup.build_skill_catalog().await;
+            self.cached_skill_tools = new_tools;
+            self.cached_skill_gen = new_gen;
+            debug!(
+                "[{}] skill catalog rebuilt (gen {} → {})",
+                self.agent_name, self.cached_skill_gen, current_gen
+            );
+        }
+
+        let mut iter_tools = self.available_tools.clone();
+        iter_tools.extend(self.cached_skill_tools.clone());
+        Ok(PreparedToolLoopIteration { tools: iter_tools })
+    }
+
+    fn log_context(&self, iteration: usize, estimated_tokens: u64, tools: &[serde_json::Value]) {
+        let msg_chars = self
+            .msgs
+            .iter()
+            .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let tool_chars = tools
+            .iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let tool_count = tools.len();
+        let skill_tool_count = self.cached_skill_tools.len();
+        let non_skill_tool_count = tool_count.saturating_sub(skill_tool_count);
+        debug!(
+            "[{}] context(iter={}): messages={} chars={} tools={} tool_chars={} (base={} skill={}) est_tokens={} limit={} target={} reserve={}",
+            self.agent_name,
+            iteration,
+            self.msgs.len(),
+            msg_chars,
+            tool_count,
+            tool_chars,
+            non_skill_tool_count,
+            skill_tool_count,
+            estimated_tokens,
+            self.budget.context_limit(),
+            self.budget.target_budget(),
+            self.budget.response_reserve(),
+        );
+    }
+
+    async fn handle_tool_call(
+        &mut self,
+        tc: &crate::llm::client::ToolCall,
+        _budget: &ContextBudget,
+    ) -> Result<ToolLoopControl<Self::Output>> {
+        debug!("[{}] tool_call: {}", self.agent_name, tc.name);
+        let (act_kind, act_label) = describe_tool_call(&tc.name, &tc.arguments);
+        (self.on_activity)(act_kind, act_label);
+
+        if tc.name == "request_review" {
+            let target_pup = tc
+                .arguments
+                .get("target_pup")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| value.trim().to_string());
+            if let Some(review_tool) = self.review_tool {
+                if let Some(target) = target_pup.as_ref() {
+                    if !review_tool
+                        .allowed_targets
+                        .iter()
+                        .any(|allowed| allowed == target)
+                    {
+                        return Ok(ToolLoopControl::Return(AgentRunResult::FinalText(format!(
+                            "Error: invalid review target '{}'",
+                            target
+                        ))));
+                    }
+                }
+            }
+            let summary = tc
+                .arguments
+                .get("summary")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(120)
+                .collect::<String>();
+            let blocking = tc
+                .arguments
+                .get("blocking")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
+            let suggested_action = tc
+                .arguments
+                .get("suggested_action")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            (self.on_activity)(
+                "review".into(),
+                format!(
+                    "request_review → {}",
+                    target_pup.clone().unwrap_or_else(|| "layer".to_string())
+                ),
+            );
+            return Ok(ToolLoopControl::Return(AgentRunResult::ReviewRequest(
+                ToolReviewRequest {
+                    target_pup,
+                    summary,
+                    blocking,
+                    suggested_action,
+                },
+            )));
+        }
+
+        let result = if tc.name == "task_update" {
+            let request = PolicyRequest {
+                actor: self.policy_actor.clone(),
+                tool_name: "task_update".to_string(),
+                effect: EffectKind::WriteMemory,
+                risk: PolicyRisk::Low,
+                scope: Default::default(),
+                description: format!(
+                    "Update task status with {}",
+                    serde_json::to_string(&tc.arguments).unwrap_or_default()
+                ),
+                details: PolicyDetails::default(),
+            };
+            let authorized = self
+                .pup
+                .skill_executor
+                .permissions
+                .authorize(request.clone())
+                .await
+                .unwrap_or(false);
+            if !authorized {
+                let diag = self
+                    .pup
+                    .skill_executor
+                    .permissions
+                    .denial_diagnostics("Permission denied for task_update", &request)
+                    .await;
+                return Ok(ToolLoopControl::Return(AgentRunResult::FinalText(diag)));
+            }
+            let id = tc.arguments["id"].as_str().unwrap_or_default();
+            let status = tc.arguments["status"].as_str().unwrap_or("done");
+            let result_text = tc.arguments["result"].as_str();
+            match self
+                .pup
+                .memory
+                .update_task_status(id, status, result_text)
+                .await
+            {
+                Ok(_) => format!("Task {id} updated to {status}."),
+                Err(e) => format!("task_update failed: {e}"),
+            }
+        } else if tc.name == "pup_to_pup" {
+            let target = tc.arguments["target_pup"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let sub_task = tc.arguments["task"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if target.is_empty() || sub_task.is_empty() {
+                "Error: both target_pup and task are required".to_string()
+            } else {
+                let current_depth = self.pup.delegation_depth.load(Ordering::Relaxed);
+                if current_depth >= AlphaPup::MAX_DELEGATION_DEPTH {
+                    format!(
+                        "Error: delegation depth limit ({}) reached — cannot delegate further",
+                        AlphaPup::MAX_DELEGATION_DEPTH
+                    )
+                } else {
+                    (self.on_activity)(
+                        "delegation".into(),
+                        format!("{} → {}", self.agent_name, target),
+                    );
+                    let owner_md = self.pup.file_layer.read_owner_profile().unwrap_or_default();
+                    let owner_ctx = self.pup.context_builder.get_owner_summary(&owner_md).await;
+                    self.pup.delegation_depth.fetch_add(1, Ordering::Relaxed);
+                    let result = self
+                        .pup
+                        .run_pup_for_channel(&target, &sub_task, &owner_ctx, self.on_activity, None)
+                        .await;
+                    self.pup.delegation_depth.fetch_sub(1, Ordering::Relaxed);
+                    match result {
+                        Ok(text) => format!("[{target} 回复]\n{text}"),
+                        Err(e) => format!("[{target}] Error: {e}"),
+                    }
+                }
+            }
+        } else if tc.name == "activate_skill" {
+            let skill_name = tc.arguments["name"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if skill_name.is_empty() {
+                "Error: missing skill name".to_string()
+            } else {
+                let run_id = Uuid::new_v4().to_string();
+                let _ = self
+                    .pup
+                    .memory
+                    .record_skill_run(&run_id, &skill_name, self.agent_name, None)
+                    .await;
+                match self.pup.skill_executor.load_skill_prompt(&skill_name).await {
+                    Ok((prompt, skill_perms)) => {
+                        let _ = self
+                            .pup
+                            .memory
+                            .complete_skill_run(&run_id, "activated", "")
+                            .await;
+                        self.primitive_perms = self.primitive_perms.union_with_skill(&skill_perms);
+                        let full_tools = self
+                            .pup
+                            .skill_executor
+                            .tools
+                            .available_tools(&self.primitive_perms);
+                        for t in full_tools {
+                            let t_name = t["function"]["name"].as_str().unwrap_or("");
+                            if !self.available_tools.iter().any(|existing| {
+                                existing["function"]["name"].as_str() == Some(t_name)
+                            }) {
+                                self.available_tools.push(t);
+                            }
+                        }
+                        format!(
+                            "## Skill '{skill_name}' activated\n\n\
+                             Follow the Claude-style skill bundle below to complete the task.\n\n\
+                             {prompt}"
+                        )
+                    }
+                    Err(e) => {
+                        let _ = self
+                            .pup
+                            .memory
+                            .complete_skill_run(&run_id, "failed", &e.to_string())
+                            .await;
+                        format!("Error loading skill '{skill_name}': {e}")
+                    }
+                }
+            }
+        } else if tc.name == "fetch_mcp_tool" && self.mcp_deferred {
+            let requested = tc.arguments["tool_name"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            match self
+                .pup
+                .mcp_orchestrator
+                .deferred_tool_schema(&requested)
+                .await
+            {
+                Ok(schema) => {
+                    if !self
+                        .available_tools
+                        .iter()
+                        .any(|t| t["function"]["name"].as_str() == Some(&requested))
+                    {
+                        self.available_tools.push(schema.clone());
+                    }
+                    format!(
+                        "Tool schema loaded. You can now call `{requested}` directly with the following parameters:\n{}",
+                        serde_json::to_string_pretty(&schema["function"]["parameters"])
+                            .unwrap_or_default()
+                    )
+                }
+                Err(e) => format!("Error: MCP tool '{}' not found: {e}", requested),
+            }
+        } else if tc.name.starts_with("mcp__") {
+            match self.pup.mcp_orchestrator.resolve_fn_name(&tc.name).await {
+                Some((server, tool)) => {
+                    let request = self
+                        .pup
+                        .skill_executor
+                        .permissions
+                        .policy_request_for_mcp_call(
+                            self.policy_actor.clone(),
+                            &server,
+                            &tool,
+                            &tc.arguments,
+                        );
+                    let allowed = self
+                        .pup
+                        .skill_executor
+                        .permissions
+                        .authorize(request.clone())
+                        .await
+                        .unwrap_or(false);
+                    if !allowed {
+                        self.pup
+                            .skill_executor
+                            .permissions
+                            .denial_diagnostics("Permission denied for MCP tool call", &request)
+                            .await
+                    } else {
+                        self.pup
+                            .mcp_orchestrator
+                            .call_tool(&server, &tool, &tc.arguments)
+                            .await
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|e| {
+                                AlphaPup::format_structured_error(&tc.name, &e.to_string(), true)
+                            })
+                    }
+                }
+                None => AlphaPup::format_structured_error(
+                    &tc.name,
+                    &format!("Unknown MCP tool: '{}'", tc.name),
+                    false,
+                ),
+            }
+        } else {
+            let request = self.pup.skill_executor.tools.policy_request_for_tool(
+                self.policy_actor.clone(),
+                &tc.name,
+                &tc.arguments,
+            );
+            let allowed = self
+                .pup
+                .skill_executor
+                .permissions
+                .authorize(request.clone())
+                .await
+                .unwrap_or(false);
+            if !allowed {
+                self.pup
+                    .skill_executor
+                    .permissions
+                    .denial_diagnostics("Permission denied for tool call", &request)
+                    .await
+            } else {
+                self.pup
+                    .skill_executor
+                    .tools
+                    .execute(
+                        &tc.name,
+                        &tc.arguments,
+                        &self.primitive_perms,
+                        &self.pup.skill_executor.permissions,
+                        &self.policy_actor,
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        AlphaPup::format_structured_error(&tc.name, &e.to_string(), true)
+                    })
+            }
+        };
+
+        Ok(ToolLoopControl::AppendToolResult { content: result })
+    }
+
+    fn should_truncate_tool_result(&self, tool_name: &str) -> bool {
+        tool_name != "activate_skill"
+    }
+
+    async fn after_tool_result_appended(&mut self, tool_name: &str) -> Result<()> {
+        debug!(
+            "[{}] {} → {} chars",
+            self.agent_name,
+            tool_name,
+            self.msgs
+                .last()
+                .and_then(|message| message["content"].as_str())
+                .map(str::len)
+                .unwrap_or_default()
+        );
+        if tool_name == "file_write" || tool_name == "shell_exec" {
+            self.pup.skill_executor.registry.refresh().await;
+        }
+        Ok(())
+    }
+
+    async fn finalize_text_response(&mut self, text: String) -> Result<Self::Output> {
+        debug!("[{}] final answer: {} chars", self.agent_name, text.len());
+        Ok(AgentRunResult::FinalText(text))
+    }
+
+    async fn on_round_limit_exceeded(
+        &mut self,
+        llm: Arc<LlmClient>,
+        abort: &AbortFlag,
+    ) -> Result<Self::Output> {
+        debug!(
+            "[{}] reached MAX_TOOL_ROUNDS ({}), requesting wrap-up",
+            self.agent_name,
+            AlphaPup::MAX_TOOL_ROUNDS
+        );
+        self.msgs.push(serde_json::json!({
+            "role": "system",
+            "content": format!(
+                "You have reached the maximum number of tool-call rounds ({}). \
+                 You MUST now produce a final text response. Summarise what you have accomplished \
+                 so far and note any remaining steps the user should complete manually.",
+                AlphaPup::MAX_TOOL_ROUNDS
+            )
+        }));
+        let on_token_ref = self.on_token;
+        let on_token_shim = |tok: &str| on_token_ref(tok.to_string());
+        match llm
+            .chat_with_tools_stream(self.msgs.clone(), vec![], on_token_shim, abort)
+            .await?
+        {
+            Some(r) => Ok(AgentRunResult::FinalText(r.content.unwrap_or_default())),
+            None => Ok(AgentRunResult::FinalText(String::new())),
+        }
+    }
+
+    fn aborted_output(&self) -> Self::Output {
+        AgentRunResult::FinalText(String::new())
+    }
 }
 
 // ─── AlphaPup ─────────────────────────────────────────────────────────────────
@@ -1179,94 +1646,31 @@ impl AlphaPup {
         }
     }
 
-    /// Estimate the token count of the current context (messages + tools).
-    /// Uses ~4 chars per token as a conservative heuristic.
-    fn estimate_context_tokens(msgs: &[serde_json::Value], tools: &[serde_json::Value]) -> u64 {
-        let msg_chars: usize = msgs
-            .iter()
-            .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
-            .sum();
-        let tool_chars: usize = tools
-            .iter()
-            .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
-            .sum();
-        ((msg_chars + tool_chars) / 4) as u64
-    }
-
-    /// Trim oldest non-system messages from the context to fit within the token budget.
+    /// Trim older non-system messages to fit within the token budget.
+    /// Prefers dropping bulky historical tool protocol groups before older
+    /// conversational text, while preserving the active user turn and any
+    /// protocol messages after it.
+    #[cfg(test)]
     fn trim_context_to_budget(
         msgs: &mut Vec<serde_json::Value>,
         tools: &[serde_json::Value],
         limit: u64,
     ) {
-        // Target 85% of limit to leave headroom for the response
-        let budget = (limit as f64 * 0.85) as u64;
-        while Self::estimate_context_tokens(msgs, tools) > budget && msgs.len() > 2 {
-            // Preserve the active user turn and everything after it. Tool-call
-            // protocols require assistant(tool_calls) + tool result messages to
-            // stay paired, so only trim older context before the active turn.
-            let preserve_from = msgs
-                .iter()
-                .rposition(|m| Self::message_role(m) == Some("user"))
-                .unwrap_or_else(|| msgs.len().saturating_sub(1));
-            let Some(idx) = msgs.iter().enumerate().position(|(idx, m)| {
-                idx < preserve_from && Self::message_role(m) != Some("system")
-            }) else {
-                break;
-            };
-
-            Self::remove_context_entry_preserving_tool_groups(msgs, idx, preserve_from);
-        }
+        ContextBudget::new(limit).trim_messages_to_budget(msgs, tools);
     }
 
+    #[cfg(test)]
     fn message_role(message: &serde_json::Value) -> Option<&str> {
-        message.get("role").and_then(|role| role.as_str())
+        shared_message_role(message)
     }
 
-    fn assistant_has_tool_calls(message: &serde_json::Value) -> bool {
-        Self::message_role(message) == Some("assistant")
-            && message
-                .get("tool_calls")
-                .and_then(|tool_calls| tool_calls.as_array())
-                .is_some_and(|tool_calls| !tool_calls.is_empty())
-    }
-
-    fn tool_group_start_for_tool_message(
-        msgs: &[serde_json::Value],
-        tool_idx: usize,
-    ) -> Option<usize> {
-        if Self::message_role(msgs.get(tool_idx)?) != Some("tool") {
-            return None;
-        }
-
-        let mut first_tool = tool_idx;
-        while first_tool > 0 && Self::message_role(&msgs[first_tool - 1]) == Some("tool") {
-            first_tool -= 1;
-        }
-
-        first_tool
-            .checked_sub(1)
-            .filter(|idx| Self::assistant_has_tool_calls(&msgs[*idx]))
-    }
-
+    #[cfg(test)]
     fn remove_context_entry_preserving_tool_groups(
         msgs: &mut Vec<serde_json::Value>,
         idx: usize,
         preserve_from: usize,
     ) {
-        if idx >= preserve_from || idx >= msgs.len() {
-            return;
-        }
-
-        let start = Self::tool_group_start_for_tool_message(msgs, idx).unwrap_or(idx);
-        let mut end = start + 1;
-        if Self::assistant_has_tool_calls(&msgs[start]) {
-            while end < preserve_from && Self::message_role(&msgs[end]) == Some("tool") {
-                end += 1;
-            }
-        }
-
-        msgs.drain(start..end);
+        shared_remove_context_entry_preserving_tool_groups(msgs, idx, preserve_from);
     }
 
     fn build_mcp_task_hint(messages: &[serde_json::Value]) -> String {
@@ -1308,30 +1712,6 @@ impl AlphaPup {
         }).to_string()
     }
 
-    /// Compute the dynamic truncation limit for tool results, proportional to context window.
-    /// Returns max chars = 30% of context window × 4 chars/token, clamped to [2_000, 32_768].
-    fn tool_result_max_chars(&self) -> usize {
-        let limit = self.get_context_limit();
-        let max = ((limit as f64 * 0.30) * 4.0) as usize;
-        max.clamp(2_000, 32_768)
-    }
-
-    /// Truncate a tool result using head+tail strategy so that error messages
-    /// at the end (e.g. stderr) are preserved. Keeps ~70% head + ~30% tail.
-    fn truncate_tool_result(&self, text: &str) -> String {
-        let max = self.tool_result_max_chars();
-        let count = text.chars().count();
-        if count <= max {
-            return text.to_string();
-        }
-        let tail_budget = max * 3 / 10; // 30% for tail
-        let head_budget = max.saturating_sub(tail_budget).saturating_sub(80); // room for marker
-        let head: String = text.chars().take(head_budget).collect();
-        let tail: String = text.chars().skip(count - tail_budget).collect();
-        let omitted = count - head_budget - tail_budget;
-        format!("{head}\n\n… [truncated {omitted} chars of {count} total] …\n\n{tail}")
-    }
-
     /// Maximum nesting depth for pup_to_pup delegation.
     const MAX_DELEGATION_DEPTH: u8 = 2;
 
@@ -1345,7 +1725,7 @@ impl AlphaPup {
         on_activity: impl Fn(String, String) + Send + Sync,
         abort: &AbortFlag,
     ) -> Result<AgentRunResult> {
-        let mut primitive_perms = ToolPermissions {
+        let primitive_perms = ToolPermissions {
             shell: tool_perms.shell,
             sandbox_shell: tool_perms.sandbox_shell,
             file_read: tool_perms.file_read,
@@ -1504,441 +1884,33 @@ impl AlphaPup {
             }
         }
 
-        let mut msgs = messages;
         let context_limit = self.get_context_limit();
+        let budget = ContextBudget::new(context_limit);
+        let mut msgs = messages;
 
         // ── Inject current time into system message ──
         Self::inject_current_time(&mut msgs);
 
         // ── Skill catalog: single `activate_skill` tool listing all enabled skills ──
-        let (mut cached_skill_tools, mut cached_skill_gen) = self.build_skill_catalog().await;
-
-        for iter in 0..Self::MAX_TOOL_ROUNDS {
-            if abort.load(Ordering::Relaxed) {
-                debug!("[{agent_name}] aborted at iteration {iter}");
-                return Ok(AgentRunResult::FinalText(String::new()));
-            }
-
-            // Rebuild skill catalog only when the registry has changed.
-            let current_gen = self.skill_executor.registry.generation();
-            if current_gen != cached_skill_gen {
-                let (new_tools, new_gen) = self.build_skill_catalog().await;
-                cached_skill_tools = new_tools;
-                cached_skill_gen = new_gen;
-                debug!(
-                    "[{agent_name}] skill catalog rebuilt (gen {cached_skill_gen} → {current_gen})"
-                );
-            }
-
-            let mut iter_tools = available_tools.clone();
-            let skill_tool_count = cached_skill_tools.len();
-            iter_tools.extend(cached_skill_tools.clone());
-
-            // ── Priority 1: Context window guard ──
-            // Estimate tokens and trim if approaching the limit.
-            let estimated_tokens = Self::estimate_context_tokens(&msgs, &iter_tools);
-            if estimated_tokens > (context_limit as f64 * 0.85) as u64 {
-                debug!(
-                    "[{agent_name}] context guard: {estimated_tokens} tokens exceeds 85% of {context_limit}, trimming"
-                );
-                Self::trim_context_to_budget(&mut msgs, &iter_tools, context_limit);
-            }
-
-            let msg_chars = msgs
-                .iter()
-                .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
-                .sum::<usize>();
-            let tool_chars = iter_tools
-                .iter()
-                .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
-                .sum::<usize>();
-            let tool_count = iter_tools.len();
-            let non_skill_tool_count = tool_count.saturating_sub(skill_tool_count);
-            debug!(
-                    "[{agent_name}] context(iter={iter}): messages={} chars={} tools={} tool_chars={} (base={} skill={}) est_tokens={} limit={}",
-                    msgs.len(),
-                    msg_chars,
-                    tool_count,
-                    tool_chars,
-                    non_skill_tool_count,
-                    skill_tool_count,
-                    estimated_tokens,
-                    context_limit,
-                );
-
-            let response = match self
-                .llm_client
-                .chat_with_tools_stream(
-                    msgs.clone(),
-                    iter_tools,
-                    |tok| on_token(tok.to_string()),
-                    abort,
-                )
-                .await?
-            {
-                Some(r) => r,
-                None => {
-                    debug!("[{agent_name}] aborted during LLM call");
-                    return Ok(AgentRunResult::FinalText(String::new()));
-                }
-            };
-
-            if response.tool_calls.is_empty() {
-                let text = response.content.unwrap_or_default();
-                debug!("[{agent_name}] final answer: {} chars", text.len());
-                // Tokens were already streamed via on_token during generation
-                return Ok(AgentRunResult::FinalText(text));
-            }
-
-            // Execute each tool call and feed results back
-            msgs.push(response.raw_message);
-            for tc in &response.tool_calls {
-                debug!("[{agent_name}] tool_call: {}", tc.name);
-
-                // Emit a specific activity kind + human-readable label for each tool type
-                let (act_kind, act_label) = describe_tool_call(&tc.name, &tc.arguments);
-                on_activity(act_kind, act_label);
-
-                let result = if tc.name == "request_review" {
-                    let target_pup = tc
-                        .arguments
-                        .get("target_pup")
-                        .and_then(|value| value.as_str())
-                        .filter(|value| !value.trim().is_empty())
-                        .map(|value| value.trim().to_string());
-                    if let Some(review_tool) = review_tool {
-                        if let Some(target) = target_pup.as_ref() {
-                            if !review_tool
-                                .allowed_targets
-                                .iter()
-                                .any(|allowed| allowed == target)
-                            {
-                                return Ok(AgentRunResult::FinalText(format!(
-                                    "Error: invalid review target '{}'",
-                                    target
-                                )));
-                            }
-                        }
-                    }
-                    let summary = tc
-                        .arguments
-                        .get("summary")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .trim()
-                        .chars()
-                        .take(120)
-                        .collect::<String>();
-                    let blocking = tc
-                        .arguments
-                        .get("blocking")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(true);
-                    let suggested_action = tc
-                        .arguments
-                        .get("suggested_action")
-                        .and_then(|value| value.as_str())
-                        .map(|value| value.trim().to_string())
-                        .filter(|value| !value.is_empty());
-                    on_activity(
-                        "review".into(),
-                        format!(
-                            "request_review → {}",
-                            target_pup.clone().unwrap_or_else(|| "layer".to_string())
-                        ),
-                    );
-                    return Ok(AgentRunResult::ReviewRequest(ToolReviewRequest {
-                        target_pup,
-                        summary,
-                        blocking,
-                        suggested_action,
-                    }));
-                } else if tc.name == "task_update" {
-                    let request = PolicyRequest {
-                        actor: policy_actor.clone(),
-                        tool_name: "task_update".to_string(),
-                        effect: EffectKind::WriteMemory,
-                        risk: PolicyRisk::Low,
-                        scope: Default::default(),
-                        description: format!(
-                            "Update task status with {}",
-                            serde_json::to_string(&tc.arguments).unwrap_or_default()
-                        ),
-                        details: PolicyDetails::default(),
-                    };
-                    let authorized = self
-                        .skill_executor
-                        .permissions
-                        .authorize(request.clone())
-                        .await
-                        .unwrap_or(false);
-                    if !authorized {
-                        let diag = self
-                            .skill_executor
-                            .permissions
-                            .denial_diagnostics("Permission denied for task_update", &request)
-                            .await;
-                        return Ok(AgentRunResult::FinalText(diag));
-                    }
-                    let id = tc.arguments["id"].as_str().unwrap_or_default();
-                    let status = tc.arguments["status"].as_str().unwrap_or("done");
-                    let result_text = tc.arguments["result"].as_str();
-                    match self
-                        .memory
-                        .update_task_status(id, status, result_text)
-                        .await
-                    {
-                        Ok(_) => format!("Task {id} updated to {status}."),
-                        Err(e) => format!("task_update failed: {e}"),
-                    }
-                } else if tc.name == "pup_to_pup" {
-                    let target = tc.arguments["target_pup"]
-                        .as_str()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    let sub_task = tc.arguments["task"]
-                        .as_str()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    if target.is_empty() || sub_task.is_empty() {
-                        "Error: both target_pup and task are required".to_string()
-                    } else {
-                        let current_depth = self.delegation_depth.load(Ordering::Relaxed);
-                        if current_depth >= Self::MAX_DELEGATION_DEPTH {
-                            format!(
-                                "Error: delegation depth limit ({}) reached — cannot delegate further",
-                                Self::MAX_DELEGATION_DEPTH
-                            )
-                        } else {
-                            on_activity("delegation".into(), format!("{agent_name} → {target}"));
-                            let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
-                            let owner_ctx = self.context_builder.get_owner_summary(&owner_md).await;
-                            self.delegation_depth.fetch_add(1, Ordering::Relaxed);
-                            let result = self
-                                .run_pup_for_channel(
-                                    &target,
-                                    &sub_task,
-                                    &owner_ctx,
-                                    &on_activity,
-                                    None,
-                                )
-                                .await;
-                            self.delegation_depth.fetch_sub(1, Ordering::Relaxed);
-                            match result {
-                                Ok(text) => format!("[{target} 回复]\n{text}"),
-                                Err(e) => format!("[{target}] Error: {e}"),
-                            }
-                        }
-                    }
-                } else if tc.name == "activate_skill" {
-                    // Prompt injection: load the skill's full prompt and return
-                    // it as the tool result.  The LLM reads these instructions
-                    // and follows them using the pup's existing tools.
-                    let skill_name = tc.arguments["name"]
-                        .as_str()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    if skill_name.is_empty() {
-                        "Error: missing skill name".to_string()
-                    } else {
-                        let run_id = Uuid::new_v4().to_string();
-                        let _ = self
-                            .memory
-                            .record_skill_run(&run_id, &skill_name, agent_name, None)
-                            .await;
-                        match self.skill_executor.load_skill_prompt(&skill_name).await {
-                            Ok((prompt, skill_perms)) => {
-                                let _ = self
-                                    .memory
-                                    .complete_skill_run(&run_id, "activated", "")
-                                    .await;
-                                // Union pup + skill permissions so the skill
-                                // gets the tools it needs.  Update primitive_perms
-                                // so subsequent tool *execution* also uses the
-                                // elevated permissions, not just the tool list.
-                                primitive_perms = primitive_perms.union_with_skill(&skill_perms);
-                                let full_tools =
-                                    self.skill_executor.tools.available_tools(&primitive_perms);
-                                for t in full_tools {
-                                    let t_name = t["function"]["name"].as_str().unwrap_or("");
-                                    if !available_tools.iter().any(|existing| {
-                                        existing["function"]["name"].as_str() == Some(t_name)
-                                    }) {
-                                        available_tools.push(t);
-                                    }
-                                }
-                                format!(
-                                    "## Skill '{skill_name}' activated\n\n\
-                                     Follow the Claude-style skill bundle below to complete the task.\n\n\
-                                     {prompt}"
-                                )
-                            }
-                            Err(e) => {
-                                let _ = self
-                                    .memory
-                                    .complete_skill_run(&run_id, "failed", &e.to_string())
-                                    .await;
-                                format!("Error loading skill '{skill_name}': {e}")
-                            }
-                        }
-                    }
-                } else if tc.name == "fetch_mcp_tool" && mcp_deferred {
-                    // Deferred tool pattern: LLM requested the full schema for an MCP tool.
-                    // Return the schema and also inject it into available_tools for the next iteration.
-                    let requested = tc.arguments["tool_name"]
-                        .as_str()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    match self.mcp_orchestrator.deferred_tool_schema(&requested).await {
-                        Ok(schema) => {
-                            // Inject the full tool so the LLM can call it in subsequent iterations
-                            if !available_tools
-                                .iter()
-                                .any(|t| t["function"]["name"].as_str() == Some(&requested))
-                            {
-                                available_tools.push(schema.clone());
-                            }
-                            format!(
-                                "Tool schema loaded. You can now call `{requested}` directly with the following parameters:\n{}",
-                                serde_json::to_string_pretty(&schema["function"]["parameters"]).unwrap_or_default()
-                            )
-                        }
-                        Err(e) => format!("Error: MCP tool '{}' not found: {e}", requested),
-                    }
-                } else if tc.name.starts_with("mcp__") {
-                    match self.mcp_orchestrator.resolve_fn_name(&tc.name).await {
-                        Some((server, tool)) => {
-                            let request =
-                                self.skill_executor.permissions.policy_request_for_mcp_call(
-                                    policy_actor.clone(),
-                                    &server,
-                                    &tool,
-                                    &tc.arguments,
-                                );
-                            let allowed = self
-                                .skill_executor
-                                .permissions
-                                .authorize(request.clone())
-                                .await
-                                .unwrap_or(false);
-                            if !allowed {
-                                self.skill_executor
-                                    .permissions
-                                    .denial_diagnostics(
-                                        "Permission denied for MCP tool call",
-                                        &request,
-                                    )
-                                    .await
-                            } else {
-                                self.mcp_orchestrator
-                                    .call_tool(&server, &tool, &tc.arguments)
-                                    .await
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_else(|e| {
-                                        Self::format_structured_error(
-                                            &tc.name,
-                                            &e.to_string(),
-                                            true,
-                                        )
-                                    })
-                            }
-                        }
-                        None => Self::format_structured_error(
-                            &tc.name,
-                            &format!("Unknown MCP tool: '{}'", tc.name),
-                            false,
-                        ),
-                    }
-                } else {
-                    let request = self.skill_executor.tools.policy_request_for_tool(
-                        policy_actor.clone(),
-                        &tc.name,
-                        &tc.arguments,
-                    );
-                    let allowed = self
-                        .skill_executor
-                        .permissions
-                        .authorize(request.clone())
-                        .await
-                        .unwrap_or(false);
-                    if !allowed {
-                        self.skill_executor
-                            .permissions
-                            .denial_diagnostics("Permission denied for tool call", &request)
-                            .await
-                    } else {
-                        self.skill_executor
-                            .tools
-                            .execute(
-                                &tc.name,
-                                &tc.arguments,
-                                &primitive_perms,
-                                &self.skill_executor.permissions,
-                                &policy_actor,
-                            )
-                            .await
-                            .unwrap_or_else(|e| {
-                                Self::format_structured_error(&tc.name, &e.to_string(), true)
-                            })
-                    }
-                };
-
-                // Priority 3: Dynamic tool result truncation proportional to context window.
-                // Skip truncation for activate_skill — its result is a prompt that
-                // must be preserved in full for the LLM to follow the instructions.
-                let result = if tc.name == "activate_skill" {
-                    result
-                } else {
-                    self.truncate_tool_result(&result)
-                };
-                debug!("[{agent_name}] {} → {} chars", tc.name, result.len());
-                msgs.push(serde_json::json!({
-                  "role": "tool",
-                  "tool_call_id": tc.id,
-                  "content": result,
-                }));
-
-                // After any file operation, refresh skill dirs so LLM-written skills are live.
-                if tc.name == "file_write" || tc.name == "shell_exec" {
-                    self.skill_executor.registry.refresh().await;
-                }
-
-                // Check abort after each tool so we don't continue a long tool chain
-                if abort.load(Ordering::Relaxed) {
-                    debug!("[{agent_name}] aborted after tool '{}'", tc.name);
-                    return Ok(AgentRunResult::FinalText(String::new()));
-                }
-            }
-        }
-
-        // Soft limit: inject a system message asking the LLM to wrap up,
-        // rather than hard-failing. This lets the model produce a partial answer.
-        debug!(
-            "[{agent_name}] reached MAX_TOOL_ROUNDS ({}), requesting wrap-up",
-            Self::MAX_TOOL_ROUNDS
-        );
-        msgs.push(serde_json::json!({
-            "role": "system",
-            "content": format!(
-                "You have reached the maximum number of tool-call rounds ({}). \
-                 You MUST now produce a final text response. Summarise what you have accomplished \
-                 so far and note any remaining steps the user should complete manually.",
-                Self::MAX_TOOL_ROUNDS
-            )
-        }));
-        // One final LLM call without tools to get a wrap-up response
-        match self
-            .llm_client
-            .chat_with_tools_stream(msgs, vec![], |tok| on_token(tok.to_string()), abort)
-            .await?
-        {
-            Some(r) => Ok(AgentRunResult::FinalText(r.content.unwrap_or_default())),
-            None => Ok(AgentRunResult::FinalText(String::new())),
-        }
+        let (cached_skill_tools, cached_skill_gen) = self.build_skill_catalog().await;
+        let on_token_ref = &on_token as &(dyn Fn(String) + Send + Sync);
+        let on_token_shim = |tok: &str| on_token_ref(tok.to_string());
+        let mut state = AlphaToolLoopState {
+            pup: self,
+            agent_name,
+            msgs,
+            available_tools,
+            primitive_perms,
+            policy_actor,
+            review_tool,
+            on_token: on_token_ref,
+            on_activity: &on_activity,
+            mcp_deferred,
+            cached_skill_tools,
+            cached_skill_gen,
+            budget,
+        };
+        run_tool_loop(&mut state, self.llm_client.clone(), abort, &on_token_shim).await
     }
 
     // ── Parallel pack dispatch ────────────────────────────────────────────────
@@ -3861,6 +3833,34 @@ mod tests {
 
         let roles: Vec<&str> = messages.iter().filter_map(AlphaPup::message_role).collect();
         assert_eq!(roles, vec!["system", "user"]);
+    }
+
+    #[test]
+    fn trim_prefers_dropping_older_tool_protocol_blocks() {
+        let bulky_tool_output = "x".repeat(1200);
+        let mut messages = vec![
+            json!({ "role": "system", "content": "system" }),
+            json!({ "role": "user", "content": "older question" }),
+            json!({ "role": "assistant", "content": "older answer" }),
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_old",
+                    "type": "function",
+                    "function": { "name": "old_tool", "arguments": "{}" }
+                }]
+            }),
+            json!({ "role": "tool", "tool_call_id": "call_old", "content": bulky_tool_output }),
+            json!({ "role": "user", "content": "current request" }),
+        ];
+
+        AlphaPup::trim_context_to_budget(&mut messages, &[], 1_500);
+
+        let roles: Vec<&str> = messages.iter().filter_map(AlphaPup::message_role).collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "user"]);
+        assert_eq!(messages[1]["content"], "older question");
+        assert_eq!(messages[2]["content"], "older answer");
     }
 }
 
