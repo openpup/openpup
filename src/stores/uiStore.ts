@@ -4,6 +4,7 @@ export type NavItem =
   | 'chat'
   | 'channel'
   | 'groups'
+  | 'finance'
   | 'memories'
   | 'timeline'
   | 'skills'

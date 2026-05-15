@@ -7,3 +7,12 @@ export type { NavItem } from './uiStore';
 export { useAppStore } from './appStore';
 export type { PupConfig, MemoryChip, ContextStats } from './appStore';
 export type { PermissionRequest } from '../components/PermissionDialog';
+
+export { useFinanceStore } from './financeStore';
+export type {
+  FinanceTab,
+  FinanceOverviewSnapshot,
+  FinanceOrdersSnapshot,
+  FinanceSymbolSnapshot,
+  TradeIntent,
+} from './financeStore';
