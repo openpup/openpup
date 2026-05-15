@@ -7,6 +7,8 @@ use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::config::{default_api_base_for_provider, LlmProviderConfig, LlmRoutingConfig};
+
 /// Shared abort flag passed into `chat_stream`.
 pub type AbortFlag = Arc<AtomicBool>;
 
@@ -108,26 +110,27 @@ pub struct ChatWithToolsResponse {
     pub raw_message: serde_json::Value,
 }
 
-// ── Provider ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Provider {
-    OpenAI,
-    Ollama,
-}
-
 // ── Internal config ─────────────────────────────────────────────────────────
 
 const CACHE_CAPACITY: usize = 64;
 
 #[derive(Clone)]
 struct LlmInnerConfig {
-    provider: Provider,
+    providers: Vec<LlmProviderConfig>,
+    routing: LlmRoutingConfig,
+}
+
+#[derive(Clone, Copy)]
+enum LlmSlot {
+    Primary,
+    Mini,
+    Embedding,
+}
+
+#[derive(Clone)]
+struct ResolvedTarget {
+    provider: LlmProviderConfig,
     model: String,
-    mini_model: String,
-    embed_model: String,
-    api_key: Option<String>,
-    api_base: Option<String>,
 }
 
 // ── LlmClient ───────────────────────────────────────────────────────────────
@@ -146,50 +149,74 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new_from_env() -> Self {
-        let provider = match std::env::var("OPENPUP_LLM_PROVIDER")
+        let provider_name = std::env::var("OPENPUP_LLM_PROVIDER")
             .unwrap_or_else(|_| "openai".to_string())
-            .to_lowercase()
-            .as_str()
-        {
-            "ollama" => Provider::Ollama,
-            _ => Provider::OpenAI,
+            .to_lowercase();
+        let kind = if provider_name == "ollama" {
+            "ollama".to_string()
+        } else {
+            "openai_compatible".to_string()
         };
-
-        let (model, mini_model, embed_model, api_key, api_base) = match provider {
-            Provider::OpenAI => {
-                let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
-                let mini_model =
-                    std::env::var("OPENAI_MINI_MODEL").unwrap_or_else(|_| model.clone());
-                let embed_model = std::env::var("OPENAI_EMBED_MODEL")
-                    .unwrap_or_else(|_| "BAAI/bge-m3".to_string());
-                let api_key = std::env::var("OPENAI_API_KEY")
-                    .ok()
-                    .or_else(|| std::env::var("OPENPUP_API_KEY").ok());
-                let api_base = std::env::var("OPENAI_BASE_URL").ok();
-                (model, mini_model, embed_model, api_key, api_base)
-            }
-            Provider::Ollama => {
-                let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_string());
-                let mini_model =
-                    std::env::var("OLLAMA_MINI_MODEL").unwrap_or_else(|_| model.clone());
-                let embed_model = std::env::var("OLLAMA_EMBED_MODEL")
-                    .unwrap_or_else(|_| "nomic-embed-text".to_string());
-                let api_base = Some(
-                    std::env::var("OLLAMA_BASE_URL")
-                        .unwrap_or_else(|_| "http://localhost:11434/v1".to_string()),
-                );
-                (model, mini_model, embed_model, None, api_base)
-            }
+        let model = if kind == "ollama" {
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_string())
+        } else {
+            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string())
+        };
+        let mini_model = if kind == "ollama" {
+            std::env::var("OLLAMA_MINI_MODEL").unwrap_or_else(|_| model.clone())
+        } else {
+            std::env::var("OPENAI_MINI_MODEL").unwrap_or_else(|_| model.clone())
+        };
+        let embed_model = if kind == "ollama" {
+            std::env::var("OLLAMA_EMBED_MODEL")
+                .unwrap_or_else(|_| "nomic-embed-text".to_string())
+        } else {
+            std::env::var("OPENAI_EMBED_MODEL").unwrap_or_else(|_| "BAAI/bge-m3".to_string())
+        };
+        let api_key = if kind == "ollama" {
+            None
+        } else {
+            std::env::var("OPENAI_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("OPENPUP_API_KEY").ok())
+        };
+        let api_base = if kind == "ollama" {
+            Some(
+                std::env::var("OLLAMA_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string()),
+            )
+        } else {
+            std::env::var("OPENAI_BASE_URL").ok()
+        };
+        let provider = LlmProviderConfig {
+            id: "default".to_string(),
+            name: "Default Provider".to_string(),
+            kind,
+            provider: provider_name,
+            api_base: api_base.unwrap_or_default(),
+            api_key: api_key.unwrap_or_default(),
+            enabled: true,
+            models: vec![model.clone(), mini_model.clone(), embed_model.clone()],
+        };
+        let routing = LlmRoutingConfig {
+            primary: crate::config::LlmRouteTarget {
+                provider_id: provider.id.clone(),
+                model: model.clone(),
+            },
+            mini: crate::config::LlmRouteTarget {
+                provider_id: provider.id.clone(),
+                model: mini_model.clone(),
+            },
+            embedding: crate::config::LlmRouteTarget {
+                provider_id: provider.id.clone(),
+                model: embed_model.clone(),
+            },
         };
 
         Self {
             config: Arc::new(RwLock::new(LlmInnerConfig {
-                provider,
-                model,
-                mini_model,
-                embed_model,
-                api_key,
-                api_base,
+                providers: vec![provider],
+                routing,
             })),
             cache: Arc::new(Mutex::new(VecDeque::new())),
             http: reqwest::Client::new(),
@@ -205,77 +232,90 @@ impl LlmClient {
 
     /// Returns the currently configured model name.
     pub fn model_name(&self) -> String {
-        self.config.read().unwrap().model.clone()
+        self.config
+            .read()
+            .unwrap()
+            .routing
+            .primary
+            .model
+            .clone()
     }
 
-    pub fn provider(&self) -> Provider {
-        self.config.read().unwrap().provider
-    }
-
-    pub fn reconfigure(
-        &self,
-        provider: Provider,
-        model: String,
-        mini_model: Option<String>,
-        embed_model: Option<String>,
-        api_key: Option<String>,
-        api_base: Option<String>,
-    ) {
-        let mut g = self.config.write().unwrap();
-        g.provider = provider;
-        if let Some(mm) = mini_model {
-            g.mini_model = mm;
-        }
-        if let Some(em) = embed_model {
-            g.embed_model = em;
-        }
-        g.model = model;
-        if let Some(k) = api_key {
-            g.api_key = Some(k);
-        }
-        if let Some(b) = api_base {
-            g.api_base = Some(b);
-        }
-    }
-
-    pub fn current_config(
-        &self,
-    ) -> (
-        Provider,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    ) {
+    pub fn routing_config(&self) -> (Vec<LlmProviderConfig>, LlmRoutingConfig) {
         let g = self.config.read().unwrap();
-        (
-            g.provider,
-            g.model.clone(),
-            g.mini_model.clone(),
-            g.embed_model.clone(),
-            g.api_key.clone(),
-            g.api_base.clone(),
-        )
+        (g.providers.clone(), g.routing.clone())
+    }
+
+    pub fn has_primary_provider(&self) -> bool {
+        self.resolve_target(LlmSlot::Primary).is_ok()
+    }
+
+    pub fn primary_provider_name(&self) -> String {
+        self.resolve_target(LlmSlot::Primary)
+            .map(|target| target.provider.provider)
+            .unwrap_or_else(|_| "unconfigured".to_string())
+    }
+
+    pub fn reconfigure(&self, providers: Vec<LlmProviderConfig>, routing: LlmRoutingConfig) {
+        let mut g = self.config.write().unwrap();
+        g.providers = providers;
+        g.routing = routing;
+    }
+
+    fn resolve_target(&self, slot: LlmSlot) -> Result<ResolvedTarget> {
+        let g = self.config.read().unwrap();
+        let route = match slot {
+            LlmSlot::Primary => &g.routing.primary,
+            LlmSlot::Mini => &g.routing.mini,
+            LlmSlot::Embedding => &g.routing.embedding,
+        };
+        let provider = g
+            .providers
+            .iter()
+            .find(|item| item.id == route.provider_id && item.enabled)
+            .or_else(|| g.providers.iter().find(|item| item.enabled))
+            .or_else(|| g.providers.first())
+            .cloned()
+            .ok_or_else(|| anyhow!("未配置可用的 LLM Provider"))?;
+        let model = if route.model.trim().is_empty() {
+            provider
+                .models
+                .first()
+                .cloned()
+                .ok_or_else(|| anyhow!("Provider `{}` 未配置模型", provider.name))?
+        } else {
+            route.model.clone()
+        };
+        Ok(ResolvedTarget { provider, model })
+    }
+
+    fn resolved_auth(target: &ResolvedTarget) -> (Option<String>, Option<String>) {
+        let api_key = if target.provider.api_key.trim().is_empty() {
+            None
+        } else {
+            Some(target.provider.api_key.clone())
+        };
+        let api_base = if target.provider.api_base.trim().is_empty() {
+            Some(default_api_base_for_provider(
+                &target.provider.kind,
+                &target.provider.provider,
+            ))
+        } else {
+            Some(target.provider.api_base.clone())
+        };
+        (api_key, api_base)
     }
 
     // ── Public chat API ───────────────────────────────────────────────────────
 
     pub async fn chat(&self, messages: Vec<LlmMessage>) -> Result<String> {
-        let model = self.config.read().unwrap().model.clone();
-        self.chat_with_model(&model, messages).await
+        let target = self.resolve_target(LlmSlot::Primary)?;
+        self.chat_with_target(&target, messages).await
     }
 
     pub async fn chat_mini(&self, messages: Vec<LlmMessage>) -> Result<String> {
-        let model = {
-            let g = self.config.read().unwrap();
-            if g.mini_model.is_empty() {
-                g.model.clone()
-            } else {
-                g.mini_model.clone()
-            }
-        };
-        self.chat_with_model(&model, messages).await
+        let target = self.resolve_target(LlmSlot::Mini)?;
+        self.chat_with_target(&target, messages).await
     }
 
     pub async fn chat_stream(
@@ -284,9 +324,8 @@ impl LlmClient {
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let model = self.config.read().unwrap().model.clone();
-        self.stream_with_model(&model, messages, on_token, abort)
-            .await
+        let target = self.resolve_target(LlmSlot::Primary)?;
+        self.stream_with_target(&target, messages, on_token, abort).await
     }
 
     pub async fn chat_stream_mini(
@@ -295,36 +334,26 @@ impl LlmClient {
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let model = {
-            let g = self.config.read().unwrap();
-            if g.mini_model.is_empty() {
-                g.model.clone()
-            } else {
-                g.mini_model.clone()
-            }
-        };
-        self.stream_with_model(&model, messages, on_token, abort)
+        let target = self.resolve_target(LlmSlot::Mini)?;
+        self.stream_with_target(&target, messages, on_token, abort)
             .await
     }
 
     // ── Non-streaming (direct reqwest) ────────────────────────────────────────
 
-    async fn chat_with_model(&self, model: &str, messages: Vec<LlmMessage>) -> Result<String> {
-        let cache_key = format!("{model}:{}", serde_json::to_string(&messages)?);
+    async fn chat_with_target(&self, target: &ResolvedTarget, messages: Vec<LlmMessage>) -> Result<String> {
+        let cache_key = format!("{}:{}:{}", target.provider.id, target.model, serde_json::to_string(&messages)?);
         if let Some(hit) = self.lookup_cache(&cache_key) {
             return Ok(hit);
         }
 
-        let (api_key, api_base) = {
-            let g = self.config.read().unwrap();
-            (g.api_key.clone(), g.api_base.clone())
-        };
+        let (api_key, api_base) = Self::resolved_auth(target);
 
         let url = chat_url(&api_base);
-        debug!("[llm] chat: model={model:?} url={url}");
+        debug!("[llm] chat: provider={} model={:?} url={url}", target.provider.provider, target.model);
 
         let body = serde_json::json!({
-          "model": model,
+          "model": target.model,
           "messages": messages_json(&messages),
         });
 
@@ -364,26 +393,25 @@ impl LlmClient {
 
     // ── Streaming (direct reqwest + SSE parser) ────────────────────────────────
 
-    async fn stream_with_model(
+    async fn stream_with_target(
         &self,
-        model: &str,
+        target: &ResolvedTarget,
         messages: Vec<LlmMessage>,
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let (api_key, api_base) = {
-            let g = self.config.read().unwrap();
-            debug!(
-                "[llm] stream: model={model:?} base={:?} has_key={}",
-                g.api_base,
-                g.api_key.is_some()
-            );
-            (g.api_key.clone(), g.api_base.clone())
-        };
+        let (api_key, api_base) = Self::resolved_auth(target);
+        debug!(
+            "[llm] stream: provider={} model={:?} base={:?} has_key={}",
+            target.provider.provider,
+            target.model,
+            api_base,
+            api_key.is_some()
+        );
 
         let url = chat_url(&api_base);
         let body = serde_json::json!({
-          "model": model,
+          "model": target.model,
           "messages": messages_json(&messages),
           "stream": true,
           "stream_options": { "include_usage": true },
@@ -500,15 +528,21 @@ impl LlmClient {
         }
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
-            warn!("[llm] WARNING: empty response from model={model:?}");
+            warn!(
+                "[llm] WARNING: empty response from provider={} model={:?}",
+                target.provider.provider,
+                target.model
+            );
             let config_path = crate::config::config_path()
                 .ok()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "the app config file".to_string());
             return Err(anyhow!(
                 "LLM returned an empty response.\n\
-         • Model: {model}\n\
+         • Model: {}\n\
          • Verify the model name and api_key in {config_path}"
+                ,
+                target.model
             ));
         }
 
@@ -525,19 +559,19 @@ impl LlmClient {
         messages: Vec<serde_json::Value>,
         tools: Vec<serde_json::Value>,
     ) -> anyhow::Result<ChatWithToolsResponse> {
-        let (api_key, api_base, model) = {
-            let g = self.config.read().unwrap();
-            (g.api_key.clone(), g.api_base.clone(), g.model.clone())
-        };
+        let target = self.resolve_target(LlmSlot::Primary)?;
+        let (api_key, api_base) = Self::resolved_auth(&target);
 
         let url = chat_url(&api_base);
         debug!(
-            "[llm] chat_with_tools: model={model:?} tools={}",
+            "[llm] chat_with_tools: provider={} model={:?} tools={}",
+            target.provider.provider,
+            target.model,
             tools.len()
         );
 
         let body = serde_json::json!({
-          "model": model,
+          "model": target.model,
           "messages": messages,
           "tools": tools,
           "tool_choice": "auto",
@@ -647,19 +681,19 @@ impl LlmClient {
         on_token: impl Fn(&str) + Send,
         abort: &AbortFlag,
     ) -> anyhow::Result<Option<ChatWithToolsResponse>> {
-        let (api_key, api_base, model) = {
-            let g = self.config.read().unwrap();
-            (g.api_key.clone(), g.api_base.clone(), g.model.clone())
-        };
+        let target = self.resolve_target(LlmSlot::Primary)?;
+        let (api_key, api_base) = Self::resolved_auth(&target);
 
         let url = chat_url(&api_base);
         debug!(
-            "[llm] chat_with_tools_stream: model={model:?} tools={}",
+            "[llm] chat_with_tools_stream: provider={} model={:?} tools={}",
+            target.provider.provider,
+            target.model,
             tools.len()
         );
 
         let body = serde_json::json!({
-          "model": model,
+          "model": target.model,
           "messages": messages,
           "tools": tools,
           "tool_choice": "auto",
@@ -898,16 +932,16 @@ impl LlmClient {
             bail!("embed: empty batch");
         }
 
-        let (api_key, api_base, embed_model) = {
-            let g = self.config.read().unwrap();
-            (g.api_key.clone(), g.api_base.clone(), g.embed_model.clone())
-        };
+        let target = self.resolve_target(LlmSlot::Embedding)?;
+        let (api_key, api_base) = Self::resolved_auth(&target);
 
-        let base = api_base.as_deref().unwrap_or("https://api.openai.com/v1");
+        let base = api_base
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
         let url = format!("{}/embeddings", base.trim_end_matches('/'));
 
         let mut req = self.http.post(&url).json(&serde_json::json!({
-          "model": embed_model,
+          "model": target.model,
           "input": texts,
           "encoding_format": "float",
         }));

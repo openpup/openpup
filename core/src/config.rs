@@ -48,6 +48,52 @@ pub struct LlmConfig {
     /// Embedding model
     #[serde(default = "default_embed_model")]
     pub embed_model: String,
+    /// Saved provider registry for flexible routing.
+    #[serde(default)]
+    pub providers: Vec<LlmProviderConfig>,
+    /// Per-slot model routing.
+    #[serde(default)]
+    pub routing: LlmRoutingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmProviderConfig {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// Provider kind used by the local runtime.
+    #[serde(default = "default_provider_kind")]
+    pub kind: String,
+    /// Logical provider/vendor name, e.g. "openai", "openrouter", "anthropic".
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub api_base: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_provider_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmRoutingConfig {
+    #[serde(default)]
+    pub primary: LlmRouteTarget,
+    #[serde(default)]
+    pub mini: LlmRouteTarget,
+    #[serde(default)]
+    pub embedding: LlmRouteTarget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmRouteTarget {
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -107,6 +153,12 @@ pub struct SkillsConfig {
 fn default_provider() -> String {
     "openai".into()
 }
+fn default_provider_kind() -> String {
+    "openai_compatible".into()
+}
+fn default_provider_enabled() -> bool {
+    true
+}
 fn default_model() -> String {
     "gpt-4o".into()
 }
@@ -135,6 +187,18 @@ fn default_kb_summary_frequency() -> String {
     "standard".into()
 }
 
+pub fn default_api_base_for_provider(kind: &str, provider: &str) -> String {
+    if kind == "ollama" {
+        return "http://127.0.0.1:11434/v1".to_string();
+    }
+    match provider.to_ascii_lowercase().as_str() {
+        "deepseek" => "https://api.deepseek.com/v1".to_string(),
+        "openrouter" => "https://openrouter.ai/api/v1".to_string(),
+        "siliconflow" => "https://api.siliconflow.cn/v1".to_string(),
+        _ => "https://api.openai.com/v1".to_string(),
+    }
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
@@ -144,6 +208,8 @@ impl Default for LlmConfig {
             api_key: String::new(),
             api_base: String::new(),
             embed_model: default_embed_model(),
+            providers: Vec::new(),
+            routing: LlmRoutingConfig::default(),
         }
     }
 }
@@ -272,6 +338,12 @@ pub fn load() -> AppConfig {
         Ok(plain) => cfg.llm.api_key = plain,
         Err(e) => warn!("failed to decrypt api_key: {e}"),
     }
+    for provider in &mut cfg.llm.providers {
+        match crate::crypto::ensure_decrypted(&provider.api_key) {
+            Ok(plain) => provider.api_key = plain,
+            Err(e) => warn!("failed to decrypt provider api_key ({}): {e}", provider.id),
+        }
+    }
     match crate::crypto::ensure_decrypted(&cfg.xmtp.identity_private_key) {
         Ok(plain) => cfg.xmtp.identity_private_key = plain,
         Err(e) => warn!("failed to decrypt xmtp identity_private_key: {e}"),
@@ -280,6 +352,7 @@ pub fn load() -> AppConfig {
         Ok(plain) => cfg.xmtp.db_encryption_key = plain,
         Err(e) => warn!("failed to decrypt xmtp db_encryption_key: {e}"),
     }
+    normalize_llm_config(&mut cfg.llm);
     cfg
 }
 
@@ -292,9 +365,16 @@ pub fn save(cfg: &AppConfig) -> Result<()> {
     }
     // Clone and encrypt api_key — never write plaintext to disk
     let mut cfg_to_write = cfg.clone();
+    normalize_llm_config(&mut cfg_to_write.llm);
     if !cfg_to_write.llm.api_key.is_empty() {
         cfg_to_write.llm.api_key = crate::crypto::ensure_encrypted(&cfg_to_write.llm.api_key)
             .context("encrypt api_key")?;
+    }
+    for provider in &mut cfg_to_write.llm.providers {
+        if !provider.api_key.is_empty() {
+            provider.api_key = crate::crypto::ensure_encrypted(&provider.api_key)
+                .context("encrypt provider api_key")?;
+        }
     }
     if !cfg_to_write.xmtp.identity_private_key.is_empty() {
         cfg_to_write.xmtp.identity_private_key =
@@ -336,7 +416,174 @@ pub fn load_with_env() -> AppConfig {
             cfg.llm.model = v;
         }
     }
+    normalize_llm_config(&mut cfg.llm);
     cfg
+}
+
+fn normalize_llm_config(llm: &mut LlmConfig) {
+    migrate_legacy_provider(llm);
+    ensure_provider_defaults(llm);
+    ensure_routing_defaults(llm);
+    sync_legacy_fields_from_routing(llm);
+}
+
+fn migrate_legacy_provider(llm: &mut LlmConfig) {
+    if !llm.providers.is_empty() {
+        return;
+    }
+
+    let id = "default".to_string();
+    let kind = if llm.provider.eq_ignore_ascii_case("ollama") {
+        "ollama".to_string()
+    } else {
+        "openai_compatible".to_string()
+    };
+    let name = if llm.provider.eq_ignore_ascii_case("ollama") {
+        "Local Ollama".to_string()
+    } else {
+        "Default Provider".to_string()
+    };
+    let mut models = Vec::new();
+    for model in [&llm.model, &llm.mini_model, &llm.embed_model] {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() && !models.iter().any(|item| item == trimmed) {
+            models.push(trimmed.to_string());
+        }
+    }
+    llm.providers.push(LlmProviderConfig {
+        id: id.clone(),
+        name,
+        kind,
+        provider: llm.provider.clone(),
+        api_base: llm.api_base.clone(),
+        api_key: llm.api_key.clone(),
+        enabled: true,
+        models,
+    });
+    llm.routing.primary.provider_id = id.clone();
+    llm.routing.primary.model = llm.model.clone();
+    llm.routing.mini.provider_id = id.clone();
+    llm.routing.mini.model = if llm.mini_model.trim().is_empty() {
+        llm.model.clone()
+    } else {
+        llm.mini_model.clone()
+    };
+    llm.routing.embedding.provider_id = id;
+    llm.routing.embedding.model = if llm.embed_model.trim().is_empty() {
+        default_embed_model()
+    } else {
+        llm.embed_model.clone()
+    };
+}
+
+fn ensure_provider_defaults(llm: &mut LlmConfig) {
+    for (idx, provider) in llm.providers.iter_mut().enumerate() {
+        if provider.id.trim().is_empty() {
+            provider.id = format!("provider-{}", idx + 1);
+        }
+        if provider.name.trim().is_empty() {
+            provider.name = provider.id.clone();
+        }
+        if provider.kind.trim().is_empty() {
+            provider.kind = if provider.provider.eq_ignore_ascii_case("ollama") {
+                "ollama".to_string()
+            } else {
+                default_provider_kind()
+            };
+        }
+        if provider.provider.trim().is_empty() {
+            provider.provider = default_provider();
+        }
+        if provider.kind == "ollama" && provider.api_base.trim().is_empty() {
+            provider.api_base = default_api_base_for_provider(&provider.kind, &provider.provider);
+        }
+        if provider.kind != "ollama" && provider.api_base.trim().is_empty() {
+            provider.api_base = default_api_base_for_provider(&provider.kind, &provider.provider);
+        }
+        provider.models.retain(|model| !model.trim().is_empty());
+        provider.models.sort();
+        provider.models.dedup();
+    }
+}
+
+fn ensure_routing_defaults(llm: &mut LlmConfig) {
+    let Some(primary_provider) = llm
+        .providers
+        .iter()
+        .find(|provider| provider.enabled)
+        .or_else(|| llm.providers.first())
+        .map(|provider| provider.id.clone())
+    else {
+        return;
+    };
+
+    if llm.routing.primary.provider_id.trim().is_empty() {
+        llm.routing.primary.provider_id = primary_provider.clone();
+    }
+    if llm.routing.primary.model.trim().is_empty() {
+        llm.routing.primary.model = if llm.model.trim().is_empty() {
+            default_model()
+        } else {
+            llm.model.clone()
+        };
+    }
+    if llm.routing.mini.provider_id.trim().is_empty() {
+        llm.routing.mini.provider_id = llm.routing.primary.provider_id.clone();
+    }
+    if llm.routing.mini.model.trim().is_empty() {
+        llm.routing.mini.model = if llm.mini_model.trim().is_empty() {
+            llm.routing.primary.model.clone()
+        } else {
+            llm.mini_model.clone()
+        };
+    }
+    if llm.routing.embedding.provider_id.trim().is_empty() {
+        llm.routing.embedding.provider_id = llm.routing.primary.provider_id.clone();
+    }
+    if llm.routing.embedding.model.trim().is_empty() {
+        llm.routing.embedding.model = if llm.embed_model.trim().is_empty() {
+            default_embed_model()
+        } else {
+            llm.embed_model.clone()
+        };
+    }
+
+    for route in [
+        &mut llm.routing.primary,
+        &mut llm.routing.mini,
+        &mut llm.routing.embedding,
+    ] {
+        if let Some(provider) = llm.providers.iter_mut().find(|item| item.id == route.provider_id) {
+            let model = route.model.trim();
+            if !model.is_empty() && !provider.models.iter().any(|item| item == model) {
+                provider.models.push(model.to_string());
+                provider.models.sort();
+                provider.models.dedup();
+            }
+        }
+    }
+}
+
+fn sync_legacy_fields_from_routing(llm: &mut LlmConfig) {
+    let primary_provider = llm
+        .providers
+        .iter()
+        .find(|provider| provider.id == llm.routing.primary.provider_id)
+        .or_else(|| llm.providers.first())
+        .cloned();
+
+    if let Some(provider) = primary_provider {
+        llm.provider = if provider.kind == "ollama" {
+            "ollama".to_string()
+        } else {
+            provider.provider.clone()
+        };
+        llm.api_base = provider.api_base;
+        llm.api_key = provider.api_key;
+    }
+    llm.model = llm.routing.primary.model.clone();
+    llm.mini_model = llm.routing.mini.model.clone();
+    llm.embed_model = llm.routing.embedding.model.clone();
 }
 
 #[cfg(test)]

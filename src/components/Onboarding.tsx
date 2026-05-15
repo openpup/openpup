@@ -18,6 +18,12 @@ interface LlmConfig {
   api_base: string; // empty = use provider default
 }
 
+interface OnboardingProviderPreset {
+  provider: string;
+  kind: string;
+  api_base: string;
+}
+
 const QUESTIONS_BY_LANG: Record<Lang, {
   key: keyof OnboardingData;
   pup_text: string;
@@ -130,9 +136,9 @@ function buildOwnerMd(answers: Partial<OnboardingData>, lang: Lang): string {
 
 function presetModels(lang: Lang) {
   return [
-    { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '' },
-    { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '' },
-    { label: t('onboarding_custom_model', lang), value: '__custom__', base: '' },
+    { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '', provider: 'openai', kind: 'openai_compatible' },
+    { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '', provider: 'openai', kind: 'openai_compatible' },
+    { label: t('onboarding_custom_model', lang), value: '__custom__', base: '', provider: 'openai', kind: 'openai_compatible' },
   ];
 }
 
@@ -223,13 +229,26 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
       // 1. Save LLM config first — so the embed API key is available when
       //    save_onboarding_data seeds long-term memory (prevents timeout hang).
       if (llmConfig.api_key.trim()) {
-        await invoke('set_llm_provider', {
-          provider: 'openai',
-          model: llmConfig.model.trim(),
-          miniModel: llmConfig.model.trim(),
-          embedModel: null,
-          apiKey: llmConfig.api_key.trim(),
-          apiBase: llmConfig.api_base.trim() || null,
+        const preset = models.find((item) => item.value === llmPreset) ?? models[0];
+        const providerId = 'default';
+        await invoke('save_llm_provider', {
+          provider: {
+            id: providerId,
+            name: 'Default Provider',
+            kind: preset.kind,
+            provider: preset.provider,
+            apiBase: llmConfig.api_base.trim() || preset.base || 'https://api.openai.com/v1',
+            apiKey: llmConfig.api_key.trim(),
+            enabled: true,
+            models: [llmConfig.model.trim(), 'text-embedding-3-small'],
+          },
+        });
+        await invoke('set_llm_routing', {
+          routing: {
+            primary: { providerId, model: llmConfig.model.trim() },
+            mini: { providerId, model: llmConfig.model.trim() },
+            embedding: { providerId, model: 'text-embedding-3-small' },
+          },
         });
       }
 

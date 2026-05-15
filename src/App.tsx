@@ -144,121 +144,622 @@ interface LlmConfigInfo {
   api_base: string | null;
 }
 
-const PROVIDER_PRESETS: Record<string, { label: string; api_base: string; model: string; mini_model: string; embed_model: string }> = {
-  openai:       { label: 'OpenAI',        api_base: '',                              model: 'gpt-4o',                   mini_model: 'gpt-4o-mini',           embed_model: 'text-embedding-3-small' },
-  siliconflow:  { label: 'SiliconFlow',   api_base: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3',  mini_model: 'Qwen/Qwen3.5-27B', embed_model: 'BAAI/bge-m3' },
-  ollama:       { label: 'Ollama (Local)', api_base: 'http://localhost:11434/v1',     model: 'llama3',                   mini_model: 'llama3',                embed_model: 'nomic-embed-text' },
-  deepseek:     { label: 'DeepSeek',      api_base: 'https://api.deepseek.com/v1',   model: 'deepseek-chat',            mini_model: 'deepseek-chat',         embed_model: '' },
-  openrouter:   { label: 'OpenRouter',    api_base: 'https://openrouter.ai/api/v1',  model: 'anthropic/claude-3.5-sonnet', mini_model: 'openai/gpt-4o-mini', embed_model: '' },
-};
+interface ProviderPayload {
+  id: string;
+  name: string;
+  kind: string;
+  provider: string;
+  apiBase: string;
+  apiKey: string;
+  enabled: boolean;
+  models: string[];
+}
+
+interface RouteTargetPayload {
+  providerId: string;
+  model: string;
+}
+
+interface RoutingPayload {
+  primary: RouteTargetPayload;
+  mini: RouteTargetPayload;
+  embedding: RouteTargetPayload;
+}
+
+interface ProviderTestResult {
+  ok: boolean;
+  message: string;
+  modelsFound: number;
+}
 
 const LlmConfigPanel: React.FC = () => {
   const { lang } = useLang();
   const [cfg, setCfg] = React.useState<LlmConfigInfo | null>(null);
-  const [form, setForm] = React.useState({ provider: 'openai', model: '', miniModel: '', embedModel: '', apiKey: '', apiBase: '' });
-  const [saving, setSaving] = React.useState(false);
+  const [providers, setProviders] = React.useState<ProviderPayload[]>([]);
+  const [routing, setRouting] = React.useState<RoutingPayload | null>(null);
+  const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null);
+  const [providerForm, setProviderForm] = React.useState<ProviderPayload>({
+    id: '',
+    name: '',
+    kind: 'openai_compatible',
+    provider: 'openai',
+    apiBase: 'https://api.openai.com/v1',
+    apiKey: '',
+    enabled: true,
+    models: [],
+  });
+  const [modelsText, setModelsText] = React.useState('');
+  const [savingProvider, setSavingProvider] = React.useState(false);
+  const [savingRouting, setSavingRouting] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [msgIsError, setMsgIsError] = React.useState(false);
+  const [providerDrawerOpen, setProviderDrawerOpen] = React.useState(false);
+  const [openProviderMenuKey, setOpenProviderMenuKey] = React.useState<keyof RoutingPayload | null>(null);
+  const [openModelMenuKey, setOpenModelMenuKey] = React.useState<keyof RoutingPayload | null>(null);
 
   React.useEffect(() => {
-    invoke<LlmConfigInfo>('get_llm_config').then((c) => {
-      setCfg(c);
-      setForm({
-        provider: c.provider,
-        model: c.model,
-        miniModel: c.mini_model,
-        embedModel: c.embed_model,
-        apiKey: '',
-        apiBase: c.api_base ?? '',
-      });
-    }).catch(() => {});
+    const loadAll = async () => {
+      try {
+        const [c, providerList, currentRouting] = await Promise.all([
+          invoke<LlmConfigInfo>('get_llm_config'),
+          invoke<ProviderPayload[]>('list_llm_providers'),
+          invoke<RoutingPayload>('get_llm_routing'),
+        ]);
+        setCfg(c);
+        setProviders(providerList);
+        setRouting(currentRouting);
+        if (providerList[0]) {
+          setSelectedProviderId(providerList[0].id);
+          setProviderForm({ ...providerList[0], apiKey: '' });
+          setModelsText(providerList[0].models.join(', '));
+        }
+      } catch {}
+    };
+    void loadAll();
   }, []);
 
-  const applyPreset = (key: string) => {
-    const p = PROVIDER_PRESETS[key];
-    if (!p) return;
-    setForm((f) => ({ ...f, provider: key === 'ollama' ? 'ollama' : 'openai', model: p.model, miniModel: p.mini_model, embedModel: p.embed_model, apiBase: p.api_base }));
+  const setProviderKey = (value: string) => {
+    setProviderForm((f) => ({
+      ...f,
+      provider: value,
+      kind: value.trim().toLowerCase() === 'ollama' ? 'ollama' : 'openai_compatible',
+    }));
   };
 
-  const save = async () => {
-    setSaving(true);
-    setMsg(null);
+  const syncCurrentProviderModels = async () => {
+    if (!providerForm.id.trim()) return;
     try {
-      await invoke('set_llm_provider', {
-        provider: form.provider,
-        model: form.model,
-        miniModel: form.miniModel || null,
-        embedModel: form.embedModel || null,
-        apiKey: form.apiKey || null,
-        apiBase: form.apiBase || null,
-      });
-      setMsg(t('llm_saved', lang));
+      const models = await invoke<string[]>('refresh_llm_provider_models', { providerId: providerForm.id.trim() });
+      setProviderForm((f) => ({ ...f, models }));
+      setModelsText(models.join(', '));
+      setProviders((list) => list.map((item) => item.id === providerForm.id ? { ...item, models } : item));
+      setMsg(`${t('llm_provider_synced_prefix', lang)} ${models.length} ${t('llm_provider_synced_suffix', lang)}`);
       setMsgIsError(false);
-      setTimeout(() => setMsg(null), 2000);
     } catch (e) {
-      setMsg(`${t('llm_save_failed', lang)}: ${e}`);
+      setMsg(String(e));
       setMsgIsError(true);
-    } finally {
-      setSaving(false);
     }
   };
 
-  const field = (label: string, value: string, key: keyof typeof form, ph?: string, type = 'text') => (
-    <div className="flex items-center gap-3">
-      <label className="w-28 shrink-0" style={{ fontSize: "12px", color: 'var(--color-text-tertiary)' }}>{label}</label>
+  const testCurrentProvider = async () => {
+    try {
+      const result = await invoke<ProviderTestResult>('test_llm_provider', {
+        provider: { ...providerForm, models: modelsText.split(',').map((item) => item.trim()).filter(Boolean) },
+      });
+      setMsg(result.message);
+      setMsgIsError(!result.ok);
+    } catch (e) {
+      setMsg(String(e));
+      setMsgIsError(true);
+    }
+  };
+
+  const saveProvider = async () => {
+    setSavingProvider(true);
+    setMsg(null);
+    try {
+      const payload = {
+        ...providerForm,
+        models: modelsText.split(',').map((item) => item.trim()).filter(Boolean),
+      };
+      await invoke('save_llm_provider', { provider: payload });
+      const nextProviders = await invoke<ProviderPayload[]>('list_llm_providers');
+      setProviders(nextProviders);
+      setSelectedProviderId(payload.id);
+      setProviderForm((f) => ({ ...f, apiKey: '' }));
+      setMsg(t('llm_provider_saved', lang));
+      setMsgIsError(false);
+      setTimeout(() => setMsg(null), 2000);
+    } catch (e) {
+      setMsg(`${t('llm_provider_save_failed', lang)}: ${e}`);
+      setMsgIsError(true);
+    } finally {
+      setSavingProvider(false);
+    }
+  };
+
+  const saveRouting = async () => {
+    if (!routing) return;
+    setSavingRouting(true);
+    setMsg(null);
+    try {
+      await invoke('set_llm_routing', { routing });
+      const latest = await invoke<LlmConfigInfo>('get_llm_config');
+      setCfg(latest);
+      setMsg(t('llm_routing_saved', lang));
+      setMsgIsError(false);
+      setTimeout(() => setMsg(null), 2000);
+    } catch (e) {
+      setMsg(`${t('llm_routing_save_failed', lang)}: ${e}`);
+      setMsgIsError(true);
+    } finally {
+      setSavingRouting(false);
+    }
+  };
+
+  const selectProvider = (provider: ProviderPayload) => {
+    setSelectedProviderId(provider.id);
+    setProviderForm({ ...provider, apiKey: '' });
+    setModelsText(provider.models.join(', '));
+    setProviderDrawerOpen(true);
+  };
+
+  const enabledProviderCount = providers.filter((provider) => provider.enabled).length;
+  const configuredRouteCount = routing
+    ? [routing.primary, routing.mini, routing.embedding].filter((route) => route.providerId && route.model).length
+    : 0;
+
+  const statCard = (label: string, value: string | number, tone: 'default' | 'accent' = 'default') => (
+    <div className="flex items-baseline gap-2">
+      <span style={{ fontSize: '12px', fontWeight: 650, color: tone === 'accent' ? '#BA7517' : 'var(--color-text-primary)' }}>{value}</span>
+      <span style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{label}</span>
+    </div>
+  );
+
+  const routeLabel = (key: keyof RoutingPayload) => {
+    if (key === 'primary') return t('llm_main_model', lang);
+    if (key === 'mini') return t('llm_mini_model', lang);
+    return t('llm_embed_model', lang);
+  };
+
+  const field = (label: string, value: string, onChange: (value: string) => void, ph?: string, type = 'text') => (
+    <div className="space-y-1.5">
+      <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{label}</label>
       <input
         type={type}
         className="flex-1 focus:outline-none transition-colors"
-        style={{ fontSize: "13px", padding: '6px 10px', borderRadius: '8px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
+        style={{ width: '100%', fontSize: "13px", padding: '9px 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
         value={value}
         placeholder={ph}
-        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+        onChange={(e) => onChange(e.target.value)}
       />
     </div>
   );
 
   return (
-    <section>
-      <h2 style={{ fontSize: "14px", fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: '14px' }}>{t('llm_config_title', lang)}</h2>
-
-      {/* Provider presets */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {Object.entries(PROVIDER_PRESETS).map(([k, p]) => {
-          const isSelected = form.provider === (k === 'ollama' ? 'ollama' : 'openai') && (form.apiBase || '') === p.api_base;
-          return (
-            <button key={k} onClick={() => applyPreset(k)} style={{
-              fontSize: "12px", padding: '3px 10px', borderRadius: '20px', cursor: 'pointer',
-              border: `0.5px solid ${isSelected ? '#BA7517' : 'var(--color-border-secondary)'}`,
-              color: isSelected ? '#BA7517' : 'var(--color-text-secondary)',
-              background: isSelected ? 'var(--color-background-warning)' : 'transparent',
-            }}>{p.label}</button>
-          );
-        })}
+    <section className="space-y-3">
+      <div className="space-y-1.5">
+        <h2 style={{ fontSize: "16px", lineHeight: 1.2, fontWeight: 700, color: 'var(--color-text-primary)', margin: 0 }}>
+          {t('llm_config_title', lang)}
+        </h2>
       </div>
 
-      <div className="space-y-2.5">
-        {field(t('llm_main_model', lang), form.model, 'model', 'gpt-4o / deepseek-chat')}
-        {field(t('llm_mini_model', lang), form.miniModel, 'miniModel', t('llm_mini_ph', lang))}
-        {field(t('llm_embed_model', lang), form.embedModel, 'embedModel', 'text-embedding-3-small / BAAI/bge-m3')}
-        {field('API Base', form.apiBase, 'apiBase', t('llm_base_ph', lang))}
-        {field('API Key', form.apiKey, 'apiKey', t('llm_key_ph', lang), 'password')}
+      <div className="grid gap-5 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.1fr)]">
+        <div className="space-y-2">
+            <div className="flex items-start gap-2">
+              <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+              {providers.length === 0 && (
+                <div style={{ color: 'var(--color-text-tertiary)', fontSize: '12px', padding: '6px 0' }}>
+                  {t('llm_provider_empty', lang)}
+                </div>
+              )}
+              {providers.map((provider) => (
+                <button
+                  key={provider.id}
+                  onClick={() => selectProvider(provider)}
+                  className="text-left transition-colors"
+                  style={{
+                    maxWidth: '100%',
+                    border: selectedProviderId === provider.id ? '0.5px solid rgba(186,117,23,0.28)' : '0.5px solid var(--color-border-secondary)',
+                    borderRadius: '999px',
+                    background: provider.enabled
+                      ? (selectedProviderId === provider.id ? 'rgba(186,117,23,0.08)' : 'var(--color-background-primary)')
+                      : 'var(--color-background-secondary)',
+                    padding: '7px 11px',
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="truncate"
+                      style={{
+                        maxWidth: '220px',
+                        fontSize: '12px',
+                        fontWeight: selectedProviderId === provider.id ? 600 : 500,
+                        color: provider.enabled
+                          ? (selectedProviderId === provider.id ? '#BA7517' : 'var(--color-text-primary)')
+                          : 'var(--color-text-tertiary)',
+                      }}
+                    >
+                        {provider.name}
+                    </span>
+                    <span
+                      className="truncate"
+                      style={{
+                        maxWidth: '160px',
+                        fontSize: '11px',
+                        color: provider.enabled ? 'var(--color-text-tertiary)' : 'var(--color-text-quaternary)',
+                      }}
+                    >
+                      {provider.provider}
+                    </span>
+                    <span
+                      style={{
+                        width: '7px',
+                        height: '7px',
+                        borderRadius: '999px',
+                        background: provider.enabled ? '#BA7517' : 'var(--color-border-secondary)',
+                        flex: '0 0 auto',
+                      }}
+                    />
+                  </div>
+                </button>
+              ))}
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedProviderId(null);
+                  setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
+                  setModelsText('');
+                  setProviderDrawerOpen(true);
+                }}
+                style={{
+                  border: '0.5px dashed var(--color-border-secondary)',
+                  borderRadius: '999px',
+                  background: 'transparent',
+                  padding: '7px 11px',
+                  fontSize: '12px',
+                  color: 'var(--color-text-secondary)',
+                  flex: '0 0 auto',
+                }}
+              >
+                {t('llm_provider_new', lang)}
+              </button>
+            </div>
+        </div>
+
+        <div className="space-y-2">
+          {routing && (
+            <div className="space-y-2 pt-1">
+              {(['primary', 'mini', 'embedding'] as Array<keyof RoutingPayload>).map((key) => {
+                const selectedProvider = providers.find((provider) => provider.id === routing[key].providerId);
+                return (
+                  <div
+                    key={key}
+                    className="grid gap-2 md:grid-cols-[112px_minmax(0,1fr)] md:items-center"
+                  >
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-primary)' }}>{routeLabel(key)}</div>
+                    <div
+                      className="flex flex-col md:flex-row"
+                      style={{
+                        border: '0.5px solid var(--color-border-secondary)',
+                        borderRadius: '18px',
+                        minHeight: '40px',
+                        overflow: 'visible',
+                      }}
+                      >
+                        <div
+                          className="relative"
+                          style={{
+                            width: '188px',
+                            borderRight: '0.5px solid var(--color-border-secondary)',
+                            background: 'var(--color-background-primary)',
+                            borderTopLeftRadius: '18px',
+                            borderBottomLeftRadius: '18px',
+                            overflow: 'visible',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenProviderMenuKey((current) => current === key ? null : key);
+                              setOpenModelMenuKey(null);
+                            }}
+                            className="h-full w-full focus:outline-none"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '0 24px',
+                              fontSize: '12px',
+                              border: 'none',
+                              background: 'transparent',
+                              color: 'var(--color-text-primary)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              textAlign: 'center',
+                              minHeight: '40px',
+                            }}
+                          >
+                            {selectedProvider?.name || ''}
+                          </button>
+                          <span
+                            style={{
+                              position: 'absolute',
+                              right: '8px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              fontSize: '8px',
+                              color: 'var(--color-text-tertiary)',
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            ▾
+                          </span>
+                          {openProviderMenuKey === key && providers.length > 0 && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                left: '0',
+                                right: '0',
+                                top: 'calc(100% + 6px)',
+                                zIndex: 25,
+                                maxHeight: '180px',
+                                overflowY: 'auto',
+                                border: '0.5px solid var(--color-border-secondary)',
+                                borderRadius: '12px',
+                                background: 'var(--color-background-primary)',
+                                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                              }}
+                            >
+                              {providers.map((provider, index) => (
+                                <button
+                                  key={provider.id}
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], providerId: provider.id } }) : prev);
+                                    setOpenProviderMenuKey(null);
+                                  }}
+                                  className="w-full text-center"
+                                  style={{
+                                    display: 'block',
+                                    padding: '8px 12px',
+                                    fontSize: '12px',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: 'var(--color-text-primary)',
+                                    borderBottom: index === providers.length - 1 ? 'none' : '0.5px solid var(--color-border-secondary)',
+                                  }}
+                                >
+                                  {provider.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      <div
+                        className="min-w-0 flex-1"
+                        style={{
+                          background: 'var(--color-background-secondary)',
+                          borderTopRightRadius: '18px',
+                          borderBottomRightRadius: '18px',
+                          overflow: 'visible',
+                        }}
+                      >
+                        <div className="relative h-full">
+                          <input
+                            value={routing[key].model}
+                            onChange={(e) => setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], model: e.target.value } }) : prev)}
+                            className="h-full w-full focus:outline-none"
+                            autoComplete="off"
+                            onFocus={() => {
+                              setOpenModelMenuKey(key);
+                              setOpenProviderMenuKey(null);
+                            }}
+                            onClick={() => {
+                              setOpenModelMenuKey(key);
+                              setOpenProviderMenuKey(null);
+                            }}
+                            onBlur={() => {
+                              window.setTimeout(() => {
+                                setOpenModelMenuKey((current) => current === key ? null : current);
+                              }, 120);
+                            }}
+                            style={{ fontSize: '12px', padding: '0 12px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)' }}
+                          />
+                          {openModelMenuKey === key && (selectedProvider?.models?.length ?? 0) > 0 && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                left: '0',
+                                right: '0',
+                                top: 'calc(100% + 6px)',
+                                zIndex: 20,
+                                maxHeight: '180px',
+                                overflowY: 'auto',
+                                border: '0.5px solid var(--color-border-secondary)',
+                                borderRadius: '12px',
+                                background: 'var(--color-background-primary)',
+                                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                              }}
+                            >
+                              {selectedProvider?.models.map((model) => (
+                                <button
+                                  key={model}
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], model } }) : prev);
+                                    setOpenModelMenuKey(null);
+                                  }}
+                                  className="w-full text-left"
+                                  style={{
+                                    display: 'block',
+                                    padding: '8px 12px',
+                                    fontSize: '12px',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: 'var(--color-text-primary)',
+                                    borderBottom: model === selectedProvider.models[selectedProvider.models.length - 1] ? 'none' : '0.5px solid var(--color-border-secondary)',
+                                  }}
+                                >
+                                  {model}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="mt-3 space-y-1 leading-relaxed" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>
+            <div>{t('llm_hint_mini', lang)}</div>
+            <div>{t('llm_hint_embed', lang)}</div>
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={() => void saveRouting()}
+              disabled={savingRouting || !routing}
+              style={{ padding: '7px 11px', borderRadius: '10px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: savingRouting ? 'not-allowed' : 'pointer', opacity: savingRouting ? 0.5 : 1 }}
+            >
+              {t('llm_save', lang)}
+            </button>
+            <div className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-1">
+              {statCard(t('llm_provider_count', lang), providers.length, 'accent')}
+              {statCard(t('llm_provider_ready_count', lang), enabledProviderCount)}
+              {statCard(t('llm_route_count', lang), configuredRouteCount)}
+              {cfg && <span style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_current', lang)} {cfg.model}</span>}
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div className="mt-3 space-y-1 leading-relaxed" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>
-        <div>{t('llm_hint_mini', lang)}</div>
-        <div>{t('llm_hint_embed', lang)}</div>
-      </div>
-
-      <div className="flex items-center gap-3 mt-4">
-        <button
-          onClick={() => void save()} disabled={saving}
-          style={{ padding: '6px 12px', borderRadius: '8px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.5 : 1 }}
+      {providerDrawerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end"
+          style={{ background: 'rgba(17, 24, 39, 0.28)' }}
+          onClick={() => setProviderDrawerOpen(false)}
         >
-          {saving ? t('llm_saving', lang) : t('llm_save', lang)}
-        </button>
-        {msg && <span style={{ fontSize: "13px", color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)' }}>{msg}</span>}
-        {cfg && <span className="ml-auto" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_current', lang)} {cfg.model}</span>}
-      </div>
+          <div
+            className="h-full w-full max-w-[520px] border-l p-4 overflow-auto"
+            style={{ borderColor: 'var(--color-border-primary)', background: 'var(--color-background-primary)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3.5">
+              <div>
+                <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>{t('llm_provider_editor', lang)}</h3>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '5px' }}>
+                  {selectedProviderId || providerForm.id ? `${t('llm_provider_active', lang)} · ${providerForm.name || providerForm.id || 'Provider'}` : t('llm_provider_editor_empty', lang)}
+                </div>
+              </div>
+              <button onClick={() => setProviderDrawerOpen(false)} style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                {t('llm_provider_close', lang)}
+              </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {field(t('llm_provider_id', lang), providerForm.id, (value) => setProviderForm((f) => ({ ...f, id: value })), 'openrouter-main')}
+              {field(t('llm_provider_name', lang), providerForm.name, (value) => setProviderForm((f) => ({ ...f, name: value })), 'OpenRouter Main')}
+              <div className="space-y-1.5 md:col-span-2">
+                <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key', lang)}</label>
+                <input
+                  value={providerForm.provider}
+                  onChange={(e) => setProviderKey(e.target.value)}
+                  className="w-full focus:outline-none transition-colors"
+                  style={{ width: '100%', fontSize: "13px", padding: '9px 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
+                  placeholder="openai / anthropic / openrouter / ollama"
+                  list="litellm-provider-keys"
+                />
+                <datalist id="litellm-provider-keys">
+                  <option value="openai" />
+                  <option value="anthropic" />
+                  <option value="openrouter" />
+                  <option value="ollama" />
+                  <option value="gemini" />
+                  <option value="vertex_ai" />
+                  <option value="bedrock" />
+                  <option value="azure" />
+                  <option value="deepseek" />
+                  <option value="groq" />
+                  <option value="xai" />
+                </datalist>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key_hint', lang)}</div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 mt-3">
+              {field(t('llm_provider_base', lang), providerForm.apiBase, (value) => setProviderForm((f) => ({ ...f, apiBase: value })), 'https://api.openai.com/v1')}
+              {field(t('llm_provider_secret', lang), providerForm.apiKey, (value) => setProviderForm((f) => ({ ...f, apiKey: value })), 'sk-...', 'password')}
+            </div>
+
+            <div className="mt-3 space-y-1.5">
+              <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models', lang)}</label>
+              <textarea
+                value={modelsText}
+                onChange={(e) => setModelsText(e.target.value)}
+                rows={4}
+                className="w-full focus:outline-none"
+                style={{ fontSize: '13px', padding: '10px 12px', borderRadius: '12px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models_hint', lang)}</div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 mt-3">
+              <label className="flex items-center gap-2" style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={providerForm.enabled}
+                  onChange={(e) => setProviderForm((f) => ({ ...f, enabled: e.target.checked }))}
+                />
+                {t('llm_provider_enabled', lang)}
+              </label>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <button onClick={() => void testCurrentProvider()} style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                  {t('llm_provider_test', lang)}
+                </button>
+                <button onClick={() => void syncCurrentProviderModels()} style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                  {t('llm_provider_refresh', lang)}
+                </button>
+                {selectedProviderId && (
+                  <button
+                    onClick={async () => {
+                      await invoke('delete_llm_provider', { providerId: selectedProviderId });
+                      const nextProviders = await invoke<ProviderPayload[]>('list_llm_providers');
+                      setProviders(nextProviders);
+                      const next = nextProviders[0];
+                      setSelectedProviderId(next?.id ?? null);
+                      if (next) {
+                        setProviderForm({ ...next, apiKey: '' });
+                        setModelsText(next.models.join(', '));
+                      } else {
+                        setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
+                        setModelsText('');
+                      }
+                    }}
+                    style={{ fontSize: '12px', color: 'var(--color-text-danger)' }}
+                  >
+                    {t('llm_provider_delete', lang)}
+                  </button>
+                )}
+                <button
+                  onClick={() => void saveProvider()}
+                  disabled={savingProvider}
+                  style={{ padding: '7px 11px', borderRadius: '10px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: savingProvider ? 'not-allowed' : 'pointer', opacity: savingProvider ? 0.5 : 1 }}
+                >
+                  {t('llm_provider_save', lang)}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {msg && <div className="mt-4" style={{ fontSize: "13px", color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)' }}>{msg}</div>}
     </section>
   );
 };

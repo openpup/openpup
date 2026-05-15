@@ -16,20 +16,29 @@ pub async fn send_message(
     input: String,
     forced_pup: Option<String>,
 ) -> Result<(), String> {
-    let (_, model, mini_model, _embed_model, api_key, api_base) =
-        state.app.current_llm_config_with_secret();
+    let (providers, routing) = state.app.current_llm_routing();
+    let primary_provider = providers
+        .iter()
+        .find(|provider| provider.id == routing.primary.provider_id)
+        .or_else(|| providers.first());
+    let model = routing.primary.model.clone();
+    let mini_model = routing.mini.model.clone();
+    let api_base = primary_provider.map(|provider| provider.api_base.clone());
+    let has_key = primary_provider
+        .map(|provider| provider.kind == "ollama" || !provider.api_key.trim().is_empty())
+        .unwrap_or(false);
     debug!(
         "[cmd] send_message: model={model:?} mini={mini_model:?} base={api_base:?} has_key={}",
-        api_key.is_some()
+        has_key
     );
-    if api_key.as_deref().unwrap_or("").trim().is_empty() {
+    if !state.app.llm_primary_ready() || !has_key {
         let config_path = crate::config::config_path()
             .ok()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "the app config file".to_string());
         let _ = app_handle.emit(
       "stream_error",
-      format!("未配置 API Key。请编辑 `{}`，在 [llm] 下填写 api_key，然后重启应用。\n\n示例：\n```toml\n[llm]\napi_key = \"sk-...\"\nmodel = \"gpt-4o\"\n```", config_path)
+      format!("未配置可用的主模型 Provider。请在 `{}` 中配置 llm.providers 和 llm.routing，或在设置页里添加 Provider 并指定主模型。", config_path)
     );
         return Ok(());
     }

@@ -19,7 +19,7 @@ use crate::conversation::types::{
     ConversationMemberRecord, ConversationMembersChangedPayload, ConversationMessageCreatedPayload,
     ConversationMessageRecord, ConversationSpaceRecord, ConversationSpacesChangedPayload,
 };
-use crate::llm::client::{LlmClient, Provider};
+use crate::llm::client::LlmClient;
 use crate::mcp::orchestrator::McpToolInfo;
 use crate::mcp::orchestrator::{MCPOrchestrator, McpServerEntry};
 use crate::memory::file_layer::FileLayer;
@@ -132,58 +132,27 @@ impl OpenPupApp {
     }
 
     pub fn llm_provider_name(&self) -> String {
-        match self.alpha.llm_client.provider() {
-            Provider::OpenAI => "openai",
-            Provider::Ollama => "ollama",
-        }
-        .to_string()
+        self.alpha.llm_client.primary_provider_name()
     }
 
-    pub fn current_llm_config(
+    pub fn current_llm_routing(
         &self,
     ) -> (
-        Provider,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
+        Vec<crate::config::LlmProviderConfig>,
+        crate::config::LlmRoutingConfig,
     ) {
-        let (provider, model, mini_model, embed_model, _api_key, api_base) =
-            self.alpha.llm_client.current_config();
-        (provider, model, mini_model, embed_model, None, api_base)
+        self.alpha.llm_client.routing_config()
     }
 
-    pub fn current_llm_config_with_secret(
-        &self,
-    ) -> (
-        Provider,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    ) {
-        self.alpha.llm_client.current_config()
+    pub fn llm_primary_ready(&self) -> bool {
+        self.alpha.llm_client.has_primary_provider()
     }
 
-    pub fn reconfigure_llm(
-        &self,
-        provider: Provider,
-        model: String,
-        mini_model: Option<String>,
-        embed_model: Option<String>,
-        api_key: Option<String>,
-        api_base: Option<String>,
-    ) {
-        self.alpha.llm_client.reconfigure(
-            provider,
-            model,
-            mini_model,
-            embed_model,
-            api_key,
-            api_base,
-        );
+    pub fn reload_llm_from_config(&self) {
+        let cfg = crate::config::load_with_env();
+        self.alpha
+            .llm_client
+            .reconfigure(cfg.llm.providers, cfg.llm.routing);
     }
 
     pub fn token_usage_snapshot(&self) -> crate::llm::client::TokenUsage {
@@ -712,32 +681,7 @@ pub async fn build_app(
     let llm_client = Arc::new(LlmClient::new_from_env());
     {
         let cfg = crate::config::load_with_env();
-        let provider = if cfg.llm.provider == "ollama" {
-            Provider::Ollama
-        } else {
-            Provider::OpenAI
-        };
-        let api_key = if cfg.llm.api_key.is_empty() {
-            None
-        } else {
-            Some(cfg.llm.api_key)
-        };
-        let api_base = if cfg.llm.api_base.is_empty() {
-            None
-        } else {
-            Some(cfg.llm.api_base)
-        };
-        let mini = if cfg.llm.mini_model.is_empty() {
-            None
-        } else {
-            Some(cfg.llm.mini_model)
-        };
-        let embed = if cfg.llm.embed_model.is_empty() {
-            None
-        } else {
-            Some(cfg.llm.embed_model)
-        };
-        llm_client.reconfigure(provider, cfg.llm.model, mini, embed, api_key, api_base);
+        llm_client.reconfigure(cfg.llm.providers, cfg.llm.routing);
     }
 
     let memory = Arc::new(
