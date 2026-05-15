@@ -132,6 +132,7 @@ macro_rules! all_commands {
             commands::delete_long_term_memory,
             commands::get_top_memories,
             commands::list_timeline_events,
+            commands::export_timeline_content,
             commands::list_diary_dates,
             commands::read_diary_entry,
             commands::get_llm_provider,

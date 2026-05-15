@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { save } from '@tauri-apps/plugin-dialog';
 import { useLang, t } from '../i18n';
 import { formatRelativeTime } from '../utils/locale';
 import { pupAccentColor } from '../utils/pupVisuals';
@@ -40,6 +41,7 @@ export const Timeline: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TimelineEvent[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [exporting, setExporting] = useState<'markdown' | 'html' | null>(null);
 
   const loadEvents = async () => {
     try {
@@ -110,6 +112,30 @@ export const Timeline: React.FC = () => {
     { key: 'you', label: t('tab_you', lang) },
     { key: 'skills', label: t('tab_skills_run', lang) },
   ];
+
+  const exportableEvents = searchResults ?? filteredEvents;
+  const exportSuffix = searchResults !== null ? 'search' : filter;
+
+  const exportTimeline = async (format: 'markdown' | 'html') => {
+    if (filter === 'skills') return;
+    setExporting(format);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      const ext = format === 'html' ? 'html' : 'md';
+      const defaultPath = `timeline-${exportSuffix}-${date}.${ext}`;
+      const path = await save({ defaultPath });
+      if (!path) return;
+      const content = await invoke<string>('export_timeline_content', {
+        format,
+        events: exportableEvents,
+      });
+      await invoke('save_artifact_to_file', { path, content });
+    } catch (error) {
+      console.error('export timeline failed:', error);
+    } finally {
+      setExporting(null);
+    }
+  };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -196,6 +222,34 @@ export const Timeline: React.FC = () => {
           <button
             style={{
               marginLeft: 'auto',
+              fontSize: '13px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'skills' ? 'var(--color-text-quaternary)' : 'var(--color-text-tertiary)',
+              cursor: exporting || filter === 'skills' ? 'not-allowed' : 'pointer',
+              opacity: exporting || filter === 'skills' ? 0.5 : 1,
+            }}
+            disabled={!!exporting || filter === 'skills'}
+            onClick={() => void exportTimeline('markdown')}
+          >
+            {exporting === 'markdown' ? '…' : (lang === 'zh' ? '导出 Markdown' : 'Export Markdown')}
+          </button>
+          <button
+            style={{
+              fontSize: '13px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'skills' ? 'var(--color-text-quaternary)' : 'var(--color-text-tertiary)',
+              cursor: exporting || filter === 'skills' ? 'not-allowed' : 'pointer',
+              opacity: exporting || filter === 'skills' ? 0.5 : 1,
+            }}
+            disabled={!!exporting || filter === 'skills'}
+            onClick={() => void exportTimeline('html')}
+          >
+            {exporting === 'html' ? '…' : (lang === 'zh' ? '导出 HTML' : 'Export HTML')}
+          </button>
+          <button
+            style={{
               fontSize: '13px',
               background: 'transparent',
               border: 'none',
