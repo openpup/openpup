@@ -532,6 +532,21 @@ const AppInner: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
+  // Switching back to chat should always restore the latest message in view.
+  useEffect(() => {
+    if (activeNav !== 'chat') return;
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant', block: 'end' });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
+  }, [activeNav]);
+
   // Streaming tokens → debounced instant scroll (avoids a reflow per token)
   useEffect(() => {
     if (!streamingContent) return;

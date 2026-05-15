@@ -101,7 +101,7 @@ impl FileLayer {
         let header = if path.exists() {
             String::new()
         } else {
-            format!("# 记忆日记 {today}\n\n")
+            format!("# 每日日志 {today}\n\n")
         };
 
         let now = Local::now().format("%H:%M").to_string();

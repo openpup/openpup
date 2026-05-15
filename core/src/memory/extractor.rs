@@ -24,6 +24,20 @@ pub struct MemoryExtractor {
     llm: Arc<LlmClient>,
 }
 
+fn memory_type_label(memory_type: &str) -> &str {
+    match memory_type {
+        "fact" => "事实",
+        "preference" => "偏好",
+        "rule" => "规则",
+        "experience" => "经历",
+        _ => "记忆",
+    }
+}
+
+fn format_diary_memory_entry(action: &str, memory_type: &str, content: &str) -> String {
+    format!("{action}｜{}｜{}", memory_type_label(memory_type), content)
+}
+
 impl MemoryExtractor {
     pub fn new(pool: Pool<Sqlite>, llm: Arc<LlmClient>) -> Self {
         Self { pool, llm }
@@ -59,8 +73,11 @@ impl MemoryExtractor {
 
                 "insert" | "coexist" => {
                     self.insert(&candidate, conversation_id).await?;
-                    diary_entries
-                        .push(format!("[{}] {}", candidate.memory_type, candidate.content));
+                    diary_entries.push(format_diary_memory_entry(
+                        "记忆新增",
+                        &candidate.memory_type,
+                        &candidate.content,
+                    ));
                 }
 
                 "update" => {
@@ -68,8 +85,11 @@ impl MemoryExtractor {
                         let content = new_content.unwrap_or_else(|| candidate.content.clone());
                         self.update_content(&tid, &content, candidate.confidence)
                             .await?;
-                        diary_entries
-                            .push(format!("[update:{}] {}", candidate.memory_type, content));
+                        diary_entries.push(format_diary_memory_entry(
+                            "记忆更新",
+                            &candidate.memory_type,
+                            &content,
+                        ));
                     }
                 }
 
@@ -77,17 +97,21 @@ impl MemoryExtractor {
                     if let Some(tid) = target_id {
                         let new_id = self.insert(&candidate, conversation_id).await?;
                         self.invalidate(&tid, &new_id).await?;
-                        diary_entries.push(format!(
-                            "[supersede:{}] {}",
-                            candidate.memory_type, candidate.content
+                        diary_entries.push(format_diary_memory_entry(
+                            "记忆替换",
+                            &candidate.memory_type,
+                            &candidate.content,
                         ));
                     }
                 }
 
                 _ => {
                     self.insert(&candidate, conversation_id).await?;
-                    diary_entries
-                        .push(format!("[{}] {}", candidate.memory_type, candidate.content));
+                    diary_entries.push(format_diary_memory_entry(
+                        "记忆新增",
+                        &candidate.memory_type,
+                        &candidate.content,
+                    ));
                 }
             }
         }
@@ -128,8 +152,11 @@ impl MemoryExtractor {
 
                 "insert" | "coexist" => {
                     self.insert(&candidate, conversation_id).await?;
-                    diary_entries
-                        .push(format!("[{}] {}", candidate.memory_type, candidate.content));
+                    diary_entries.push(format_diary_memory_entry(
+                        "记忆新增",
+                        &candidate.memory_type,
+                        &candidate.content,
+                    ));
                 }
 
                 "update" => {
@@ -137,8 +164,11 @@ impl MemoryExtractor {
                         let content = new_content.unwrap_or_else(|| candidate.content.clone());
                         self.update_content(&tid, &content, candidate.confidence)
                             .await?;
-                        diary_entries
-                            .push(format!("[update:{}] {}", candidate.memory_type, content));
+                        diary_entries.push(format_diary_memory_entry(
+                            "记忆更新",
+                            &candidate.memory_type,
+                            &content,
+                        ));
                     }
                 }
 
@@ -146,17 +176,21 @@ impl MemoryExtractor {
                     if let Some(tid) = target_id {
                         let new_id = self.insert(&candidate, conversation_id).await?;
                         self.invalidate(&tid, &new_id).await?;
-                        diary_entries.push(format!(
-                            "[supersede:{}] {}",
-                            candidate.memory_type, candidate.content
+                        diary_entries.push(format_diary_memory_entry(
+                            "记忆替换",
+                            &candidate.memory_type,
+                            &candidate.content,
                         ));
                     }
                 }
 
                 _ => {
                     self.insert(&candidate, conversation_id).await?;
-                    diary_entries
-                        .push(format!("[{}] {}", candidate.memory_type, candidate.content));
+                    diary_entries.push(format_diary_memory_entry(
+                        "记忆新增",
+                        &candidate.memory_type,
+                        &candidate.content,
+                    ));
                 }
             }
         }
