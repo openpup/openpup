@@ -387,7 +387,7 @@ const LlmConfigPanel: React.FC = () => {
 
   const field = (label: string, value: string, onChange: (value: string) => void, ph?: string, type = 'text') => (
     <div className="space-y-1.5">
-      <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{label}</label>
+      <label style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>{label}</label>
       <input
         type={type}
         className="flex-1 focus:outline-none transition-colors"
@@ -400,14 +400,12 @@ const LlmConfigPanel: React.FC = () => {
   );
 
   return (
-    <section className="space-y-3">
-      <div className="space-y-1.5">
-        <h2 style={{ fontSize: "16px", lineHeight: 1.2, fontWeight: 700, color: 'var(--color-text-primary)', margin: 0 }}>
-          {t('llm_config_title', lang)}
-        </h2>
-      </div>
+    <section>
+      <h2 style={{ fontSize: '14px', lineHeight: 1.2, fontWeight: 500, color: 'var(--color-text-primary)', margin: '0 0 14px 0' }}>
+        {t('llm_config_title', lang)}
+      </h2>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.1fr)]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.1fr)]">
         <div className="space-y-2">
             <div className="flex items-start gap-2">
               <div className="flex min-w-0 flex-1 flex-wrap gap-2">
@@ -423,47 +421,26 @@ const LlmConfigPanel: React.FC = () => {
                   className="text-left transition-colors"
                   style={{
                     maxWidth: '100%',
-                    border: selectedProviderId === provider.id ? '0.5px solid rgba(186,117,23,0.28)' : '0.5px solid var(--color-border-secondary)',
-                    borderRadius: '999px',
+                    border: '0.5px solid var(--color-border-secondary)',
                     background: provider.enabled
-                      ? (selectedProviderId === provider.id ? 'rgba(186,117,23,0.08)' : 'var(--color-background-primary)')
+                      ? 'var(--color-background-primary)'
                       : 'var(--color-background-secondary)',
-                    padding: '7px 11px',
+                    padding: '3px 10px',
+                    borderRadius: '20px',
                   }}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center">
                     <span
                       className="truncate"
                       style={{
                         maxWidth: '220px',
                         fontSize: '12px',
-                        fontWeight: selectedProviderId === provider.id ? 600 : 500,
-                        color: provider.enabled
-                          ? (selectedProviderId === provider.id ? '#BA7517' : 'var(--color-text-primary)')
-                          : 'var(--color-text-tertiary)',
+                        fontWeight: 400,
+                        color: provider.enabled ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)',
                       }}
                     >
-                        {provider.name}
+                      {provider.name}
                     </span>
-                    <span
-                      className="truncate"
-                      style={{
-                        maxWidth: '160px',
-                        fontSize: '11px',
-                        color: provider.enabled ? 'var(--color-text-tertiary)' : 'var(--color-text-quaternary)',
-                      }}
-                    >
-                      {providerCatalog.find((item) => item.key === provider.provider)?.label ?? provider.provider}
-                    </span>
-                    <span
-                      style={{
-                        width: '7px',
-                        height: '7px',
-                        borderRadius: '999px',
-                        background: provider.enabled ? '#BA7517' : 'var(--color-border-secondary)',
-                        flex: '0 0 auto',
-                      }}
-                    />
                   </div>
                 </button>
               ))}
@@ -477,9 +454,9 @@ const LlmConfigPanel: React.FC = () => {
                 }}
                 style={{
                   border: '0.5px dashed var(--color-border-secondary)',
-                  borderRadius: '999px',
+                  borderRadius: '20px',
                   background: 'transparent',
-                  padding: '7px 11px',
+                  padding: '3px 10px',
                   fontSize: '12px',
                   color: 'var(--color-text-secondary)',
                   flex: '0 0 auto',
@@ -500,7 +477,7 @@ const LlmConfigPanel: React.FC = () => {
                     key={key}
                     className="grid gap-2 md:grid-cols-[112px_minmax(0,1fr)] md:items-center"
                   >
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-primary)' }}>{routeLabel(key)}</div>
+                    <div style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)' }}>{routeLabel(key)}</div>
                     <div
                       className="flex flex-col md:flex-row"
                       style={{
@@ -704,19 +681,28 @@ const LlmConfigPanel: React.FC = () => {
 
       {providerDrawerOpen && (
         <div
-          className="fixed inset-0 z-50 flex justify-end"
+          className="fixed inset-0 z-50 flex items-center justify-center p-5"
           style={{ background: 'rgba(17, 24, 39, 0.28)' }}
           onClick={() => setProviderDrawerOpen(false)}
         >
           <div
-            className="h-full w-full max-w-[520px] border-l p-4 overflow-auto"
-            style={{ borderColor: 'var(--color-border-primary)', background: 'var(--color-background-primary)' }}
+            className="w-full max-w-[640px] overflow-auto"
+            style={{
+              maxHeight: 'min(760px, calc(100vh - 40px))',
+              border: '0.5px solid var(--color-border-primary)',
+              borderRadius: '16px',
+              background: 'var(--color-background-primary)',
+              boxShadow: '0 18px 48px rgba(15, 23, 42, 0.16)',
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-3.5">
+            <div
+              className="flex items-center justify-between px-4 py-3"
+              style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }}
+            >
               <div>
-                <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>{t('llm_provider_editor', lang)}</h3>
-                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '5px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>{t('llm_provider_editor', lang)}</h3>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '4px' }}>
                   {selectedProviderId || providerForm.id ? `${t('llm_provider_active', lang)} · ${providerForm.name || providerForm.id || 'Provider'}` : t('llm_provider_editor_empty', lang)}
                 </div>
               </div>
@@ -725,145 +711,146 @@ const LlmConfigPanel: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="p-4 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  {field(t('llm_provider_id', lang), providerForm.id, (value) => setProviderForm((f) => ({ ...f, id: value })), 'openrouter-main')}
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_id_hint', lang)}</div>
+                </div>
+                <div className="space-y-1.5">
+                  {field(t('llm_provider_name', lang), providerForm.name, (value) => setProviderForm((f) => ({ ...f, name: value })), 'OpenRouter Main')}
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_name_hint', lang)}</div>
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <label style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor', lang)}</label>
+                  <select
+                    value={providerForm.provider}
+                    onChange={(e) => setProviderSelection(e.target.value)}
+                    className="w-full focus:outline-none transition-colors"
+                    style={{ width: '100%', height: '37px', fontSize: "13px", padding: '0 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
+                  >
+                    {!providerCatalog.some((item) => item.key === providerForm.provider) && providerForm.provider && (
+                      <option value={providerForm.provider}>{providerForm.provider}</option>
+                    )}
+                    {providerCatalog.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor_hint', lang)}</div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                {field(t('llm_provider_base', lang), providerForm.apiBase, (value) => setProviderForm((f) => ({ ...f, apiBase: value })), 'https://api.openai.com/v1')}
+                {field(t('llm_provider_secret', lang), providerForm.apiKey, (value) => setProviderForm((f) => ({ ...f, apiKey: value })), providerForm.provider === 'ollama' ? t('llm_provider_secret_optional', lang) : 'sk-...', 'password')}
+              </div>
+
               <div className="space-y-1.5">
-                {field(t('llm_provider_id', lang), providerForm.id, (value) => setProviderForm((f) => ({ ...f, id: value })), 'openrouter-main')}
-                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_id_hint', lang)}</div>
-              </div>
-              <div className="space-y-1.5">
-                {field(t('llm_provider_name', lang), providerForm.name, (value) => setProviderForm((f) => ({ ...f, name: value })), 'OpenRouter Main')}
-                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_name_hint', lang)}</div>
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor', lang)}</label>
-                <select
-                  value={providerForm.provider}
-                  onChange={(e) => setProviderSelection(e.target.value)}
-                  className="w-full focus:outline-none transition-colors"
-                  style={{ width: '100%', height: '37px', fontSize: "13px", padding: '0 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
-                >
-                  {!providerCatalog.some((item) => item.key === providerForm.provider) && providerForm.provider && (
-                    <option value={providerForm.provider}>{providerForm.provider}</option>
-                  )}
-                  {providerCatalog.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor_hint', lang)}</div>
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2 mt-3">
-              {field(t('llm_provider_base', lang), providerForm.apiBase, (value) => setProviderForm((f) => ({ ...f, apiBase: value })), 'https://api.openai.com/v1')}
-              {field(t('llm_provider_secret', lang), providerForm.apiKey, (value) => setProviderForm((f) => ({ ...f, apiKey: value })), providerForm.provider === 'ollama' ? t('llm_provider_secret_optional', lang) : 'sk-...', 'password')}
-            </div>
-
-            <div className="mt-3 space-y-1.5">
-              <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models', lang)}</label>
-              <textarea
-                value={modelsText}
-                onChange={(e) => setModelsText(e.target.value)}
-                rows={4}
-                className="w-full focus:outline-none"
-                style={{ fontSize: '13px', padding: '10px 12px', borderRadius: '12px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
-              />
-              <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models_hint', lang)}</div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 mt-4 border-t pt-3" style={{ borderColor: 'var(--color-border-tertiary)' }}>
-              <label className="flex items-center gap-2" style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={providerForm.enabled}
-                  onChange={(e) => setProviderForm((f) => ({ ...f, enabled: e.target.checked }))}
+                <label style={{ fontSize: '12px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models', lang)}</label>
+                <textarea
+                  value={modelsText}
+                  onChange={(e) => setModelsText(e.target.value)}
+                  rows={4}
+                  className="w-full focus:outline-none"
+                  style={{ fontSize: '13px', padding: '10px 12px', borderRadius: '12px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
                 />
-                {t('llm_provider_enabled', lang)}
-              </label>
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => void testCurrentProvider()}
-                  disabled={!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: '10px',
-                    border: '0.5px solid var(--color-border-secondary)',
-                    background: 'var(--color-background-secondary)',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: '12px',
-                    cursor: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
-                    opacity: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
-                  }}
-                >
-                  {testingProvider ? t('llm_provider_testing', lang) : t('llm_provider_test', lang)}
-                </button>
-                <button
-                  onClick={() => void syncCurrentProviderModels()}
-                  disabled={!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: '10px',
-                    border: '0.5px solid var(--color-border-secondary)',
-                    background: 'var(--color-background-secondary)',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: '12px',
-                    cursor: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
-                    opacity: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
-                  }}
-                >
-                  {syncingProviderModels ? t('llm_provider_refreshing', lang) : t('llm_provider_refresh', lang)}
-                </button>
-                {selectedProviderId && (
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models_hint', lang)}</div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <label className="flex items-center gap-2" style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
+                  <input
+                    type="checkbox"
+                    checked={providerForm.enabled}
+                    onChange={(e) => setProviderForm((f) => ({ ...f, enabled: e.target.checked }))}
+                  />
+                  {t('llm_provider_enabled', lang)}
+                </label>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => void deleteCurrentProvider()}
-                    disabled={testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                    onClick={() => void testCurrentProvider()}
+                    disabled={!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
                     style={{
                       padding: '7px 10px',
                       borderRadius: '10px',
-                      border: '0.5px solid color-mix(in srgb, var(--color-text-danger) 24%, transparent)',
-                      background: 'transparent',
-                      color: 'var(--color-text-danger)',
+                      border: '0.5px solid var(--color-border-secondary)',
+                      background: 'var(--color-background-secondary)',
+                      color: 'var(--color-text-secondary)',
                       fontSize: '12px',
-                      cursor: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
-                      opacity: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
+                      cursor: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                      opacity: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
                     }}
                   >
-                    {deletingProvider ? t('llm_provider_deleting', lang) : t('llm_provider_delete', lang)}
+                    {testingProvider ? t('llm_provider_testing', lang) : t('llm_provider_test', lang)}
                   </button>
-                )}
-                <button
-                  onClick={() => void saveProvider()}
-                  disabled={savingProvider || testingProvider || syncingProviderModels || deletingProvider}
+                  <button
+                    onClick={() => void syncCurrentProviderModels()}
+                    disabled={!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: '10px',
+                      border: '0.5px solid var(--color-border-secondary)',
+                      background: 'var(--color-background-secondary)',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: '12px',
+                      cursor: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                      opacity: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
+                    }}
+                  >
+                    {syncingProviderModels ? t('llm_provider_refreshing', lang) : t('llm_provider_refresh', lang)}
+                  </button>
+                  {selectedProviderId && (
+                    <button
+                      onClick={() => void deleteCurrentProvider()}
+                      disabled={testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: '10px',
+                        border: '0.5px solid color-mix(in srgb, var(--color-text-danger) 24%, transparent)',
+                        background: 'transparent',
+                        color: 'var(--color-text-danger)',
+                        fontSize: '12px',
+                        cursor: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                        opacity: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
+                      }}
+                    >
+                      {deletingProvider ? t('llm_provider_deleting', lang) : t('llm_provider_delete', lang)}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void saveProvider()}
+                    disabled={savingProvider || testingProvider || syncingProviderModels || deletingProvider}
+                    style={{
+                      padding: '7px 12px',
+                      borderRadius: '10px',
+                      border: 'none',
+                      background: 'var(--color-text-primary)',
+                      color: 'var(--color-background-primary)',
+                      fontSize: "13px",
+                      cursor: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 'not-allowed' : 'pointer',
+                      opacity: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 0.5 : 1,
+                      fontWeight: 600,
+                      minWidth: '68px',
+                    }}
+                  >
+                    {t('llm_provider_save', lang)}
+                  </button>
+                </div>
+              </div>
+
+              {msg && (
+                <div
                   style={{
-                    padding: '7px 12px',
-                    borderRadius: '10px',
-                    border: 'none',
-                    background: 'var(--color-text-primary)',
-                    color: 'var(--color-background-primary)',
-                    fontSize: "13px",
-                    cursor: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 'not-allowed' : 'pointer',
-                    opacity: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 0.5 : 1,
-                    fontWeight: 600,
-                    minWidth: '68px',
+                    fontSize: '12px',
+                    color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)',
                   }}
                 >
-                  {t('llm_provider_save', lang)}
-                </button>
-              </div>
+                  {msg}
+                </div>
+              )}
             </div>
-
-            {msg && (
-              <div
-                className="mt-2"
-                style={{
-                  fontSize: '12px',
-                  color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)',
-                }}
-              >
-                {msg}
-              </div>
-            )}
           </div>
         </div>
       )}

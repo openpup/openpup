@@ -401,6 +401,13 @@ pub async fn test_llm_provider(provider: ProviderPayload) -> Result<ProviderTest
     let cfg = load();
     let mut provider_cfg = provider_from_payload(provider.clone());
     merge_existing_provider_secret(&cfg, &mut provider_cfg);
+    if provider_cfg.kind != "ollama" && provider_cfg.api_key.trim().is_empty() {
+        return Ok(ProviderTestResult {
+            ok: false,
+            message: "请先填写 API Key，再测试连接".to_string(),
+            models_found: 0,
+        });
+    }
     match fetch_provider_models(&provider_cfg).await {
         Ok(models) => Ok(ProviderTestResult {
             ok: true,
@@ -445,6 +452,10 @@ pub async fn refresh_llm_provider_models(
 
     if provider_cfg.id.trim().is_empty() {
         provider_cfg.id = provider_id.clone();
+    }
+
+    if provider_cfg.kind != "ollama" && provider_cfg.api_key.trim().is_empty() {
+        return Err("请先填写 API Key，再同步模型".to_string());
     }
 
     let models = fetch_provider_models(&provider_cfg)
