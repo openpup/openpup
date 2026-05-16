@@ -472,8 +472,7 @@ async fn run_chat(
         "daemon".to_string()
     } else {
         let runtime = ensure_local_runtime(local_runtime).await?;
-        let llm_cfg = runtime.alpha.llm_client.current_config();
-        llm_cfg.1
+        runtime.alpha.llm_client.model_name()
     };
     println!(
         "{} {} · {} · {}",
@@ -698,12 +697,18 @@ async fn show_status(runtime: &HeadlessRuntime) -> Result<()> {
     println!("{}", "🐾 openpup 状态".bold());
     println!();
 
-    let (provider, model, _mini, _embed, api_key, api_base) =
-        runtime.alpha.llm_client.current_config();
-    let provider_label = match provider {
-        openpup_core::llm::client::Provider::OpenAI => "openai",
-        openpup_core::llm::client::Provider::Ollama => "ollama",
-    };
+    let (providers, routing) = runtime.alpha.llm_client.routing_config();
+    let primary = providers
+        .iter()
+        .find(|provider| provider.id == routing.primary.provider_id);
+    let model = routing.primary.model;
+    let provider_label = primary
+        .map(|provider| provider.provider.as_str())
+        .unwrap_or("unknown");
+    let api_key = primary.map(|provider| provider.api_key.as_str()).unwrap_or("");
+    let api_base = primary
+        .map(|provider| provider.api_base.as_str())
+        .filter(|base| !base.is_empty());
     println!(
         "  {} {} ({})",
         "模型:".dimmed(),
@@ -713,7 +718,7 @@ async fn show_status(runtime: &HeadlessRuntime) -> Result<()> {
     println!(
         "  {} {}",
         "API Key:".dimmed(),
-        if api_key.as_deref().unwrap_or("").is_empty() {
+        if api_key.is_empty() {
             "未配置".red().to_string()
         } else {
             "已配置".green().to_string()

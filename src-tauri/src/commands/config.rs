@@ -47,6 +47,15 @@ pub struct LlmConfigInfo {
     pub api_base: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmSettingsSnapshot {
+    pub config: LlmConfigInfo,
+    pub providers: Vec<ProviderPayload>,
+    pub routing: RoutingPayload,
+    pub catalog: Vec<ProviderCatalogItem>,
+}
+
 /// A sanitised view of the app config that the LLM can safely read.
 #[derive(Serialize)]
 pub struct SafeConfig {
@@ -289,6 +298,42 @@ pub async fn get_llm_config(_state: State<'_, AppState>) -> Result<LlmConfigInfo
                     .unwrap_or_else(|| cfg.llm.api_base.clone()),
             )
         },
+    })
+}
+
+#[tauri::command]
+pub async fn get_llm_settings_snapshot() -> Result<LlmSettingsSnapshot, String> {
+    let cfg = load();
+    let (primary_provider, primary_model, mini_model, embed_model) = resolved_primary_snapshot(&cfg);
+    Ok(LlmSettingsSnapshot {
+        config: LlmConfigInfo {
+            provider: primary_provider
+                .map(|provider| provider.provider.clone())
+                .unwrap_or_else(|| cfg.llm.provider.clone()),
+            model: primary_model,
+            mini_model,
+            embed_model,
+            api_base: if primary_provider
+                .map(|provider| provider.api_base.trim().is_empty())
+                .unwrap_or(cfg.llm.api_base.trim().is_empty())
+            {
+                None
+            } else {
+                Some(
+                    primary_provider
+                        .map(|provider| provider.api_base.clone())
+                        .unwrap_or_else(|| cfg.llm.api_base.clone()),
+                )
+            },
+        },
+        providers: cfg
+            .llm
+            .providers
+            .iter()
+            .map(payload_from_provider)
+            .collect(),
+        routing: routing_to_payload(&cfg.llm.routing),
+        catalog: provider_catalog(),
     })
 }
 

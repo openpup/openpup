@@ -13,7 +13,12 @@ interface DesktopBehaviorSettings {
 export const DesktopSettings: React.FC = () => {
   const { lang } = useLang();
   const { setSettingsErr } = useAppStore();
-  const [settings, setSettings] = React.useState<DesktopBehaviorSettings | null>(null);
+  const [settings, setSettings] = React.useState<DesktopBehaviorSettings>({
+    minimizeToTrayOnClose: true,
+    launchAtStartup: false,
+    trayAvailable: true,
+    autostartSupported: true,
+  });
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [saveState, setSaveState] = React.useState<'idle' | 'saving' | 'saved'>('idle');
   const saveTimerRef = React.useRef<number | null>(null);
@@ -60,32 +65,6 @@ export const DesktopSettings: React.FC = () => {
     }
   };
 
-  if (!settings) {
-    return (
-      <section>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-          <h2 className="mb-0" style={{ fontSize: '14px', fontWeight: 500, color: 'var(--color-text-primary)' }}>
-            {t('desktop_settings_title', lang)}
-          </h2>
-        </div>
-        {loadFailed ? (
-          <p
-            style={{
-              margin: 0,
-              color: 'var(--color-text-danger)',
-              background: 'var(--color-background-danger)',
-              padding: '8px 10px',
-              borderRadius: '8px',
-              fontSize: '12px',
-            }}
-          >
-            {t('desktop_settings_load_failed', lang)}
-          </p>
-        ) : null}
-      </section>
-    );
-  }
-
   return (
     <section>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
@@ -107,6 +86,20 @@ export const DesktopSettings: React.FC = () => {
               : ' '}
         </div>
       </div>
+      {loadFailed ? (
+        <p
+          style={{
+            margin: '0 0 10px 0',
+            color: 'var(--color-text-danger)',
+            background: 'var(--color-background-danger)',
+            padding: '8px 10px',
+            borderRadius: '8px',
+            fontSize: '12px',
+          }}
+        >
+          {t('desktop_settings_load_failed', lang)}
+        </p>
+      ) : null}
 
       <div style={{ display: 'grid', gap: '7px' }}>
         <label

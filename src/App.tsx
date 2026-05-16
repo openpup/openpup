@@ -180,11 +180,55 @@ interface ProviderCatalogItem {
   defaultId: string;
 }
 
+interface LlmSettingsSnapshot {
+  config: LlmConfigInfo;
+  providers: ProviderPayload[];
+  routing: RoutingPayload;
+  catalog: ProviderCatalogItem[];
+}
+
+const DEFAULT_LLM_ROUTING: RoutingPayload = {
+  primary: { providerId: '', model: '' },
+  mini: { providerId: '', model: '' },
+  embedding: { providerId: '', model: '' },
+};
+
+const DEFAULT_PROVIDER_CATALOG: ProviderCatalogItem[] = [
+  {
+    key: 'openai_compatible',
+    label: 'OpenAI (Compatible)',
+    defaultApiBase: 'https://api.openai.com/v1',
+    defaultName: 'OpenAI (Compatible)',
+    defaultId: 'openai-compatible-main',
+  },
+  {
+    key: 'openai_responses',
+    label: 'OpenAI (Responses)',
+    defaultApiBase: 'https://api.openai.com/v1',
+    defaultName: 'OpenAI (Responses)',
+    defaultId: 'openai-responses-main',
+  },
+  {
+    key: 'anthropic',
+    label: 'Anthropic',
+    defaultApiBase: 'https://api.anthropic.com',
+    defaultName: 'Anthropic',
+    defaultId: 'anthropic-main',
+  },
+  {
+    key: 'ollama',
+    label: 'Ollama',
+    defaultApiBase: 'http://127.0.0.1:11434',
+    defaultName: 'Ollama',
+    defaultId: 'ollama-main',
+  },
+];
+
 const LlmConfigPanel: React.FC = () => {
   const { lang } = useLang();
   const [cfg, setCfg] = React.useState<LlmConfigInfo | null>(null);
   const [providers, setProviders] = React.useState<ProviderPayload[]>([]);
-  const [routing, setRouting] = React.useState<RoutingPayload | null>(null);
+  const [routing, setRouting] = React.useState<RoutingPayload>(DEFAULT_LLM_ROUTING);
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null);
   const [providerForm, setProviderForm] = React.useState<ProviderPayload>({
     id: '',
@@ -206,25 +250,20 @@ const LlmConfigPanel: React.FC = () => {
   const [providerDrawerOpen, setProviderDrawerOpen] = React.useState(false);
   const [openProviderMenuKey, setOpenProviderMenuKey] = React.useState<keyof RoutingPayload | null>(null);
   const [openModelMenuKey, setOpenModelMenuKey] = React.useState<keyof RoutingPayload | null>(null);
-  const [providerCatalog, setProviderCatalog] = React.useState<ProviderCatalogItem[]>([]);
+  const [providerCatalog, setProviderCatalog] = React.useState<ProviderCatalogItem[]>(DEFAULT_PROVIDER_CATALOG);
 
   React.useEffect(() => {
     const loadAll = async () => {
       try {
-        const [c, providerList, currentRouting, catalog] = await Promise.all([
-          invoke<LlmConfigInfo>('get_llm_config'),
-          invoke<ProviderPayload[]>('list_llm_providers'),
-          invoke<RoutingPayload>('get_llm_routing'),
-          invoke<ProviderCatalogItem[]>('list_llm_provider_catalog'),
-        ]);
-        setCfg(c);
-        setProviders(providerList);
-        setRouting(currentRouting);
-        setProviderCatalog(catalog);
-        if (providerList[0]) {
-          setSelectedProviderId(providerList[0].id);
-          setProviderForm({ ...providerList[0], apiKey: '' });
-          setModelsText(providerList[0].models.join(', '));
+        const snapshot = await invoke<LlmSettingsSnapshot>('get_llm_settings_snapshot');
+        setCfg(snapshot.config);
+        setProviders(snapshot.providers);
+        setRouting(snapshot.routing);
+        setProviderCatalog(snapshot.catalog);
+        if (snapshot.providers[0]) {
+          setSelectedProviderId(snapshot.providers[0].id);
+          setProviderForm({ ...snapshot.providers[0], apiKey: '' });
+          setModelsText(snapshot.providers[0].models.join(', '));
         }
       } catch {}
     };
@@ -469,205 +508,203 @@ const LlmConfigPanel: React.FC = () => {
         </div>
 
         <div className="space-y-2">
-          {routing && (
-            <div className="space-y-2 pt-1">
-              {(['primary', 'mini', 'embedding'] as Array<keyof RoutingPayload>).map((key) => {
-                const selectedProvider = providers.find((provider) => provider.id === routing[key].providerId);
-                return (
+          <div className="space-y-2 pt-1">
+            {(['primary', 'mini', 'embedding'] as Array<keyof RoutingPayload>).map((key) => {
+              const selectedProvider = providers.find((provider) => provider.id === routing[key].providerId);
+              return (
+                <div
+                  key={key}
+                  className="grid gap-2 md:grid-cols-[112px_minmax(0,1fr)] md:items-center"
+                >
+                  <div style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)' }}>{routeLabel(key)}</div>
                   <div
-                    key={key}
-                    className="grid gap-2 md:grid-cols-[112px_minmax(0,1fr)] md:items-center"
-                  >
-                    <div style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)' }}>{routeLabel(key)}</div>
-                    <div
-                      className="flex flex-col md:flex-row"
-                      style={{
-                        border: '0.5px solid var(--color-border-secondary)',
-                        borderRadius: '18px',
-                        minHeight: '40px',
-                        overflow: 'visible',
-                      }}
-                      >
-                        <div
-                          className="relative"
-                          style={{
-                            width: '188px',
-                            borderRight: '0.5px solid var(--color-border-secondary)',
-                            background: 'var(--color-background-primary)',
-                            borderTopLeftRadius: '18px',
-                            borderBottomLeftRadius: '18px',
-                            overflow: 'visible',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenProviderMenuKey((current) => current === key ? null : key);
-                              setOpenModelMenuKey(null);
-                            }}
-                            className="h-full w-full focus:outline-none"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '0 24px',
-                              fontSize: '12px',
-                              border: 'none',
-                              background: 'transparent',
-                              color: 'var(--color-text-primary)',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              textAlign: 'center',
-                              minHeight: '40px',
-                            }}
-                          >
-                            {selectedProvider?.name || ''}
-                          </button>
-                          <span
-                            style={{
-                              position: 'absolute',
-                              right: '8px',
-                              top: '50%',
-                              transform: 'translateY(-50%)',
-                              fontSize: '8px',
-                              color: 'var(--color-text-tertiary)',
-                              pointerEvents: 'none',
-                            }}
-                          >
-                            ▾
-                          </span>
-                          {openProviderMenuKey === key && providers.length > 0 && (
-                            <div
-                              style={{
-                                position: 'absolute',
-                                left: '0',
-                                right: '0',
-                                top: 'calc(100% + 6px)',
-                                zIndex: 25,
-                                maxHeight: '180px',
-                                overflowY: 'auto',
-                                border: '0.5px solid var(--color-border-secondary)',
-                                borderRadius: '12px',
-                                background: 'var(--color-background-primary)',
-                                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
-                              }}
-                            >
-                              {providers.map((provider, index) => (
-                                <button
-                                  key={provider.id}
-                                  type="button"
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], providerId: provider.id } }) : prev);
-                                    setOpenProviderMenuKey(null);
-                                  }}
-                                  className="w-full text-center"
-                                  style={{
-                                    display: 'block',
-                                    padding: '8px 12px',
-                                    fontSize: '12px',
-                                    border: 'none',
-                                    background: 'transparent',
-                                    color: 'var(--color-text-primary)',
-                                    borderBottom: index === providers.length - 1 ? 'none' : '0.5px solid var(--color-border-secondary)',
-                                  }}
-                                >
-                                  {provider.name}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                    className="flex flex-col md:flex-row"
+                    style={{
+                      border: '0.5px solid var(--color-border-secondary)',
+                      borderRadius: '18px',
+                      minHeight: '40px',
+                      overflow: 'visible',
+                    }}
+                    >
                       <div
-                        className="min-w-0 flex-1"
+                        className="relative"
                         style={{
-                          background: 'var(--color-background-secondary)',
-                          borderTopRightRadius: '18px',
-                          borderBottomRightRadius: '18px',
+                          width: '188px',
+                          borderRight: '0.5px solid var(--color-border-secondary)',
+                          background: 'var(--color-background-primary)',
+                          borderTopLeftRadius: '18px',
+                          borderBottomLeftRadius: '18px',
                           overflow: 'visible',
                         }}
                       >
-                        <div className="relative h-full">
-                          <input
-                            value={routing[key].model}
-                            onChange={(e) => setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], model: e.target.value } }) : prev)}
-                            className="h-full w-full focus:outline-none"
-                            autoComplete="off"
-                            onFocus={() => {
-                              setOpenModelMenuKey(key);
-                              setOpenProviderMenuKey(null);
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenProviderMenuKey((current) => current === key ? null : key);
+                            setOpenModelMenuKey(null);
+                          }}
+                          className="h-full w-full focus:outline-none"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '0 24px',
+                            fontSize: '12px',
+                            border: 'none',
+                            background: 'transparent',
+                            color: 'var(--color-text-primary)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            textAlign: 'center',
+                            minHeight: '40px',
+                          }}
+                        >
+                          {selectedProvider?.name || ''}
+                        </button>
+                        <span
+                          style={{
+                            position: 'absolute',
+                            right: '8px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            fontSize: '8px',
+                            color: 'var(--color-text-tertiary)',
+                            pointerEvents: 'none',
+                          }}
+                        >
+                          ▾
+                        </span>
+                        {openProviderMenuKey === key && providers.length > 0 && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: '0',
+                              right: '0',
+                              top: 'calc(100% + 6px)',
+                              zIndex: 25,
+                              maxHeight: '180px',
+                              overflowY: 'auto',
+                              border: '0.5px solid var(--color-border-secondary)',
+                              borderRadius: '12px',
+                              background: 'var(--color-background-primary)',
+                              boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
                             }}
-                            onClick={() => {
-                              setOpenModelMenuKey(key);
-                              setOpenProviderMenuKey(null);
+                          >
+                            {providers.map((provider, index) => (
+                              <button
+                                key={provider.id}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setRouting((prev) => ({ ...prev, [key]: { ...prev[key], providerId: provider.id } }));
+                                  setOpenProviderMenuKey(null);
+                                }}
+                                className="w-full text-center"
+                                style={{
+                                  display: 'block',
+                                  padding: '8px 12px',
+                                  fontSize: '12px',
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: 'var(--color-text-primary)',
+                                  borderBottom: index === providers.length - 1 ? 'none' : '0.5px solid var(--color-border-secondary)',
+                                }}
+                              >
+                                {provider.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    <div
+                      className="min-w-0 flex-1"
+                      style={{
+                        background: 'var(--color-background-secondary)',
+                        borderTopRightRadius: '18px',
+                        borderBottomRightRadius: '18px',
+                        overflow: 'visible',
+                      }}
+                    >
+                      <div className="relative h-full">
+                        <input
+                          value={routing[key].model}
+                          onChange={(e) => setRouting((prev) => ({ ...prev, [key]: { ...prev[key], model: e.target.value } }))}
+                          className="h-full w-full focus:outline-none"
+                          autoComplete="off"
+                          onFocus={() => {
+                            setOpenModelMenuKey(key);
+                            setOpenProviderMenuKey(null);
+                          }}
+                          onClick={() => {
+                            setOpenModelMenuKey(key);
+                            setOpenProviderMenuKey(null);
+                          }}
+                          onBlur={() => {
+                            window.setTimeout(() => {
+                              setOpenModelMenuKey((current) => current === key ? null : current);
+                            }, 120);
+                          }}
+                          style={{ fontSize: '12px', padding: '0 12px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)' }}
+                        />
+                        {openModelMenuKey === key && (selectedProvider?.models?.length ?? 0) > 0 && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: '0',
+                              right: '0',
+                              top: 'calc(100% + 6px)',
+                              zIndex: 20,
+                              maxHeight: '180px',
+                              overflowY: 'auto',
+                              border: '0.5px solid var(--color-border-secondary)',
+                              borderRadius: '12px',
+                              background: 'var(--color-background-primary)',
+                              boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
                             }}
-                            onBlur={() => {
-                              window.setTimeout(() => {
-                                setOpenModelMenuKey((current) => current === key ? null : current);
-                              }, 120);
-                            }}
-                            style={{ fontSize: '12px', padding: '0 12px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)' }}
-                          />
-                          {openModelMenuKey === key && (selectedProvider?.models?.length ?? 0) > 0 && (
-                            <div
-                              style={{
-                                position: 'absolute',
-                                left: '0',
-                                right: '0',
-                                top: 'calc(100% + 6px)',
-                                zIndex: 20,
-                                maxHeight: '180px',
-                                overflowY: 'auto',
-                                border: '0.5px solid var(--color-border-secondary)',
-                                borderRadius: '12px',
-                                background: 'var(--color-background-primary)',
-                                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
-                              }}
-                            >
-                              {selectedProvider?.models.map((model) => (
-                                <button
-                                  key={model}
-                                  type="button"
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    setRouting((prev) => prev ? ({ ...prev, [key]: { ...prev[key], model } }) : prev);
-                                    setOpenModelMenuKey(null);
-                                  }}
-                                  className="w-full text-left"
-                                  style={{
-                                    display: 'block',
-                                    padding: '8px 12px',
-                                    fontSize: '12px',
-                                    border: 'none',
-                                    background: 'transparent',
-                                    color: 'var(--color-text-primary)',
-                                    borderBottom: model === selectedProvider.models[selectedProvider.models.length - 1] ? 'none' : '0.5px solid var(--color-border-secondary)',
-                                  }}
-                                >
-                                  {model}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                          >
+                            {selectedProvider?.models.map((model) => (
+                              <button
+                                key={model}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setRouting((prev) => ({ ...prev, [key]: { ...prev[key], model } }));
+                                  setOpenModelMenuKey(null);
+                                }}
+                                className="w-full text-left"
+                                style={{
+                                  display: 'block',
+                                  padding: '8px 12px',
+                                  fontSize: '12px',
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: 'var(--color-text-primary)',
+                                  borderBottom: model === selectedProvider.models[selectedProvider.models.length - 1] ? 'none' : '0.5px solid var(--color-border-secondary)',
+                                }}
+                              >
+                                {model}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                </div>
+              );
+            })}
+          </div>
           <div className="mt-3 space-y-1 leading-relaxed" style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>
             <div>{t('llm_hint_mini', lang)}</div>
             <div>{t('llm_hint_embed', lang)}</div>
           </div>
           <div className="flex items-center gap-3 pt-1">
-            <button
-              onClick={() => void saveRouting()}
-              disabled={savingRouting || !routing}
-              style={{ padding: '7px 11px', borderRadius: '10px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: savingRouting ? 'not-allowed' : 'pointer', opacity: savingRouting ? 0.5 : 1 }}
-            >
+              <button
+                onClick={() => void saveRouting()}
+                disabled={savingRouting}
+                style={{ padding: '7px 11px', borderRadius: '10px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: savingRouting ? 'not-allowed' : 'pointer', opacity: savingRouting ? 0.5 : 1 }}
+              >
               {t('llm_save', lang)}
             </button>
             <div className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-1">

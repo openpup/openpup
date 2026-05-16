@@ -41,6 +41,9 @@ use tauri::menu::{Menu, MenuItem};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const MAIN_TRAY_ID: &str = "main-tray";
+
 #[derive(Default)]
 pub struct DesktopBehaviorState {
     pub allow_exit: AtomicBool,
@@ -150,6 +153,7 @@ macro_rules! all_commands {
             commands::list_diary_dates,
             commands::read_diary_entry,
             commands::get_llm_config,
+            commands::get_llm_settings_snapshot,
             commands::get_safe_config,
             commands::list_llm_provider_catalog,
             commands::list_llm_providers,
@@ -583,7 +587,7 @@ fn run_desktop() -> anyhow::Result<()> {
     let desktop_behavior_state = Arc::new(DesktopBehaviorState::default());
     let desktop_behavior_state_for_events = desktop_behavior_state.clone();
 
-    tauri::Builder::default()
+    let tauri_app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .manage(desktop_behavior_state.clone())
@@ -637,14 +641,26 @@ fn run_desktop() -> anyhow::Result<()> {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .map_err(|err| anyhow::anyhow!("error while running openpup tauri application: {err}"))?;
+        .build(tauri::generate_context!())
+        .map_err(|err| anyhow::anyhow!("failed to build tauri app: {err}"))?;
+
+    tauri_app.run(move |app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            show_main_window(app);
+        }
+    });
 
     Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn show_main_window(app: &tauri::AppHandle) {
+    set_tray_show_menu_on_left_click(app, true);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_skip_taskbar(false);
         let _ = window.show();
@@ -655,9 +671,17 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn hide_main_window_to_tray(app: &tauri::AppHandle) {
+    set_tray_show_menu_on_left_click(app, false);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_skip_taskbar(true);
         let _ = window.hide();
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn set_tray_show_menu_on_left_click(app: &tauri::AppHandle, enable: bool) {
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        let _ = tray.set_show_menu_on_left_click(enable);
     }
 }
 
@@ -676,10 +700,11 @@ fn setup_desktop_tray(
     let state_for_menu = desktop_behavior_state.clone();
     let app_for_click = app.clone();
 
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id(MAIN_TRAY_ID)
         .icon(icon)
         .tooltip("OpenPup")
         .menu(&menu)
+        .show_menu_on_left_click(true)
         .on_tray_icon_event(move |_tray, event| match event {
             TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -689,7 +714,15 @@ fn setup_desktop_tray(
             | TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
-            } => show_main_window(&app_for_click),
+            } => {
+                let is_hidden = app_for_click
+                    .get_webview_window("main")
+                    .and_then(|window| window.is_visible().ok().map(|visible| !visible))
+                    .unwrap_or(false);
+                if is_hidden {
+                    show_main_window(&app_for_click);
+                }
+            }
             _ => {}
         })
         .on_menu_event(move |app, event| match event.id.as_ref() {
