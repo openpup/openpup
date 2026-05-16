@@ -131,10 +131,6 @@ impl OpenPupApp {
         )
     }
 
-    pub fn llm_provider_name(&self) -> String {
-        self.alpha.llm_client.primary_provider_name()
-    }
-
     pub fn current_llm_routing(
         &self,
     ) -> (
@@ -678,11 +674,8 @@ pub async fn build_app(
         .ensure_workspace_initialized()
         .with_context(|| format!("initialize workspace at {}", workspace_root.display()))?;
 
-    let llm_client = Arc::new(LlmClient::new_from_env());
-    {
-        let cfg = crate::config::load_with_env();
-        llm_client.reconfigure(cfg.llm.providers, cfg.llm.routing);
-    }
+    let cfg = crate::config::load_with_env();
+    let llm_client = Arc::new(LlmClient::new(cfg.llm.providers.clone(), cfg.llm.routing.clone()));
 
     let memory = Arc::new(
         MemorySystem::new(
@@ -727,7 +720,6 @@ pub async fn build_app(
         .register_builtin(include_str!("../../skills/notify.skill.toml"))
         .await;
 
-    let cfg = crate::config::load_with_env();
     let mut skill_scan_roots = Vec::new();
     skill_scan_roots.push(
         crate::config::app_root()

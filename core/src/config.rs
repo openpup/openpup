@@ -30,22 +30,22 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// "openai" or "ollama"
+    /// Legacy compatibility mirror of the primary route provider.
     #[serde(default = "default_provider")]
     pub provider: String,
-    /// Primary model (e.g. "gpt-4o", "deepseek-ai/DeepSeek-V3.2")
+    /// Legacy compatibility mirror of the primary route model.
     #[serde(default = "default_model")]
     pub model: String,
-    /// Cheaper model for classification tasks
+    /// Legacy compatibility mirror of the mini route model.
     #[serde(default)]
     pub mini_model: String,
-    /// API key (or set OPENPUP_API_KEY env var)
+    /// Legacy compatibility mirror of the primary route API key.
     #[serde(default)]
     pub api_key: String,
-    /// Base URL override (leave empty for provider default)
+    /// Legacy compatibility mirror of the primary route API base.
     #[serde(default)]
     pub api_base: String,
-    /// Embedding model
+    /// Legacy compatibility mirror of the embedding route model.
     #[serde(default = "default_embed_model")]
     pub embed_model: String,
     /// Saved provider registry for flexible routing.
@@ -394,28 +394,7 @@ pub fn save(cfg: &AppConfig) -> Result<()> {
 /// Load config and apply env-var overrides.
 pub fn load_with_env() -> AppConfig {
     let mut cfg = load();
-    // env vars take precedence over file
-    if let Ok(v) = std::env::var("OPENPUP_API_KEY") {
-        cfg.llm.api_key = v;
-    }
-    if let Ok(v) = std::env::var("OPENAI_API_KEY") {
-        if cfg.llm.api_key.is_empty() {
-            cfg.llm.api_key = v;
-        }
-    }
-    if let Ok(v) = std::env::var("OPENAI_BASE_URL") {
-        if cfg.llm.api_base.is_empty() {
-            cfg.llm.api_base = v;
-        }
-    }
-    if let Ok(v) = std::env::var("OPENPUP_LLM_PROVIDER") {
-        cfg.llm.provider = v;
-    }
-    if let Ok(v) = std::env::var("OPENAI_MODEL") {
-        if cfg.llm.model == default_model() {
-            cfg.llm.model = v;
-        }
-    }
+    apply_llm_env_overrides(&mut cfg.llm);
     normalize_llm_config(&mut cfg.llm);
     cfg
 }
@@ -425,6 +404,52 @@ fn normalize_llm_config(llm: &mut LlmConfig) {
     ensure_provider_defaults(llm);
     ensure_routing_defaults(llm);
     sync_legacy_fields_from_routing(llm);
+}
+
+fn apply_llm_env_overrides(llm: &mut LlmConfig) {
+    let primary_provider_id = llm
+        .routing
+        .primary
+        .provider_id
+        .clone();
+
+    let primary_provider_index = llm
+        .providers
+        .iter_mut()
+        .position(|provider| provider.id == primary_provider_id)
+        .or_else(|| (!llm.providers.is_empty()).then_some(0));
+
+    if let Some(index) = primary_provider_index {
+        let primary_provider = &mut llm.providers[index];
+        if let Ok(v) = std::env::var("OPENPUP_LLM_PROVIDER") {
+            primary_provider.provider = v.clone();
+            primary_provider.kind = if v.eq_ignore_ascii_case("ollama") {
+                "ollama".to_string()
+            } else {
+                default_provider_kind()
+            };
+            if primary_provider.api_base.trim().is_empty() {
+                primary_provider.api_base =
+                    default_api_base_for_provider(&primary_provider.kind, &primary_provider.provider);
+            }
+        }
+
+        if let Ok(v) = std::env::var("OPENPUP_API_KEY") {
+            primary_provider.api_key = v;
+        } else if let Ok(v) = std::env::var("OPENAI_API_KEY") {
+            if primary_provider.api_key.is_empty() {
+                primary_provider.api_key = v;
+            }
+        }
+
+        if let Ok(v) = std::env::var("OPENAI_BASE_URL") {
+            primary_provider.api_base = v;
+        }
+    }
+
+    if let Ok(v) = std::env::var("OPENAI_MODEL") {
+        llm.routing.primary.model = v;
+    }
 }
 
 fn migrate_legacy_provider(llm: &mut LlmConfig) {

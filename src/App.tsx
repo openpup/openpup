@@ -172,6 +172,15 @@ interface ProviderTestResult {
   modelsFound: number;
 }
 
+interface ProviderCatalogItem {
+  key: string;
+  label: string;
+  kind: string;
+  defaultApiBase: string;
+  defaultName: string;
+  defaultId: string;
+}
+
 const LlmConfigPanel: React.FC = () => {
   const { lang } = useLang();
   const [cfg, setCfg] = React.useState<LlmConfigInfo | null>(null);
@@ -191,23 +200,29 @@ const LlmConfigPanel: React.FC = () => {
   const [modelsText, setModelsText] = React.useState('');
   const [savingProvider, setSavingProvider] = React.useState(false);
   const [savingRouting, setSavingRouting] = React.useState(false);
+  const [testingProvider, setTestingProvider] = React.useState(false);
+  const [syncingProviderModels, setSyncingProviderModels] = React.useState(false);
+  const [deletingProvider, setDeletingProvider] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [msgIsError, setMsgIsError] = React.useState(false);
   const [providerDrawerOpen, setProviderDrawerOpen] = React.useState(false);
   const [openProviderMenuKey, setOpenProviderMenuKey] = React.useState<keyof RoutingPayload | null>(null);
   const [openModelMenuKey, setOpenModelMenuKey] = React.useState<keyof RoutingPayload | null>(null);
+  const [providerCatalog, setProviderCatalog] = React.useState<ProviderCatalogItem[]>([]);
 
   React.useEffect(() => {
     const loadAll = async () => {
       try {
-        const [c, providerList, currentRouting] = await Promise.all([
+        const [c, providerList, currentRouting, catalog] = await Promise.all([
           invoke<LlmConfigInfo>('get_llm_config'),
           invoke<ProviderPayload[]>('list_llm_providers'),
           invoke<RoutingPayload>('get_llm_routing'),
+          invoke<ProviderCatalogItem[]>('list_llm_provider_catalog'),
         ]);
         setCfg(c);
         setProviders(providerList);
         setRouting(currentRouting);
+        setProviderCatalog(catalog);
         if (providerList[0]) {
           setSelectedProviderId(providerList[0].id);
           setProviderForm({ ...providerList[0], apiKey: '' });
@@ -219,17 +234,39 @@ const LlmConfigPanel: React.FC = () => {
   }, []);
 
   const setProviderKey = (value: string) => {
+    const previousProvider = providerForm.provider;
+    const previousCatalog = providerCatalog.find((item) => item.key === previousProvider);
+    const nextCatalog = providerCatalog.find((item) => item.key === value);
     setProviderForm((f) => ({
       ...f,
       provider: value,
-      kind: value.trim().toLowerCase() === 'ollama' ? 'ollama' : 'openai_compatible',
+      kind: nextCatalog?.kind ?? (value.trim().toLowerCase() === 'ollama' ? 'ollama' : 'openai_compatible'),
+      id:
+        !f.id.trim() || f.id === previousCatalog?.defaultId
+          ? (nextCatalog?.defaultId ?? f.id)
+          : f.id,
+      name:
+        !f.name.trim() || f.name === previousCatalog?.defaultName
+          ? (nextCatalog?.defaultName ?? f.name)
+          : f.name,
+      apiBase:
+        !f.apiBase.trim() || f.apiBase === previousCatalog?.defaultApiBase
+          ? (nextCatalog?.defaultApiBase ?? f.apiBase)
+          : f.apiBase,
     }));
   };
 
   const syncCurrentProviderModels = async () => {
-    if (!providerForm.id.trim()) return;
+    if (syncingProviderModels) return;
+    setSyncingProviderModels(true);
     try {
-      const models = await invoke<string[]>('refresh_llm_provider_models', { providerId: providerForm.id.trim() });
+      const models = await invoke<string[]>('refresh_llm_provider_models', {
+        providerId: providerForm.id.trim(),
+        provider: {
+          ...providerForm,
+          models: modelsText.split(',').map((item) => item.trim()).filter(Boolean),
+        },
+      });
       setProviderForm((f) => ({ ...f, models }));
       setModelsText(models.join(', '));
       setProviders((list) => list.map((item) => item.id === providerForm.id ? { ...item, models } : item));
@@ -238,10 +275,14 @@ const LlmConfigPanel: React.FC = () => {
     } catch (e) {
       setMsg(String(e));
       setMsgIsError(true);
+    } finally {
+      setSyncingProviderModels(false);
     }
   };
 
   const testCurrentProvider = async () => {
+    if (testingProvider) return;
+    setTestingProvider(true);
     try {
       const result = await invoke<ProviderTestResult>('test_llm_provider', {
         provider: { ...providerForm, models: modelsText.split(',').map((item) => item.trim()).filter(Boolean) },
@@ -251,6 +292,33 @@ const LlmConfigPanel: React.FC = () => {
     } catch (e) {
       setMsg(String(e));
       setMsgIsError(true);
+    } finally {
+      setTestingProvider(false);
+    }
+  };
+
+  const deleteCurrentProvider = async () => {
+    if (!selectedProviderId || deletingProvider) return;
+    if (!window.confirm(t('llm_provider_delete_confirm', lang))) return;
+    setDeletingProvider(true);
+    try {
+      await invoke('delete_llm_provider', { providerId: selectedProviderId });
+      const nextProviders = await invoke<ProviderPayload[]>('list_llm_providers');
+      setProviders(nextProviders);
+      const next = nextProviders[0];
+      setSelectedProviderId(next?.id ?? null);
+      if (next) {
+        setProviderForm({ ...next, apiKey: '' });
+        setModelsText(next.models.join(', '));
+      } else {
+        setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
+        setModelsText('');
+      }
+    } catch (e) {
+      setMsg(String(e));
+      setMsgIsError(true);
+    } finally {
+      setDeletingProvider(false);
     }
   };
 
@@ -663,31 +731,31 @@ const LlmConfigPanel: React.FC = () => {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              {field(t('llm_provider_id', lang), providerForm.id, (value) => setProviderForm((f) => ({ ...f, id: value })), 'openrouter-main')}
-              {field(t('llm_provider_name', lang), providerForm.name, (value) => setProviderForm((f) => ({ ...f, name: value })), 'OpenRouter Main')}
+              <div className="space-y-1.5">
+                {field(t('llm_provider_id', lang), providerForm.id, (value) => setProviderForm((f) => ({ ...f, id: value })), 'openrouter-main')}
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_id_hint', lang)}</div>
+              </div>
+              <div className="space-y-1.5">
+                {field(t('llm_provider_name', lang), providerForm.name, (value) => setProviderForm((f) => ({ ...f, name: value })), 'OpenRouter Main')}
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_name_hint', lang)}</div>
+              </div>
               <div className="space-y-1.5 md:col-span-2">
                 <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key', lang)}</label>
-                <input
+                <select
                   value={providerForm.provider}
                   onChange={(e) => setProviderKey(e.target.value)}
                   className="w-full focus:outline-none transition-colors"
-                  style={{ width: '100%', fontSize: "13px", padding: '9px 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
-                  placeholder="openai / anthropic / openrouter / ollama"
-                  list="litellm-provider-keys"
-                />
-                <datalist id="litellm-provider-keys">
-                  <option value="openai" />
-                  <option value="anthropic" />
-                  <option value="openrouter" />
-                  <option value="ollama" />
-                  <option value="gemini" />
-                  <option value="vertex_ai" />
-                  <option value="bedrock" />
-                  <option value="azure" />
-                  <option value="deepseek" />
-                  <option value="groq" />
-                  <option value="xai" />
-                </datalist>
+                  style={{ width: '100%', height: '37px', fontSize: "13px", padding: '0 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
+                >
+                  {!providerCatalog.some((item) => item.key === providerForm.provider) && providerForm.provider && (
+                    <option value={providerForm.provider}>{providerForm.provider}</option>
+                  )}
+                  {providerCatalog.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
                 <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key_hint', lang)}</div>
               </div>
             </div>
@@ -709,7 +777,7 @@ const LlmConfigPanel: React.FC = () => {
               <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_models_hint', lang)}</div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 mt-3">
+            <div className="flex flex-wrap items-center gap-3 mt-4 border-t pt-3" style={{ borderColor: 'var(--color-border-tertiary)' }}>
               <label className="flex items-center gap-2" style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
                 <input
                   type="checkbox"
@@ -719,47 +787,91 @@ const LlmConfigPanel: React.FC = () => {
                 {t('llm_provider_enabled', lang)}
               </label>
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                <button onClick={() => void testCurrentProvider()} style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
-                  {t('llm_provider_test', lang)}
+                <button
+                  onClick={() => void testCurrentProvider()}
+                  disabled={!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: '10px',
+                    border: '0.5px solid var(--color-border-secondary)',
+                    background: 'var(--color-background-secondary)',
+                    color: 'var(--color-text-secondary)',
+                    fontSize: '12px',
+                    cursor: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                    opacity: (!providerForm.provider.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
+                  }}
+                >
+                  {testingProvider ? t('llm_provider_testing', lang) : t('llm_provider_test', lang)}
                 </button>
-                <button onClick={() => void syncCurrentProviderModels()} style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>
-                  {t('llm_provider_refresh', lang)}
+                <button
+                  onClick={() => void syncCurrentProviderModels()}
+                  disabled={!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: '10px',
+                    border: '0.5px solid var(--color-border-secondary)',
+                    background: 'var(--color-background-secondary)',
+                    color: 'var(--color-text-secondary)',
+                    fontSize: '12px',
+                    cursor: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                    opacity: (!providerForm.id.trim() || testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
+                  }}
+                >
+                  {syncingProviderModels ? t('llm_provider_refreshing', lang) : t('llm_provider_refresh', lang)}
                 </button>
                 {selectedProviderId && (
                   <button
-                    onClick={async () => {
-                      await invoke('delete_llm_provider', { providerId: selectedProviderId });
-                      const nextProviders = await invoke<ProviderPayload[]>('list_llm_providers');
-                      setProviders(nextProviders);
-                      const next = nextProviders[0];
-                      setSelectedProviderId(next?.id ?? null);
-                      if (next) {
-                        setProviderForm({ ...next, apiKey: '' });
-                        setModelsText(next.models.join(', '));
-                      } else {
-                        setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
-                        setModelsText('');
-                      }
+                    onClick={() => void deleteCurrentProvider()}
+                    disabled={testingProvider || syncingProviderModels || deletingProvider || savingProvider}
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: '10px',
+                      border: '0.5px solid color-mix(in srgb, var(--color-text-danger) 24%, transparent)',
+                      background: 'transparent',
+                      color: 'var(--color-text-danger)',
+                      fontSize: '12px',
+                      cursor: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 'not-allowed' : 'pointer',
+                      opacity: (testingProvider || syncingProviderModels || deletingProvider || savingProvider) ? 0.5 : 1,
                     }}
-                    style={{ fontSize: '12px', color: 'var(--color-text-danger)' }}
                   >
-                    {t('llm_provider_delete', lang)}
+                    {deletingProvider ? t('llm_provider_deleting', lang) : t('llm_provider_delete', lang)}
                   </button>
                 )}
                 <button
                   onClick={() => void saveProvider()}
-                  disabled={savingProvider}
-                  style={{ padding: '7px 11px', borderRadius: '10px', border: 'none', background: 'var(--color-text-primary)', color: 'var(--color-background-primary)', fontSize: "13px", cursor: savingProvider ? 'not-allowed' : 'pointer', opacity: savingProvider ? 0.5 : 1 }}
+                  disabled={savingProvider || testingProvider || syncingProviderModels || deletingProvider}
+                  style={{
+                    padding: '7px 12px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    background: 'var(--color-text-primary)',
+                    color: 'var(--color-background-primary)',
+                    fontSize: "13px",
+                    cursor: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 'not-allowed' : 'pointer',
+                    opacity: (savingProvider || testingProvider || syncingProviderModels || deletingProvider) ? 0.5 : 1,
+                    fontWeight: 600,
+                    minWidth: '68px',
+                  }}
                 >
                   {t('llm_provider_save', lang)}
                 </button>
               </div>
             </div>
+
+            {msg && (
+              <div
+                className="mt-2"
+                style={{
+                  fontSize: '12px',
+                  color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)',
+                }}
+              >
+                {msg}
+              </div>
+            )}
           </div>
         </div>
       )}
-
-      {msg && <div className="mt-4" style={{ fontSize: "13px", color: msgIsError ? 'var(--color-text-danger)' : 'var(--color-text-success)' }}>{msg}</div>}
     </section>
   );
 };

@@ -4,6 +4,15 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt as _;
+use litellm_rs::sdk::client::LLMClient as LiteSdkClient;
+use litellm_rs::sdk::config::{
+    ClientConfig as LiteClientConfig, ClientSettings as LiteClientSettings,
+    ProviderType as LiteProviderType, SdkProviderConfig as LiteProviderConfig,
+};
+use litellm_rs::sdk::types::{
+    ChatOptions as LiteChatOptions, Content as LiteContent, Message as LiteMessage,
+    Role as LiteRole, SdkChatRequest as LiteChatRequest,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -133,6 +142,39 @@ struct ResolvedTarget {
     model: String,
 }
 
+fn provider_type_for_sdk(provider: &LlmProviderConfig) -> LiteProviderType {
+    match provider.provider.to_ascii_lowercase().as_str() {
+        "anthropic" => LiteProviderType::Anthropic,
+        "azure" | "azure-openai" | "azure_openai" => LiteProviderType::Azure,
+        "google" | "gemini" => LiteProviderType::Google,
+        "ollama" => LiteProviderType::Ollama,
+        "mistral" => LiteProviderType::Mistral,
+        _ => LiteProviderType::OpenAI,
+    }
+}
+
+fn sdk_supported_for_chat(provider: &LlmProviderConfig) -> bool {
+    !provider.kind.eq_ignore_ascii_case("ollama")
+}
+
+fn sdk_supported_for_embeddings(provider: &LlmProviderConfig) -> bool {
+    !provider.kind.eq_ignore_ascii_case("ollama")
+}
+
+fn sdk_message_from_llm(message: &LlmMessage) -> LiteMessage {
+    LiteMessage {
+        role: match message.role.as_str() {
+            "system" => LiteRole::System,
+            "assistant" => LiteRole::Assistant,
+            "tool" => LiteRole::Tool,
+            _ => LiteRole::User,
+        },
+        content: Some(LiteContent::Text(message.content.clone())),
+        name: message.name.clone(),
+        tool_calls: None,
+    }
+}
+
 // ── LlmClient ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -148,81 +190,19 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
-    pub fn new_from_env() -> Self {
-        let provider_name = std::env::var("OPENPUP_LLM_PROVIDER")
-            .unwrap_or_else(|_| "openai".to_string())
-            .to_lowercase();
-        let kind = if provider_name == "ollama" {
-            "ollama".to_string()
-        } else {
-            "openai_compatible".to_string()
-        };
-        let model = if kind == "ollama" {
-            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_string())
-        } else {
-            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string())
-        };
-        let mini_model = if kind == "ollama" {
-            std::env::var("OLLAMA_MINI_MODEL").unwrap_or_else(|_| model.clone())
-        } else {
-            std::env::var("OPENAI_MINI_MODEL").unwrap_or_else(|_| model.clone())
-        };
-        let embed_model = if kind == "ollama" {
-            std::env::var("OLLAMA_EMBED_MODEL")
-                .unwrap_or_else(|_| "nomic-embed-text".to_string())
-        } else {
-            std::env::var("OPENAI_EMBED_MODEL").unwrap_or_else(|_| "BAAI/bge-m3".to_string())
-        };
-        let api_key = if kind == "ollama" {
-            None
-        } else {
-            std::env::var("OPENAI_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("OPENPUP_API_KEY").ok())
-        };
-        let api_base = if kind == "ollama" {
-            Some(
-                std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string()),
-            )
-        } else {
-            std::env::var("OPENAI_BASE_URL").ok()
-        };
-        let provider = LlmProviderConfig {
-            id: "default".to_string(),
-            name: "Default Provider".to_string(),
-            kind,
-            provider: provider_name,
-            api_base: api_base.unwrap_or_default(),
-            api_key: api_key.unwrap_or_default(),
-            enabled: true,
-            models: vec![model.clone(), mini_model.clone(), embed_model.clone()],
-        };
-        let routing = LlmRoutingConfig {
-            primary: crate::config::LlmRouteTarget {
-                provider_id: provider.id.clone(),
-                model: model.clone(),
-            },
-            mini: crate::config::LlmRouteTarget {
-                provider_id: provider.id.clone(),
-                model: mini_model.clone(),
-            },
-            embedding: crate::config::LlmRouteTarget {
-                provider_id: provider.id.clone(),
-                model: embed_model.clone(),
-            },
-        };
-
+    pub fn new(providers: Vec<LlmProviderConfig>, routing: LlmRoutingConfig) -> Self {
         Self {
-            config: Arc::new(RwLock::new(LlmInnerConfig {
-                providers: vec![provider],
-                routing,
-            })),
+            config: Arc::new(RwLock::new(LlmInnerConfig { providers, routing })),
             cache: Arc::new(Mutex::new(VecDeque::new())),
             http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
             last_call_usage: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn new_from_env() -> Self {
+        let cfg = crate::config::load_with_env();
+        Self::new(cfg.llm.providers, cfg.llm.routing)
     }
 
     /// Returns the token usage from the most recent API call.
@@ -306,6 +286,38 @@ impl LlmClient {
         (api_key, api_base)
     }
 
+    fn build_sdk_client(&self, target: &ResolvedTarget) -> Result<LiteSdkClient> {
+        let provider = LiteProviderConfig {
+            id: target.provider.id.clone(),
+            provider_type: provider_type_for_sdk(&target.provider),
+            name: target.provider.name.clone(),
+            api_key: target.provider.api_key.clone(),
+            base_url: Some(if target.provider.api_base.trim().is_empty() {
+                default_api_base_for_provider(&target.provider.kind, &target.provider.provider)
+            } else {
+                target.provider.api_base.clone()
+            }),
+            models: vec![target.model.clone()],
+            enabled: target.provider.enabled,
+            weight: 1.0,
+            rate_limit_rpm: None,
+            rate_limit_tpm: None,
+            settings: Default::default(),
+        };
+        LiteSdkClient::new(LiteClientConfig {
+            default_provider: Some(provider.id.clone()),
+            providers: vec![provider],
+            settings: LiteClientSettings {
+                timeout: 30,
+                max_retries: 2,
+                max_concurrent_requests: 32,
+                enable_logging: false,
+                enable_metrics: false,
+            },
+        })
+        .map_err(|e| anyhow!("litellm client init failed: {e}"))
+    }
+
     // ── Public chat API ───────────────────────────────────────────────────────
 
     pub async fn chat(&self, messages: Vec<LlmMessage>) -> Result<String> {
@@ -345,6 +357,38 @@ impl LlmClient {
         let cache_key = format!("{}:{}:{}", target.provider.id, target.model, serde_json::to_string(&messages)?);
         if let Some(hit) = self.lookup_cache(&cache_key) {
             return Ok(hit);
+        }
+
+        if sdk_supported_for_chat(&target.provider) {
+            let client = self.build_sdk_client(target)?;
+            let response = client
+                .chat_with_options(LiteChatRequest {
+                    model: target.model.clone(),
+                    messages: messages.iter().map(sdk_message_from_llm).collect(),
+                    options: LiteChatOptions::default(),
+                })
+                .await
+                .map_err(|e| anyhow!("litellm chat failed: {e}"))?;
+            let text = response
+                .choices
+                .first()
+                .and_then(|choice| choice.message.content.clone())
+                .and_then(|content| match content {
+                    LiteContent::Text(text) => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let usage = TokenUsage {
+                prompt_tokens: response.usage.prompt_tokens as u64,
+                completion_tokens: response.usage.completion_tokens as u64,
+                total_tokens: response.usage.total_tokens as u64,
+            };
+            self.usage.accumulate(&usage);
+            *self.last_call_usage.lock().unwrap() = Some(usage);
+
+            self.insert_cache(cache_key, text.clone());
+            return Ok(text);
         }
 
         let (api_key, api_base) = Self::resolved_auth(target);
@@ -933,6 +977,13 @@ impl LlmClient {
         }
 
         let target = self.resolve_target(LlmSlot::Embedding)?;
+        if sdk_supported_for_embeddings(&target.provider) {
+            let client = self.build_sdk_client(&target)?;
+            return client
+                .batch_embedding(texts, Some(&target.model))
+                .await
+                .map_err(|e| anyhow!("litellm embedding failed: {e}"));
+        }
         let (api_key, api_base) = Self::resolved_auth(&target);
 
         let base = api_base

@@ -65,6 +65,48 @@ pub struct ProviderTestResult {
     pub models_found: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalogItem {
+    pub key: String,
+    pub label: String,
+    pub kind: String,
+    pub default_api_base: String,
+    pub default_name: String,
+    pub default_id: String,
+}
+
+fn resolved_primary_snapshot(
+    cfg: &crate::config::AppConfig,
+) -> (Option<&LlmProviderConfig>, String, String, String) {
+    let routing = &cfg.llm.routing;
+    let primary_provider = cfg
+        .llm
+        .providers
+        .iter()
+        .find(|provider| provider.id == routing.primary.provider_id)
+        .or_else(|| cfg.llm.providers.iter().find(|provider| provider.enabled))
+        .or_else(|| cfg.llm.providers.first());
+
+    let primary_model = if routing.primary.model.trim().is_empty() {
+        cfg.llm.model.clone()
+    } else {
+        routing.primary.model.clone()
+    };
+    let mini_model = if routing.mini.model.trim().is_empty() {
+        primary_model.clone()
+    } else {
+        routing.mini.model.clone()
+    };
+    let embed_model = if routing.embedding.model.trim().is_empty() {
+        cfg.llm.embed_model.clone()
+    } else {
+        routing.embedding.model.clone()
+    };
+
+    (primary_provider, primary_model, mini_model, embed_model)
+}
+
 fn payload_from_provider(provider: &LlmProviderConfig) -> ProviderPayload {
     ProviderPayload {
         id: provider.id.clone(),
@@ -106,6 +148,20 @@ fn provider_from_payload(payload: ProviderPayload) -> LlmProviderConfig {
             .map(|model| model.trim().to_string())
             .filter(|model| !model.is_empty())
             .collect(),
+    }
+}
+
+fn merge_existing_provider_secret(cfg: &crate::config::AppConfig, provider: &mut LlmProviderConfig) {
+    if !provider.api_key.trim().is_empty() {
+        return;
+    }
+    if let Some(existing) = cfg
+        .llm
+        .providers
+        .iter()
+        .find(|item| item.id == provider.id)
+    {
+        provider.api_key = existing.api_key.clone();
     }
 }
 
@@ -154,6 +210,37 @@ fn normalize_provider_for_test(mut provider: LlmProviderConfig) -> LlmProviderCo
     provider
 }
 
+fn provider_catalog() -> Vec<ProviderCatalogItem> {
+    let items = [
+        ("openai", "OpenAI", "openai_compatible"),
+        ("anthropic", "Anthropic", "openai_compatible"),
+        ("openrouter", "OpenRouter", "openai_compatible"),
+        ("ollama", "Ollama", "ollama"),
+        ("gemini", "Gemini", "openai_compatible"),
+        ("vertex_ai", "Vertex AI", "openai_compatible"),
+        ("bedrock", "Bedrock", "openai_compatible"),
+        ("azure", "Azure OpenAI", "openai_compatible"),
+        ("deepseek", "DeepSeek", "openai_compatible"),
+        ("groq", "Groq", "openai_compatible"),
+        ("xai", "xAI", "openai_compatible"),
+        ("mistral", "Mistral", "openai_compatible"),
+        ("cohere", "Cohere", "openai_compatible"),
+        ("huggingface", "Hugging Face", "openai_compatible"),
+    ];
+
+    items
+        .into_iter()
+        .map(|(key, label, kind)| ProviderCatalogItem {
+            key: key.to_string(),
+            label: label.to_string(),
+            kind: kind.to_string(),
+            default_api_base: default_api_base_for_provider(kind, key),
+            default_name: label.to_string(),
+            default_id: format!("{}-main", key.replace('_', "-")),
+        })
+        .collect()
+}
+
 fn ollama_root(api_base: &str) -> String {
     api_base
         .trim_end_matches('/')
@@ -194,22 +281,27 @@ async fn fetch_provider_models(provider: &LlmProviderConfig) -> Result<Vec<Strin
 }
 
 #[tauri::command]
-pub async fn get_llm_provider(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state.app.llm_provider_name())
-}
-
-#[tauri::command]
 pub async fn get_llm_config(_state: State<'_, AppState>) -> Result<LlmConfigInfo, String> {
     let cfg = load();
+    let (primary_provider, primary_model, mini_model, embed_model) = resolved_primary_snapshot(&cfg);
     Ok(LlmConfigInfo {
-        provider: cfg.llm.provider,
-        model: cfg.llm.model,
-        mini_model: cfg.llm.mini_model,
-        embed_model: cfg.llm.embed_model,
-        api_base: if cfg.llm.api_base.trim().is_empty() {
+        provider: primary_provider
+            .map(|provider| provider.provider.clone())
+            .unwrap_or_else(|| cfg.llm.provider.clone()),
+        model: primary_model,
+        mini_model,
+        embed_model,
+        api_base: if primary_provider
+            .map(|provider| provider.api_base.trim().is_empty())
+            .unwrap_or(cfg.llm.api_base.trim().is_empty())
+        {
             None
         } else {
-            Some(cfg.llm.api_base)
+            Some(
+                primary_provider
+                    .map(|provider| provider.api_base.clone())
+                    .unwrap_or_else(|| cfg.llm.api_base.clone()),
+            )
         },
     })
 }
@@ -217,13 +309,25 @@ pub async fn get_llm_config(_state: State<'_, AppState>) -> Result<LlmConfigInfo
 #[tauri::command]
 pub async fn get_safe_config() -> Result<SafeConfig, String> {
     let cfg = load();
+    let (primary_provider, primary_model, _, _) = resolved_primary_snapshot(&cfg);
     Ok(SafeConfig {
-        skills_search_paths: cfg.skills.search_paths,
-        llm_model: cfg.llm.model,
-        llm_provider: cfg.llm.provider,
-        llm_api_base: cfg.llm.api_base,
-        llm_api_key_set: !cfg.llm.api_key.is_empty(),
+        skills_search_paths: cfg.skills.search_paths.clone(),
+        llm_model: primary_model,
+        llm_provider: primary_provider
+            .map(|provider| provider.provider.clone())
+            .unwrap_or_else(|| cfg.llm.provider.clone()),
+        llm_api_base: primary_provider
+            .map(|provider| provider.api_base.clone())
+            .unwrap_or_else(|| cfg.llm.api_base.clone()),
+        llm_api_key_set: primary_provider
+            .map(|provider| provider.kind == "ollama" || !provider.api_key.is_empty())
+            .unwrap_or(!cfg.llm.api_key.is_empty()),
     })
+}
+
+#[tauri::command]
+pub async fn list_llm_provider_catalog() -> Result<Vec<ProviderCatalogItem>, String> {
+    Ok(provider_catalog())
 }
 
 #[tauri::command]
@@ -249,7 +353,9 @@ pub async fn save_llm_provider(
     provider: ProviderPayload,
 ) -> Result<(), String> {
     let mut cfg = load();
-    let provider = provider_from_payload(provider);
+    let payload = provider;
+    let mut provider = provider_from_payload(payload.clone());
+    merge_existing_provider_secret(&cfg, &mut provider);
     if provider.id.is_empty() {
         return Err("Provider ID 不能为空".to_string());
     }
@@ -306,8 +412,10 @@ pub async fn set_llm_routing(
 
 #[tauri::command]
 pub async fn test_llm_provider(provider: ProviderPayload) -> Result<ProviderTestResult, String> {
-    let provider = provider_from_payload(provider);
-    match fetch_provider_models(&provider).await {
+    let cfg = load();
+    let mut provider_cfg = provider_from_payload(provider.clone());
+    merge_existing_provider_secret(&cfg, &mut provider_cfg);
+    match fetch_provider_models(&provider_cfg).await {
         Ok(models) => Ok(ProviderTestResult {
             ok: true,
             message: if models.is_empty() {
@@ -329,18 +437,34 @@ pub async fn test_llm_provider(provider: ProviderPayload) -> Result<ProviderTest
 pub async fn refresh_llm_provider_models(
     state: State<'_, AppState>,
     provider_id: String,
+    provider: Option<ProviderPayload>,
 ) -> Result<Vec<String>, String> {
     let mut cfg = load();
-    let provider = cfg
+    let stored_provider = cfg
         .llm
         .providers
         .iter()
         .find(|item| item.id == provider_id)
-        .cloned()
-        .ok_or_else(|| "未找到对应的 Provider".to_string())?;
-    let models = fetch_provider_models(&provider)
+        .cloned();
+
+    let mut provider_cfg = if let Some(payload) = provider {
+        let mut candidate = provider_from_payload(payload);
+        merge_existing_provider_secret(&cfg, &mut candidate);
+        candidate
+    } else if let Some(existing) = stored_provider.clone() {
+        existing
+    } else {
+        return Err("未找到对应的 Provider".to_string());
+    };
+
+    if provider_cfg.id.trim().is_empty() {
+        provider_cfg.id = provider_id.clone();
+    }
+
+    let models = fetch_provider_models(&provider_cfg)
         .await
         .map_err(|e| e.to_string())?;
+
     if let Some(existing) = cfg
         .llm
         .providers
@@ -348,84 +472,9 @@ pub async fn refresh_llm_provider_models(
         .find(|item| item.id == provider_id)
     {
         existing.models = models.clone();
+        save(&cfg).map_err(|e| e.to_string())?;
+        reload_runtime(&state);
     }
-    save(&cfg).map_err(|e| e.to_string())?;
-    reload_runtime(&state);
+
     Ok(models)
-}
-
-#[tauri::command]
-pub async fn set_llm_provider(
-    state: State<'_, AppState>,
-    provider: String,
-    model: String,
-    mini_model: Option<String>,
-    embed_model: Option<String>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-) -> Result<(), String> {
-    let mut cfg = load();
-    let default_id = "default".to_string();
-    let kind = if provider == "ollama" {
-        "ollama".to_string()
-    } else {
-        "openai_compatible".to_string()
-    };
-    let provider_name = provider.clone();
-    let default_provider = LlmProviderConfig {
-        id: default_id.clone(),
-        name: "Default Provider".to_string(),
-        kind: kind.clone(),
-        provider: provider_name.clone(),
-        api_base: api_base.unwrap_or_else(|| default_api_base_for_provider(&kind, &provider_name)),
-        api_key: api_key.unwrap_or_default(),
-        enabled: true,
-        models: vec![
-            model.clone(),
-            mini_model.clone().unwrap_or_else(|| model.clone()),
-            embed_model
-                .clone()
-                .unwrap_or_else(|| cfg.llm.embed_model.clone()),
-        ],
-    };
-    if let Some(existing) = cfg
-        .llm
-        .providers
-        .iter_mut()
-        .find(|item| item.id == default_id)
-    {
-        *existing = default_provider;
-    } else {
-        cfg.llm.providers.push(default_provider);
-    }
-    cfg.llm.routing = LlmRoutingConfig {
-        primary: LlmRouteTarget {
-            provider_id: default_id.clone(),
-            model: model.clone(),
-        },
-        mini: LlmRouteTarget {
-            provider_id: default_id.clone(),
-            model: mini_model.unwrap_or_else(|| model.clone()),
-        },
-        embedding: LlmRouteTarget {
-            provider_id: default_id,
-            model: embed_model.unwrap_or_else(|| cfg.llm.embed_model.clone()),
-        },
-    };
-    save(&cfg).map_err(|e| e.to_string())?;
-    reload_runtime(&state);
-    Ok(())
-}
-
-/// Quick model switch from chat header — only changes the primary model field.
-#[tauri::command]
-pub async fn quick_set_model(state: State<'_, AppState>, model: String) -> Result<(), String> {
-    let mut cfg = load();
-    if model.trim().is_empty() {
-        return Err("模型名不能为空".to_string());
-    }
-    cfg.llm.routing.primary.model = model;
-    save(&cfg).map_err(|e| e.to_string())?;
-    reload_runtime(&state);
-    Ok(())
 }
