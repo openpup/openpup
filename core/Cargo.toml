@@ -33,4 +33,4 @@ petgraph = "0.6"
 async-trait = "0.1"
 cron = "0.12"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-litellm-rs = { version = "0.5.0", default-features = false, features = ["lite"] }
+llm-router = { path = "../llm-router" }

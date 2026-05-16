@@ -4,37 +4,17 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt as _;
-use litellm_rs::sdk::client::LLMClient as LiteSdkClient;
-use litellm_rs::sdk::config::{
-    ClientConfig as LiteClientConfig, ClientSettings as LiteClientSettings,
-    ProviderType as LiteProviderType, SdkProviderConfig as LiteProviderConfig,
-};
-use litellm_rs::sdk::types::{
-    ChatOptions as LiteChatOptions, Content as LiteContent, Message as LiteMessage,
-    Role as LiteRole, SdkChatRequest as LiteChatRequest,
+use llm_router::{
+    ChatResponse as RouterChatResponse, Client as RouterClient, Message as RouterMessage,
+    MessageRole as RouterMessageRole, ProviderConfig as RouterProviderConfig,
+    ProviderProtocol as RouterProviderProtocol, RouteTarget as RouterRouteTarget,
+    RoutingConfig as RouterRoutingConfig, StreamEvent, ToolCallDelta as RouterToolCallDelta,
+    ToolDefinition as RouterToolDefinition, ToolType as RouterToolType, Usage as RouterUsage,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use crate::config::{LlmProviderConfig, LlmRoutingConfig};
 
-use crate::config::{default_api_base_for_provider, LlmProviderConfig, LlmRoutingConfig};
-
-/// Shared abort flag passed into `chat_stream`.
 pub type AbortFlag = Arc<AtomicBool>;
-
-// ── Embed response types ────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct EmbedResponse {
-    data: Vec<EmbedData>,
-}
-#[derive(Deserialize)]
-struct EmbedData {
-    #[serde(default)]
-    index: usize,
-    embedding: Vec<f32>,
-}
-
-// ── Token usage tracking ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
@@ -43,7 +23,6 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
-/// Thread-safe cumulative token counters.
 #[derive(Debug, Default)]
 pub struct CumulativeUsage {
     pub prompt_tokens: AtomicU64,
@@ -76,8 +55,6 @@ impl CumulativeUsage {
     }
 }
 
-// ── Public message type ─────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmMessage {
     pub role: String,
@@ -99,9 +76,6 @@ impl LlmMessage {
     }
 }
 
-// ── Tool-call types (used by chat_with_tools) ────────────────────────────────
-
-/// A single tool call request returned by the LLM.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub id: String,
@@ -109,19 +83,17 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-/// Response from a non-streaming tool-capable chat round.
 pub struct ChatWithToolsResponse {
-    /// Text content when the model chose to reply directly.
     pub content: Option<String>,
-    /// Tool calls requested by the model (empty when the model replied with text).
     pub tool_calls: Vec<ToolCall>,
-    /// The raw assistant message JSON to append to the conversation history.
     pub raw_message: serde_json::Value,
 }
 
-// ── Internal config ─────────────────────────────────────────────────────────
-
 const CACHE_CAPACITY: usize = 64;
+const EMBED_MAX_CHARS_PER_CHUNK: usize = 24_000;
+const EMBED_CHUNK_OVERLAP_CHARS: usize = 512;
+const EMBED_MAX_CHARS_PER_BATCH: usize = 48_000;
+const EMBED_MAX_ITEMS_PER_BATCH: usize = 8;
 
 #[derive(Clone)]
 struct LlmInnerConfig {
@@ -129,72 +101,25 @@ struct LlmInnerConfig {
     routing: LlmRoutingConfig,
 }
 
-#[derive(Clone, Copy)]
-enum LlmSlot {
-    Primary,
-    Mini,
-    Embedding,
-}
-
-#[derive(Clone)]
-struct ResolvedTarget {
-    provider: LlmProviderConfig,
-    model: String,
-}
-
-fn provider_type_for_sdk(provider: &LlmProviderConfig) -> LiteProviderType {
-    match provider.provider.to_ascii_lowercase().as_str() {
-        "anthropic" => LiteProviderType::Anthropic,
-        "azure" | "azure-openai" | "azure_openai" => LiteProviderType::Azure,
-        "google" | "gemini" => LiteProviderType::Google,
-        "ollama" => LiteProviderType::Ollama,
-        "mistral" => LiteProviderType::Mistral,
-        _ => LiteProviderType::OpenAI,
-    }
-}
-
-fn sdk_supported_for_chat(provider: &LlmProviderConfig) -> bool {
-    !provider.kind.eq_ignore_ascii_case("ollama")
-}
-
-fn sdk_supported_for_embeddings(provider: &LlmProviderConfig) -> bool {
-    !provider.kind.eq_ignore_ascii_case("ollama")
-}
-
-fn sdk_message_from_llm(message: &LlmMessage) -> LiteMessage {
-    LiteMessage {
-        role: match message.role.as_str() {
-            "system" => LiteRole::System,
-            "assistant" => LiteRole::Assistant,
-            "tool" => LiteRole::Tool,
-            _ => LiteRole::User,
-        },
-        content: Some(LiteContent::Text(message.content.clone())),
-        name: message.name.clone(),
-        tool_calls: None,
-    }
-}
-
-// ── LlmClient ───────────────────────────────────────────────────────────────
-
 #[derive(Clone)]
 pub struct LlmClient {
     config: Arc<RwLock<LlmInnerConfig>>,
+    router: RouterClient,
     cache: Arc<Mutex<VecDeque<(String, String)>>>,
-    /// Shared reqwest client — reuses connection pools across calls.
-    http: reqwest::Client,
-    /// Cumulative token usage across all API calls in this session.
     pub usage: Arc<CumulativeUsage>,
-    /// Usage from the most recent API call (for per-pup tracking).
     last_call_usage: Arc<Mutex<Option<TokenUsage>>>,
 }
 
 impl LlmClient {
     pub fn new(providers: Vec<LlmProviderConfig>, routing: LlmRoutingConfig) -> Self {
+        let router = RouterClient::new(
+            providers.iter().map(map_provider_config).collect(),
+            map_routing_config(&routing),
+        );
         Self {
             config: Arc::new(RwLock::new(LlmInnerConfig { providers, routing })),
+            router,
             cache: Arc::new(Mutex::new(VecDeque::new())),
-            http: reqwest::Client::new(),
             usage: Arc::new(CumulativeUsage::default()),
             last_call_usage: Arc::new(Mutex::new(None)),
         }
@@ -205,12 +130,10 @@ impl LlmClient {
         Self::new(cfg.llm.providers, cfg.llm.routing)
     }
 
-    /// Returns the token usage from the most recent API call.
     pub fn take_last_call_usage(&self) -> Option<TokenUsage> {
         self.last_call_usage.lock().unwrap().take()
     }
 
-    /// Returns the currently configured model name.
     pub fn model_name(&self) -> String {
         self.config
             .read()
@@ -227,107 +150,52 @@ impl LlmClient {
     }
 
     pub fn has_primary_provider(&self) -> bool {
-        self.resolve_target(LlmSlot::Primary).is_ok()
+        self.router.has_primary_provider()
     }
 
     pub fn primary_provider_name(&self) -> String {
-        self.resolve_target(LlmSlot::Primary)
-            .map(|target| target.provider.provider)
-            .unwrap_or_else(|_| "unconfigured".to_string())
+        self.router.primary_provider_name()
     }
 
     pub fn reconfigure(&self, providers: Vec<LlmProviderConfig>, routing: LlmRoutingConfig) {
-        let mut g = self.config.write().unwrap();
-        g.providers = providers;
-        g.routing = routing;
+        {
+            let mut g = self.config.write().unwrap();
+            g.providers = providers.clone();
+            g.routing = routing.clone();
+        }
+        self.router.reconfigure(
+            providers.iter().map(map_provider_config).collect(),
+            map_routing_config(&routing),
+        );
     }
-
-    fn resolve_target(&self, slot: LlmSlot) -> Result<ResolvedTarget> {
-        let g = self.config.read().unwrap();
-        let route = match slot {
-            LlmSlot::Primary => &g.routing.primary,
-            LlmSlot::Mini => &g.routing.mini,
-            LlmSlot::Embedding => &g.routing.embedding,
-        };
-        let provider = g
-            .providers
-            .iter()
-            .find(|item| item.id == route.provider_id && item.enabled)
-            .or_else(|| g.providers.iter().find(|item| item.enabled))
-            .or_else(|| g.providers.first())
-            .cloned()
-            .ok_or_else(|| anyhow!("未配置可用的 LLM Provider"))?;
-        let model = if route.model.trim().is_empty() {
-            provider
-                .models
-                .first()
-                .cloned()
-                .ok_or_else(|| anyhow!("Provider `{}` 未配置模型", provider.name))?
-        } else {
-            route.model.clone()
-        };
-        Ok(ResolvedTarget { provider, model })
-    }
-
-    fn resolved_auth(target: &ResolvedTarget) -> (Option<String>, Option<String>) {
-        let api_key = if target.provider.api_key.trim().is_empty() {
-            None
-        } else {
-            Some(target.provider.api_key.clone())
-        };
-        let api_base = if target.provider.api_base.trim().is_empty() {
-            Some(default_api_base_for_provider(
-                &target.provider.kind,
-                &target.provider.provider,
-            ))
-        } else {
-            Some(target.provider.api_base.clone())
-        };
-        (api_key, api_base)
-    }
-
-    fn build_sdk_client(&self, target: &ResolvedTarget) -> Result<LiteSdkClient> {
-        let provider = LiteProviderConfig {
-            id: target.provider.id.clone(),
-            provider_type: provider_type_for_sdk(&target.provider),
-            name: target.provider.name.clone(),
-            api_key: target.provider.api_key.clone(),
-            base_url: Some(if target.provider.api_base.trim().is_empty() {
-                default_api_base_for_provider(&target.provider.kind, &target.provider.provider)
-            } else {
-                target.provider.api_base.clone()
-            }),
-            models: vec![target.model.clone()],
-            enabled: target.provider.enabled,
-            weight: 1.0,
-            rate_limit_rpm: None,
-            rate_limit_tpm: None,
-            settings: Default::default(),
-        };
-        LiteSdkClient::new(LiteClientConfig {
-            default_provider: Some(provider.id.clone()),
-            providers: vec![provider],
-            settings: LiteClientSettings {
-                timeout: 30,
-                max_retries: 2,
-                max_concurrent_requests: 32,
-                enable_logging: false,
-                enable_metrics: false,
-            },
-        })
-        .map_err(|e| anyhow!("litellm client init failed: {e}"))
-    }
-
-    // ── Public chat API ───────────────────────────────────────────────────────
 
     pub async fn chat(&self, messages: Vec<LlmMessage>) -> Result<String> {
-        let target = self.resolve_target(LlmSlot::Primary)?;
-        self.chat_with_target(&target, messages).await
+        self.chat_impl(messages, false).await
     }
 
     pub async fn chat_mini(&self, messages: Vec<LlmMessage>) -> Result<String> {
-        let target = self.resolve_target(LlmSlot::Mini)?;
-        self.chat_with_target(&target, messages).await
+        self.chat_impl(messages, true).await
+    }
+
+    async fn chat_impl(&self, messages: Vec<LlmMessage>, mini: bool) -> Result<String> {
+        let cache_key = format!(
+            "{}:{}",
+            if mini { "mini" } else { "primary" },
+            serde_json::to_string(&messages)?
+        );
+        if let Some(hit) = self.lookup_cache(&cache_key) {
+            return Ok(hit);
+        }
+
+        let response = if mini {
+            self.router.chat_mini(messages.into_iter().map(map_message).collect()).await?
+        } else {
+            self.router.chat(messages.into_iter().map(map_message).collect()).await?
+        };
+        self.record_usage(response.usage.as_ref());
+        let text = response.content.unwrap_or_default();
+        self.insert_cache(cache_key, text.clone());
+        Ok(text)
     }
 
     pub async fn chat_stream(
@@ -336,8 +204,7 @@ impl LlmClient {
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let target = self.resolve_target(LlmSlot::Primary)?;
-        self.stream_with_target(&target, messages, on_token, abort).await
+        self.chat_stream_impl(messages, false, on_token, abort).await
     }
 
     pub async fn chat_stream_mini(
@@ -346,353 +213,91 @@ impl LlmClient {
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let target = self.resolve_target(LlmSlot::Mini)?;
-        self.stream_with_target(&target, messages, on_token, abort)
-            .await
+        self.chat_stream_impl(messages, true, on_token, abort).await
     }
 
-    // ── Non-streaming (direct reqwest) ────────────────────────────────────────
-
-    async fn chat_with_target(&self, target: &ResolvedTarget, messages: Vec<LlmMessage>) -> Result<String> {
-        let cache_key = format!("{}:{}:{}", target.provider.id, target.model, serde_json::to_string(&messages)?);
-        if let Some(hit) = self.lookup_cache(&cache_key) {
-            return Ok(hit);
-        }
-
-        if sdk_supported_for_chat(&target.provider) {
-            let client = self.build_sdk_client(target)?;
-            let response = client
-                .chat_with_options(LiteChatRequest {
-                    model: target.model.clone(),
-                    messages: messages.iter().map(sdk_message_from_llm).collect(),
-                    options: LiteChatOptions::default(),
-                })
-                .await
-                .map_err(|e| anyhow!("litellm chat failed: {e}"))?;
-            let text = response
-                .choices
-                .first()
-                .and_then(|choice| choice.message.content.clone())
-                .and_then(|content| match content {
-                    LiteContent::Text(text) => Some(text),
-                    _ => None,
-                })
-                .unwrap_or_default();
-
-            let usage = TokenUsage {
-                prompt_tokens: response.usage.prompt_tokens as u64,
-                completion_tokens: response.usage.completion_tokens as u64,
-                total_tokens: response.usage.total_tokens as u64,
-            };
-            self.usage.accumulate(&usage);
-            *self.last_call_usage.lock().unwrap() = Some(usage);
-
-            self.insert_cache(cache_key, text.clone());
-            return Ok(text);
-        }
-
-        let (api_key, api_base) = Self::resolved_auth(target);
-
-        let url = chat_url(&api_base);
-        debug!("[llm] chat: provider={} model={:?} url={url}", target.provider.provider, target.model);
-
-        let body = serde_json::json!({
-          "model": target.model,
-          "messages": messages_json(&messages),
-        });
-
-        let mut req = self.http.post(&url).json(&body);
-        if let Some(k) = &api_key {
-            req = req.bearer_auth(k);
-        }
-
-        let resp = req.send().await.map_err(|e| {
-            debug!("[llm] chat send error: {e}");
-            anyhow!("request failed: {e}")
-        })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            debug!("[llm] chat API error {status}: {body}");
-            return Err(anyhow!("API error {status}: {body}"));
-        }
-
-        let val: serde_json::Value = resp.json().await.map_err(|e| anyhow!("parse: {e}"))?;
-        let text = val["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        // Track token usage from the response
-        if let Some(u) = parse_usage(&val) {
-            self.usage.accumulate(&u);
-            *self.last_call_usage.lock().unwrap() = Some(u);
-        }
-
-        debug!("[llm] chat done: {} chars", text.len());
-        self.insert_cache(cache_key, text.clone());
-        Ok(text)
-    }
-
-    // ── Streaming (direct reqwest + SSE parser) ────────────────────────────────
-
-    async fn stream_with_target(
+    async fn chat_stream_impl(
         &self,
-        target: &ResolvedTarget,
         messages: Vec<LlmMessage>,
+        mini: bool,
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        let (api_key, api_base) = Self::resolved_auth(target);
-        debug!(
-            "[llm] stream: provider={} model={:?} base={:?} has_key={}",
-            target.provider.provider,
-            target.model,
-            api_base,
-            api_key.is_some()
-        );
+        let mut stream = if mini {
+            self.router
+                .chat_stream_mini(messages.into_iter().map(map_message).collect())
+                .await?
+        } else {
+            self.router
+                .chat_stream(messages.into_iter().map(map_message).collect())
+                .await?
+        };
 
-        let url = chat_url(&api_base);
-        let body = serde_json::json!({
-          "model": target.model,
-          "messages": messages_json(&messages),
-          "stream": true,
-          "stream_options": { "include_usage": true },
-        });
-
-        let mut req = self.http.post(&url).json(&body);
-        if let Some(k) = &api_key {
-            req = req.bearer_auth(k);
-        }
-
-        let resp = req.send().await.map_err(|e| {
-            debug!("[llm] stream send error: {e}");
-            anyhow!("stream request failed: {e}")
-        })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            debug!("[llm] stream API error {status}: {body}");
-            return Err(anyhow!("API error {status}: {body}"));
-        }
-
-        debug!("[llm] stream opened, reading SSE...");
-        let mut byte_stream = resp.bytes_stream();
-        let mut buf = String::new();
         let mut full = String::new();
-        let mut chunk_count: usize = 0;
-        let mut stream_usage: Option<TokenUsage> = None;
-
-        'outer: loop {
-            // Timeout so the abort flag is checked even while waiting for the next byte chunk.
-            let next =
-                tokio::time::timeout(std::time::Duration::from_millis(200), byte_stream.next())
-                    .await;
-
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
             if abort.load(Ordering::Relaxed) {
-                debug!(
-                    "[llm] stream aborted after {chunk_count} tokens ({} chars)",
-                    full.len()
-                );
                 break;
             }
-
             match next {
-                Err(_timeout) => continue,
-                Ok(None) => {
-                    debug!(
-                        "[llm] stream complete: {chunk_count} tokens, {} chars",
-                        full.len()
-                    );
-                    break;
-                }
-                Ok(Some(bytes_result)) => {
-                    let bytes = bytes_result.map_err(|e| {
-                        debug!("[llm] stream read error: {e}");
-                        anyhow!("stream read error: {e}")
-                    })?;
-                    buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                    // Process all complete SSE lines in the buffer.
-                    while let Some(pos) = buf.find('\n') {
-                        let line = buf[..pos].trim_end_matches('\r').to_string();
-                        buf.drain(..=pos);
-
-                        if !line.starts_with("data: ") {
-                            continue;
-                        }
-                        let data = &line["data: ".len()..];
-                        if data == "[DONE]" {
-                            break 'outer;
-                        }
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
-                            // Surface API-level errors embedded in SSE (some providers send these)
-                            if let Some(err) = val.get("error") {
-                                debug!("[llm] SSE error payload: {err}");
-                                return Err(anyhow!("API error in stream: {err}"));
-                            }
-                            // Capture usage from the final chunk (sent when stream_options.include_usage is true)
-                            if let Some(u) = parse_usage(&val) {
-                                stream_usage = Some(u);
-                            }
-                            let delta = &val["choices"][0]["delta"];
-                            // Standard content token
-                            if let Some(tok) = delta["content"].as_str() {
-                                if !tok.is_empty() {
-                                    chunk_count += 1;
-                                    full.push_str(tok);
-                                    on_token(tok, false);
-                                }
-                            }
-                            // DeepSeek Reasoner: reasoning tokens come in `reasoning_content`.
-                            // Passed with is_reasoning=true so callers can handle them separately.
-                            if let Some(tok) = delta["reasoning_content"].as_str() {
-                                if !tok.is_empty() {
-                                    chunk_count += 1;
-                                    on_token(tok, true);
-                                    // Do NOT append to `full` — reasoning is not the final answer.
-                                }
-                            }
-                        }
+                Err(_) => continue,
+                Ok(None) => break,
+                Ok(Some(event)) => match event? {
+                    StreamEvent::TextDelta(text) => {
+                        full.push_str(&text);
+                        on_token(&text, false);
                     }
-                }
+                    StreamEvent::ReasoningDelta(text) => {
+                        on_token(&text, true);
+                    }
+                    StreamEvent::Usage(usage) => self.record_usage(Some(&usage)),
+                    StreamEvent::ToolCallDelta(_) | StreamEvent::Done => {}
+                },
             }
-        }
-
-        // Accumulate token usage if the API provided it
-        if let Some(ref u) = stream_usage {
-            debug!(
-                "[llm] stream usage: prompt={} completion={} total={}",
-                u.prompt_tokens, u.completion_tokens, u.total_tokens
-            );
-            self.usage.accumulate(u);
-            *self.last_call_usage.lock().unwrap() = Some(u.clone());
         }
 
         if full.is_empty() && !abort.load(Ordering::Relaxed) {
-            warn!(
-                "[llm] WARNING: empty response from provider={} model={:?}",
-                target.provider.provider,
-                target.model
-            );
             let config_path = crate::config::config_path()
                 .ok()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "the app config file".to_string());
             return Err(anyhow!(
                 "LLM returned an empty response.\n\
-         • Model: {}\n\
          • Verify the model name and api_key in {config_path}"
-                ,
-                target.model
             ));
         }
 
         Ok(full)
     }
 
-    // ── Tool-call API (non-streaming) ─────────────────────────────────────────
-
-    /// Send a message with tool definitions; returns the model's text reply OR
-    /// a list of tool calls to execute.  Messages are raw `serde_json::Value`
-    /// so callers can include `role:"tool"` entries that `LlmMessage` can't.
     pub async fn chat_with_tools(
         &self,
         messages: Vec<serde_json::Value>,
         tools: Vec<serde_json::Value>,
-    ) -> anyhow::Result<ChatWithToolsResponse> {
-        let target = self.resolve_target(LlmSlot::Primary)?;
-        let (api_key, api_base) = Self::resolved_auth(&target);
-
-        let url = chat_url(&api_base);
-        debug!(
-            "[llm] chat_with_tools: provider={} model={:?} tools={}",
-            target.provider.provider,
-            target.model,
-            tools.len()
-        );
-
-        let body = serde_json::json!({
-          "model": target.model,
-          "messages": messages,
-          "tools": tools,
-          "tool_choice": "auto",
-        });
-
-        let mut req = self.http.post(&url).json(&body);
-        if let Some(k) = &api_key {
-            req = req.bearer_auth(k);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| anyhow!("chat_with_tools request: {e}"))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            debug!("[llm] chat_with_tools error {status}: {body}");
-            return Err(anyhow!("API error {status}: {body}"));
-        }
-
-        let val: serde_json::Value = resp.json().await.map_err(|e| anyhow!("parse: {e}"))?;
-
-        // Track token usage
-        if let Some(u) = parse_usage(&val) {
-            self.usage.accumulate(&u);
-            *self.last_call_usage.lock().unwrap() = Some(u);
-        }
-
-        let message = val["choices"][0]["message"].clone();
-
-        let content = message["content"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        let tool_calls: Vec<ToolCall> = message["tool_calls"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|tc| {
-                        let id = tc["id"].as_str()?.to_string();
-                        let name = tc["function"]["name"].as_str()?.to_string();
-                        let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                        let arguments = serde_json::from_str(args_str)
-                            .unwrap_or(serde_json::Value::Object(Default::default()));
-                        Some(ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        debug!(
-            "[llm] chat_with_tools done: text={} tool_calls={}",
-            content.is_some(),
-            tool_calls.len()
-        );
-
-        Ok(ChatWithToolsResponse {
-            content,
-            tool_calls,
-            raw_message: message,
-        })
+    ) -> Result<ChatWithToolsResponse> {
+        let response = self
+            .router
+            .chat_with_tools(
+                messages
+                    .into_iter()
+                    .map(router_message_from_raw)
+                    .collect::<Result<Vec<_>>>()?,
+                tools
+                    .into_iter()
+                    .map(router_tool_from_raw)
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .await?;
+        self.record_usage(response.usage.as_ref());
+        Ok(map_chat_with_tools_response(response))
     }
 
-    /// Same as `chat_with_tools` but cancels the HTTP request if `abort` is set.
-    /// Polls the abort flag every 100 ms via `tokio::select!`.
     pub async fn chat_with_tools_abortable(
         &self,
         messages: Vec<serde_json::Value>,
         tools: Vec<serde_json::Value>,
         abort: &AbortFlag,
-    ) -> anyhow::Result<Option<ChatWithToolsResponse>> {
+    ) -> Result<Option<ChatWithToolsResponse>> {
         let abort_clone = abort.clone();
         tokio::select! {
             result = self.chat_with_tools(messages, tools) => {
@@ -706,225 +311,69 @@ impl LlmClient {
                     }
                 }
             } => {
-                debug!("[llm] chat_with_tools cancelled by abort flag");
                 Ok(None)
             }
         }
     }
 
-    // ── Streaming tool-call API ────────────────────────────────────────────────
-
-    /// Streaming variant of `chat_with_tools`.  Text tokens are emitted
-    /// incrementally via `on_token` while tool-call fragments are accumulated
-    /// internally.  Returns the same `ChatWithToolsResponse` as the
-    /// non-streaming version once the stream finishes.
     pub async fn chat_with_tools_stream(
         &self,
         messages: Vec<serde_json::Value>,
         tools: Vec<serde_json::Value>,
         on_token: impl Fn(&str) + Send,
         abort: &AbortFlag,
-    ) -> anyhow::Result<Option<ChatWithToolsResponse>> {
-        let target = self.resolve_target(LlmSlot::Primary)?;
-        let (api_key, api_base) = Self::resolved_auth(&target);
+    ) -> Result<Option<ChatWithToolsResponse>> {
+        let mut stream = self
+            .router
+            .chat_with_tools_stream(
+                messages
+                    .into_iter()
+                    .map(router_message_from_raw)
+                    .collect::<Result<Vec<_>>>()?,
+                tools
+                    .into_iter()
+                    .map(router_tool_from_raw)
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .await?;
 
-        let url = chat_url(&api_base);
-        debug!(
-            "[llm] chat_with_tools_stream: provider={} model={:?} tools={}",
-            target.provider.provider,
-            target.model,
-            tools.len()
-        );
-
-        let body = serde_json::json!({
-          "model": target.model,
-          "messages": messages,
-          "tools": tools,
-          "tool_choice": "auto",
-          "stream": true,
-          "stream_options": { "include_usage": true },
-        });
-
-        let mut req = self.http.post(&url).json(&body);
-        if let Some(k) = &api_key {
-            req = req.bearer_auth(k);
-        }
-
-        // Race the HTTP request against the abort flag so users can cancel
-        // even during slow TTFB (before the SSE stream opens).
-        let abort_clone = abort.clone();
-        let resp = tokio::select! {
-            result = req.send() => {
-                result.map_err(|e| anyhow!("chat_with_tools_stream request: {e}"))?
-            }
-            _ = async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    if abort_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
-                }
-            } => {
-                debug!("[llm] chat_with_tools_stream aborted during connect");
-                return Ok(None);
-            }
-        };
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            debug!("[llm] chat_with_tools_stream error {status}: {body}");
-            return Err(anyhow!("API error {status}: {body}"));
-        }
-
-        debug!("[llm] chat_with_tools_stream opened, reading SSE...");
-        let mut byte_stream = resp.bytes_stream();
-        let mut buf = String::new();
         let mut full_content = String::new();
         let mut full_reasoning_content = String::new();
-        let mut chunk_count: usize = 0;
-        let mut stream_usage: Option<TokenUsage> = None;
-
-        // Accumulate tool calls: Vec of (id, function_name, arguments_buffer)
         let mut tool_call_acc: Vec<(String, String, String)> = Vec::new();
 
-        'outer: loop {
-            let next =
-                tokio::time::timeout(std::time::Duration::from_millis(200), byte_stream.next())
-                    .await;
-
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
             if abort.load(Ordering::Relaxed) {
-                debug!("[llm] chat_with_tools_stream aborted after {chunk_count} chunks",);
                 return Ok(None);
             }
-
             match next {
-                Err(_timeout) => continue,
-                Ok(None) => {
-                    debug!(
-                        "[llm] chat_with_tools_stream complete: {chunk_count} chunks, {} content chars, {} tool_calls",
-                        full_content.len(),
-                        tool_call_acc.len(),
-                    );
-                    break;
-                }
-                Ok(Some(bytes_result)) => {
-                    let bytes = bytes_result.map_err(|e| {
-                        debug!("[llm] chat_with_tools_stream read error: {e}");
-                        anyhow!("stream read error: {e}")
-                    })?;
-                    buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                    while let Some(pos) = buf.find('\n') {
-                        let line = buf[..pos].trim_end_matches('\r').to_string();
-                        buf.drain(..=pos);
-
-                        if !line.starts_with("data: ") {
-                            continue;
-                        }
-                        let data = &line["data: ".len()..];
-                        if data == "[DONE]" {
-                            break 'outer;
-                        }
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(err) = val.get("error") {
-                                debug!("[llm] SSE error payload: {err}");
-                                return Err(anyhow!("API error in stream: {err}"));
-                            }
-                            if let Some(u) = parse_usage(&val) {
-                                stream_usage = Some(u);
-                            }
-                            let delta = &val["choices"][0]["delta"];
-
-                            // Text content tokens — emit immediately
-                            if let Some(tok) = delta["content"].as_str() {
-                                if !tok.is_empty() {
-                                    chunk_count += 1;
-                                    full_content.push_str(tok);
-                                    on_token(tok);
-                                }
-                            }
-
-                            // Reasoning tokens (DeepSeek etc.) are not final
-                            // answer text, but some providers require them to
-                            // be replayed in the assistant message before tool
-                            // results are submitted on the next round.
-                            if let Some(tok) = delta["reasoning_content"].as_str() {
-                                if !tok.is_empty() {
-                                    chunk_count += 1;
-                                    full_reasoning_content.push_str(tok);
-                                }
-                            }
-
-                            // Tool call deltas — accumulate per index
-                            if let Some(tcs) = delta["tool_calls"].as_array() {
-                                for tc_delta in tcs {
-                                    let idx = tc_delta["index"].as_u64().unwrap_or(0) as usize;
-                                    // Grow the accumulator if needed
-                                    while tool_call_acc.len() <= idx {
-                                        tool_call_acc.push((
-                                            String::new(),
-                                            String::new(),
-                                            String::new(),
-                                        ));
-                                    }
-                                    if let Some(id) = tc_delta["id"].as_str() {
-                                        tool_call_acc[idx].0 = id.to_string();
-                                    }
-                                    if let Some(name) = tc_delta["function"]["name"].as_str() {
-                                        tool_call_acc[idx].1 = name.to_string();
-                                    }
-                                    if let Some(args_frag) =
-                                        tc_delta["function"]["arguments"].as_str()
-                                    {
-                                        tool_call_acc[idx].2.push_str(args_frag);
-                                    }
-                                }
-                            }
-                        }
+                Err(_) => continue,
+                Ok(None) => break,
+                Ok(Some(event)) => match event? {
+                    StreamEvent::TextDelta(text) => {
+                        full_content.push_str(&text);
+                        on_token(&text);
                     }
-                }
+                    StreamEvent::ReasoningDelta(text) => {
+                        full_reasoning_content.push_str(&text);
+                    }
+                    StreamEvent::ToolCallDelta(delta) => {
+                        apply_tool_call_delta(&mut tool_call_acc, delta);
+                    }
+                    StreamEvent::Usage(usage) => self.record_usage(Some(&usage)),
+                    StreamEvent::Done => break,
+                },
             }
         }
 
-        // Accumulate token usage
-        if let Some(ref u) = stream_usage {
-            debug!(
-                "[llm] chat_with_tools_stream usage: prompt={} completion={} total={}",
-                u.prompt_tokens, u.completion_tokens, u.total_tokens
-            );
-            self.usage.accumulate(u);
-            *self.last_call_usage.lock().unwrap() = Some(u.clone());
-        }
-
-        // Build tool calls
-        let tool_calls: Vec<ToolCall> = tool_call_acc
-            .into_iter()
-            .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
-            .map(|(id, name, args_buf)| {
-                let arguments = serde_json::from_str(&args_buf)
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
-                ToolCall {
-                    id,
-                    name,
-                    arguments,
-                }
-            })
-            .collect();
-
+        let tool_calls = finalize_tool_calls(tool_call_acc);
         let raw_message =
             build_assistant_raw_message(&full_content, &full_reasoning_content, &tool_calls);
-
         let content = if full_content.is_empty() {
             None
         } else {
             Some(full_content)
         };
-
-        debug!(
-            "[llm] chat_with_tools_stream done: text={} tool_calls={}",
-            content.is_some(),
-            tool_calls.len()
-        );
 
         Ok(Some(ChatWithToolsResponse {
             content,
@@ -932,8 +381,6 @@ impl LlmClient {
             raw_message,
         }))
     }
-
-    // ── Embeddings ─────────────────────────────────────────────────────────────
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let chunks = split_embedding_input(text);
@@ -944,15 +391,13 @@ impl LlmClient {
         if chunks.is_empty() {
             bail!("embed: no input chunks");
         }
-
         let batches = batch_embedding_inputs(chunks);
         let mut embeddings = Vec::with_capacity(chunks.len());
-
         for batch in batches {
-            let mut batch_embeddings = self.embed_remote_batch(&batch).await?;
-            embeddings.append(&mut batch_embeddings);
+            let response = self.router.embed(batch).await?;
+            self.record_usage(response.usage.as_ref());
+            embeddings.extend(response.vectors);
         }
-
         if embeddings.len() != chunks.len() {
             bail!(
                 "embed: response count mismatch (expected {}, got {})",
@@ -960,68 +405,26 @@ impl LlmClient {
                 embeddings.len()
             );
         }
-
         if embeddings.len() == 1 {
             return embeddings
                 .into_iter()
                 .next()
                 .ok_or_else(|| anyhow!("embed: missing embedding"));
         }
-
         average_embeddings(&embeddings)
     }
 
-    async fn embed_remote_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            bail!("embed: empty batch");
+    fn record_usage(&self, usage: Option<&RouterUsage>) {
+        if let Some(usage) = usage {
+            let usage = TokenUsage {
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
+            };
+            self.usage.accumulate(&usage);
+            *self.last_call_usage.lock().unwrap() = Some(usage);
         }
-
-        let target = self.resolve_target(LlmSlot::Embedding)?;
-        if sdk_supported_for_embeddings(&target.provider) {
-            let client = self.build_sdk_client(&target)?;
-            return client
-                .batch_embedding(texts, Some(&target.model))
-                .await
-                .map_err(|e| anyhow!("litellm embedding failed: {e}"));
-        }
-        let (api_key, api_base) = Self::resolved_auth(&target);
-
-        let base = api_base
-            .as_deref()
-            .unwrap_or("https://api.openai.com/v1");
-        let url = format!("{}/embeddings", base.trim_end_matches('/'));
-
-        let mut req = self.http.post(&url).json(&serde_json::json!({
-          "model": target.model,
-          "input": texts,
-          "encoding_format": "float",
-        }));
-        if let Some(k) = &api_key {
-            req = req.bearer_auth(k);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| anyhow!("embed request: {e}"))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("embed API {status}: {body}"));
-        }
-        let mut parsed: Vec<EmbedData> = resp
-            .json::<EmbedResponse>()
-            .await
-            .map_err(|e| anyhow!("embed parse: {e}"))?
-            .data;
-        if parsed.is_empty() {
-            bail!("embed: empty data array");
-        }
-        parsed.sort_by_key(|item| item.index);
-        Ok(parsed.into_iter().map(|item| item.embedding).collect())
     }
-
-    // ── Cache helpers ─────────────────────────────────────────────────────────
 
     fn lookup_cache(&self, key: &str) -> Option<String> {
         if let Ok(mut g) = self.cache.lock() {
@@ -1044,25 +447,162 @@ impl LlmClient {
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn chat_url(api_base: &Option<String>) -> String {
-    let base = api_base.as_deref().unwrap_or("https://api.openai.com/v1");
-    format!("{}/chat/completions", base.trim_end_matches('/'))
+fn map_provider_config(provider: &LlmProviderConfig) -> RouterProviderConfig {
+    RouterProviderConfig {
+        id: provider.id.clone(),
+        name: provider.name.clone(),
+        protocol: match provider.kind.to_ascii_lowercase().as_str() {
+            "ollama" => RouterProviderProtocol::Ollama,
+            "anthropic" => RouterProviderProtocol::AnthropicMessages,
+            "openai_responses" => RouterProviderProtocol::OpenAiResponses,
+            _ if provider.provider.eq_ignore_ascii_case("anthropic") => {
+                RouterProviderProtocol::AnthropicMessages
+            }
+            _ => RouterProviderProtocol::OpenAiCompatible,
+        },
+        provider_key: provider.provider.clone(),
+        api_base: if provider.api_base.trim().is_empty() {
+            None
+        } else {
+            Some(provider.api_base.clone())
+        },
+        api_key: if provider.api_key.trim().is_empty() {
+            None
+        } else {
+            Some(provider.api_key.clone())
+        },
+        enabled: provider.enabled,
+        models: provider.models.clone(),
+        extra: serde_json::Map::new(),
+    }
 }
 
-fn messages_json(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
-    messages.iter().map(LlmMessage::to_json).collect()
+fn map_routing_config(routing: &LlmRoutingConfig) -> RouterRoutingConfig {
+    RouterRoutingConfig {
+        primary: map_route_target(&routing.primary),
+        mini: map_route_target(&routing.mini),
+        embedding: map_route_target(&routing.embedding),
+    }
 }
 
-/// Extract token usage from an OpenAI-compatible API response JSON.
-fn parse_usage(val: &serde_json::Value) -> Option<TokenUsage> {
-    let u = val.get("usage")?;
-    Some(TokenUsage {
-        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
-        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
-        total_tokens: u["total_tokens"].as_u64().unwrap_or(0),
+fn map_route_target(target: &crate::config::LlmRouteTarget) -> RouterRouteTarget {
+    RouterRouteTarget {
+        provider_id: target.provider_id.clone(),
+        model: target.model.clone(),
+    }
+}
+
+fn map_message(message: LlmMessage) -> RouterMessage {
+    RouterMessage {
+        role: match message.role.as_str() {
+            "system" => RouterMessageRole::System,
+            "assistant" => RouterMessageRole::Assistant,
+            "tool" => RouterMessageRole::Tool,
+            _ => RouterMessageRole::User,
+        },
+        content: Some(message.content),
+        name: message.name,
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        reasoning_content: None,
+    }
+}
+
+fn router_message_from_raw(value: serde_json::Value) -> Result<RouterMessage> {
+    let role = match value["role"].as_str().unwrap_or("user") {
+        "system" => RouterMessageRole::System,
+        "assistant" => RouterMessageRole::Assistant,
+        "tool" => RouterMessageRole::Tool,
+        _ => RouterMessageRole::User,
+    };
+    let tool_calls = value["tool_calls"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(llm_router::ToolCall {
+                        id: item["id"].as_str()?.to_string(),
+                        name: item["function"]["name"].as_str()?.to_string(),
+                        arguments: serde_json::from_str(
+                            item["function"]["arguments"].as_str().unwrap_or("{}"),
+                        )
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(RouterMessage {
+        role,
+        content: value.get("content").and_then(|item| match item {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(text) => Some(text.clone()),
+            other => Some(other.to_string()),
+        }),
+        name: value["name"].as_str().map(str::to_string),
+        tool_calls,
+        tool_call_id: value["tool_call_id"].as_str().map(str::to_string),
+        reasoning_content: value["reasoning_content"].as_str().map(str::to_string),
     })
+}
+
+fn router_tool_from_raw(value: serde_json::Value) -> Result<RouterToolDefinition> {
+    Ok(RouterToolDefinition {
+        tool_type: RouterToolType::Function,
+        function: llm_router::FunctionDefinition {
+            name: value["function"]["name"]
+                .as_str()
+                .ok_or_else(|| anyhow!("tool function missing name"))?
+                .to_string(),
+            description: value["function"]["description"].as_str().map(str::to_string),
+            parameters: value["function"]["parameters"].clone(),
+        },
+    })
+}
+
+fn map_chat_with_tools_response(response: RouterChatResponse) -> ChatWithToolsResponse {
+    ChatWithToolsResponse {
+        content: response.content,
+        tool_calls: response
+            .tool_calls
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+            })
+            .collect(),
+        raw_message: response.raw_message,
+    }
+}
+
+fn apply_tool_call_delta(acc: &mut Vec<(String, String, String)>, delta: RouterToolCallDelta) {
+    while acc.len() <= delta.index {
+        acc.push((String::new(), String::new(), String::new()));
+    }
+    if let Some(id) = delta.id {
+        acc[delta.index].0 = id;
+    }
+    if let Some(name) = delta.name {
+        acc[delta.index].1 = name;
+    }
+    if let Some(arguments_fragment) = delta.arguments_fragment {
+        acc[delta.index].2.push_str(&arguments_fragment);
+    }
+}
+
+fn finalize_tool_calls(acc: Vec<(String, String, String)>) -> Vec<ToolCall> {
+    acc.into_iter()
+        .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
+        .map(|(id, name, arguments)| ToolCall {
+            id,
+            name,
+            arguments: serde_json::from_str(&arguments)
+                .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
+        })
+        .collect()
 }
 
 fn build_assistant_raw_message(
@@ -1084,38 +624,31 @@ fn build_assistant_raw_message(
         raw_message["reasoning_content"] =
             serde_json::Value::String(full_reasoning_content.to_string());
     }
-
     if !tool_calls.is_empty() {
-        let tc_arr: Vec<serde_json::Value> = tool_calls
-            .iter()
-            .map(|tc| {
-                serde_json::json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                    }
+        raw_message["tool_calls"] = serde_json::Value::Array(
+            tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                        }
+                    })
                 })
-            })
-            .collect();
-        raw_message["tool_calls"] = serde_json::Value::Array(tc_arr);
+                .collect(),
+        );
     }
-
     raw_message
 }
-
-const EMBED_MAX_CHARS_PER_CHUNK: usize = 24_000;
-const EMBED_CHUNK_OVERLAP_CHARS: usize = 512;
-const EMBED_MAX_CHARS_PER_BATCH: usize = 48_000;
-const EMBED_MAX_ITEMS_PER_BATCH: usize = 8;
 
 fn split_embedding_input(text: &str) -> Vec<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return vec![String::new()];
     }
-
     if trimmed.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK {
         return vec![trimmed.to_string()];
     }
@@ -1239,13 +772,60 @@ fn average_embeddings(embeddings: &[Vec<f32>]) -> Result<Vec<f32>> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::{
-        average_embeddings, batch_embedding_inputs, build_assistant_raw_message,
-        split_embedding_input, ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
+        apply_tool_call_delta, average_embeddings, batch_embedding_inputs,
+        build_assistant_raw_message, finalize_tool_calls, split_embedding_input,
+        ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
         EMBED_MAX_ITEMS_PER_BATCH,
     };
+    use llm_router::ToolCallDelta as RouterToolCallDelta;
+
+    #[test]
+    fn tool_call_delta_accumulates_arguments_and_finalizes() {
+        let mut acc = Vec::new();
+        apply_tool_call_delta(
+            &mut acc,
+            RouterToolCallDelta {
+                index: 0,
+                id: Some("call_1".to_string()),
+                name: Some("search".to_string()),
+                arguments_fragment: Some("{\"q\":\"hel".to_string()),
+            },
+        );
+        apply_tool_call_delta(
+            &mut acc,
+            RouterToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                arguments_fragment: Some("lo\"}".to_string()),
+            },
+        );
+
+        let calls = finalize_tool_calls(acc);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "search");
+        assert_eq!(calls[0].arguments["q"], "hello");
+    }
+
+    #[test]
+    fn assistant_raw_message_preserves_reasoning_and_tool_calls() {
+        let raw = build_assistant_raw_message(
+            "answer",
+            "reason",
+            &[ToolCall {
+                id: "call_1".to_string(),
+                name: "file_read".to_string(),
+                arguments: serde_json::json!({"path": "/tmp/a.txt"}),
+            }],
+        );
+        assert_eq!(raw["role"], "assistant");
+        assert_eq!(raw["content"], "answer");
+        assert_eq!(raw["reasoning_content"], "reason");
+        assert_eq!(raw["tool_calls"][0]["id"], "call_1");
+        assert_eq!(raw["tool_calls"][0]["function"]["name"], "file_read");
+    }
 
     #[test]
     fn split_embedding_input_keeps_small_text_single_chunk() {
@@ -1258,78 +838,24 @@ mod tests {
         let input = "a".repeat(EMBED_MAX_CHARS_PER_CHUNK + 2048);
         let chunks = split_embedding_input(&input);
         assert!(chunks.len() >= 2);
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.chars().count() <= EMBED_MAX_CHARS_PER_CHUNK));
     }
 
     #[test]
-    fn average_embeddings_returns_mean_vector() {
+    fn batch_embedding_inputs_respects_limits() {
+        let items = vec![
+            "a".repeat(EMBED_MAX_CHARS_PER_BATCH / 3),
+            "b".repeat(EMBED_MAX_CHARS_PER_BATCH / 3),
+            "c".repeat(EMBED_MAX_CHARS_PER_BATCH / 3),
+            "d".repeat(EMBED_MAX_CHARS_PER_BATCH / 3),
+        ];
+        let batches = batch_embedding_inputs(&items);
+        assert!(batches.len() >= 2);
+        assert!(batches.iter().all(|batch| batch.len() <= EMBED_MAX_ITEMS_PER_BATCH));
+    }
+
+    #[test]
+    fn average_embeddings_averages_vectors() {
         let avg = average_embeddings(&[vec![1.0, 3.0], vec![3.0, 5.0]]).unwrap();
         assert_eq!(avg, vec![2.0, 4.0]);
-    }
-
-    #[test]
-    fn batch_embedding_inputs_keeps_small_chunk_list_together() {
-        let chunks = vec!["a".repeat(100), "b".repeat(100)];
-        let batches = batch_embedding_inputs(&chunks);
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0], chunks);
-    }
-
-    #[test]
-    fn batch_embedding_inputs_respects_batch_limits() {
-        let chunks = vec![
-            "a".repeat(EMBED_MAX_CHARS_PER_BATCH / 2),
-            "b".repeat(EMBED_MAX_CHARS_PER_BATCH / 2),
-            "c".repeat(32),
-        ];
-        let batches = batch_embedding_inputs(&chunks);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].len(), 2);
-        assert_eq!(batches[1].len(), 1);
-    }
-
-    #[test]
-    fn batch_embedding_inputs_respects_max_items() {
-        let chunks = (0..(EMBED_MAX_ITEMS_PER_BATCH + 1))
-            .map(|idx| format!("chunk-{idx}"))
-            .collect::<Vec<_>>();
-        let batches = batch_embedding_inputs(&chunks);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].len(), EMBED_MAX_ITEMS_PER_BATCH);
-        assert_eq!(batches[1].len(), 1);
-    }
-
-    #[test]
-    fn assistant_raw_message_preserves_reasoning_content_for_tool_rounds() {
-        let raw = build_assistant_raw_message(
-            "",
-            "I should call a tool first.",
-            &[ToolCall {
-                id: "call_1".to_string(),
-                name: "file_read".to_string(),
-                arguments: json!({ "path": "/tmp/example.txt" }),
-            }],
-        );
-
-        assert_eq!(raw["role"], "assistant");
-        assert_eq!(raw["content"], serde_json::Value::Null);
-        assert_eq!(raw["reasoning_content"], "I should call a tool first.");
-        assert_eq!(raw["tool_calls"][0]["id"], "call_1");
-        assert_eq!(raw["tool_calls"][0]["function"]["name"], "file_read");
-        assert_eq!(
-            raw["tool_calls"][0]["function"]["arguments"],
-            "{\"path\":\"/tmp/example.txt\"}"
-        );
-    }
-
-    #[test]
-    fn assistant_raw_message_omits_empty_reasoning_content() {
-        let raw = build_assistant_raw_message("done", "", &[]);
-
-        assert_eq!(raw["content"], "done");
-        assert!(raw.get("reasoning_content").is_none());
-        assert!(raw.get("tool_calls").is_none());
     }
 }

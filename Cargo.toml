@@ -1,3 +1,3 @@
 [workspace]
-members = ["src-tauri", "cli", "core", "daemon", "capabilities", "runtime-desktop", "runtime-android", "runtime-ios"]
+members = ["src-tauri", "cli", "core", "daemon", "capabilities", "runtime-desktop", "runtime-android", "runtime-ios", "llm-router"]
 resolver = "2"
