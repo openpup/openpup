@@ -1,17 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ProviderProtocol {
+    #[default]
     OpenAiCompatible,
     OpenAiResponses,
     AnthropicMessages,
     Ollama,
-}
-
-impl Default for ProviderProtocol {
-    fn default() -> Self {
-        Self::OpenAiCompatible
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

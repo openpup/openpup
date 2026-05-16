@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::config::{LlmProviderConfig, LlmRoutingConfig};
 use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt as _;
 use llm_router::{
@@ -12,7 +13,6 @@ use llm_router::{
     ToolDefinition as RouterToolDefinition, ToolType as RouterToolType, Usage as RouterUsage,
 };
 use serde::{Deserialize, Serialize};
-use crate::config::{LlmProviderConfig, LlmRoutingConfig};
 
 pub type AbortFlag = Arc<AtomicBool>;
 
@@ -135,13 +135,7 @@ impl LlmClient {
     }
 
     pub fn model_name(&self) -> String {
-        self.config
-            .read()
-            .unwrap()
-            .routing
-            .primary
-            .model
-            .clone()
+        self.config.read().unwrap().routing.primary.model.clone()
     }
 
     pub fn routing_config(&self) -> (Vec<LlmProviderConfig>, LlmRoutingConfig) {
@@ -188,9 +182,13 @@ impl LlmClient {
         }
 
         let response = if mini {
-            self.router.chat_mini(messages.into_iter().map(map_message).collect()).await?
+            self.router
+                .chat_mini(messages.into_iter().map(map_message).collect())
+                .await?
         } else {
-            self.router.chat(messages.into_iter().map(map_message).collect()).await?
+            self.router
+                .chat(messages.into_iter().map(map_message).collect())
+                .await?
         };
         self.record_usage(response.usage.as_ref());
         let text = response.content.unwrap_or_default();
@@ -204,7 +202,8 @@ impl LlmClient {
         on_token: impl Fn(&str, bool) + Send,
         abort: &AbortFlag,
     ) -> Result<String> {
-        self.chat_stream_impl(messages, false, on_token, abort).await
+        self.chat_stream_impl(messages, false, on_token, abort)
+            .await
     }
 
     pub async fn chat_stream_mini(
@@ -235,7 +234,8 @@ impl LlmClient {
 
         let mut full = String::new();
         loop {
-            let next = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
+            let next =
+                tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
             if abort.load(Ordering::Relaxed) {
                 break;
             }
@@ -342,7 +342,8 @@ impl LlmClient {
         let mut tool_call_acc: Vec<(String, String, String)> = Vec::new();
 
         loop {
-            let next = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
+            let next =
+                tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await;
             if abort.load(Ordering::Relaxed) {
                 return Ok(None);
             }
@@ -553,7 +554,9 @@ fn router_tool_from_raw(value: serde_json::Value) -> Result<RouterToolDefinition
                 .as_str()
                 .ok_or_else(|| anyhow!("tool function missing name"))?
                 .to_string(),
-            description: value["function"]["description"].as_str().map(str::to_string),
+            description: value["function"]["description"]
+                .as_str()
+                .map(str::to_string),
             parameters: value["function"]["parameters"].clone(),
         },
     })
@@ -771,9 +774,8 @@ fn average_embeddings(embeddings: &[Vec<f32>]) -> Result<Vec<f32>> {
 mod tests {
     use super::{
         apply_tool_call_delta, average_embeddings, batch_embedding_inputs,
-        build_assistant_raw_message, finalize_tool_calls, split_embedding_input,
-        ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
-        EMBED_MAX_ITEMS_PER_BATCH,
+        build_assistant_raw_message, finalize_tool_calls, split_embedding_input, ToolCall,
+        EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK, EMBED_MAX_ITEMS_PER_BATCH,
     };
     use llm_router::ToolCallDelta as RouterToolCallDelta;
 
@@ -847,7 +849,9 @@ mod tests {
         ];
         let batches = batch_embedding_inputs(&items);
         assert!(batches.len() >= 2);
-        assert!(batches.iter().all(|batch| batch.len() <= EMBED_MAX_ITEMS_PER_BATCH));
+        assert!(batches
+            .iter()
+            .all(|batch| batch.len() <= EMBED_MAX_ITEMS_PER_BATCH));
     }
 
     #[test]

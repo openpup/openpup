@@ -139,8 +139,7 @@ impl AnthropicProvider {
                                                     emitted.push(StreamEvent::Usage(Usage {
                                                         prompt_tokens: input_tokens,
                                                         completion_tokens: output_tokens,
-                                                        total_tokens: input_tokens
-                                                            + output_tokens,
+                                                        total_tokens: input_tokens + output_tokens,
                                                     }));
                                                 }
                                                 emitted.push(StreamEvent::Done);
@@ -257,7 +256,8 @@ impl AnthropicProvider {
         for message in messages {
             match message.role {
                 MessageRole::System => {
-                    if let Some(content) = message.content.as_deref().filter(|text| !text.is_empty())
+                    if let Some(content) =
+                        message.content.as_deref().filter(|text| !text.is_empty())
                     {
                         system_parts.push(content.to_string());
                     }
@@ -378,11 +378,15 @@ impl AnthropicProvider {
                 "tool_use" => {
                     let id = block["id"]
                         .as_str()
-                        .ok_or_else(|| RouterError::Parse("anthropic tool_use missing id".to_string()))?
+                        .ok_or_else(|| {
+                            RouterError::Parse("anthropic tool_use missing id".to_string())
+                        })?
                         .to_string();
                     let name = block["name"]
                         .as_str()
-                        .ok_or_else(|| RouterError::Parse("anthropic tool_use missing name".to_string()))?
+                        .ok_or_else(|| {
+                            RouterError::Parse("anthropic tool_use missing name".to_string())
+                        })?
                         .to_string();
                     tool_calls.push(ToolCall {
                         id,
@@ -395,7 +399,11 @@ impl AnthropicProvider {
         }
 
         Ok((
-            if content.is_empty() { None } else { Some(content) },
+            if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
             if reasoning.is_empty() {
                 None
             } else {
@@ -439,7 +447,8 @@ impl AnthropicProvider {
                     }
                     "thinking_delta" => {
                         if let Some(text) = delta["thinking"].as_str() {
-                            out.events.push(StreamEvent::ReasoningDelta(text.to_string()));
+                            out.events
+                                .push(StreamEvent::ReasoningDelta(text.to_string()));
                         }
                     }
                     "input_json_delta" => {

@@ -69,9 +69,8 @@ fn now_iso() -> String {
 
 fn parse_tool_payload(value: Value) -> Result<Value, String> {
     match value {
-        Value::String(text) => serde_json::from_str::<Value>(&text).map_err(|err| {
-            format!("MCP 返回不是合法 JSON: {err}. 原始返回: {text}")
-        }),
+        Value::String(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|err| format!("MCP 返回不是合法 JSON: {err}. 原始返回: {text}")),
         other => Ok(other),
     }
 }
@@ -100,7 +99,12 @@ async fn server_configured(state: &AppState, name: &str) -> bool {
         .any(|server| server.name == name && server.enabled)
 }
 
-async fn probe_health(state: &AppState, server: &str, tool: &str, params: Value) -> FinanceServiceHealth {
+async fn probe_health(
+    state: &AppState,
+    server: &str,
+    tool: &str,
+    params: Value,
+) -> FinanceServiceHealth {
     if !server_configured(state, server).await {
         return FinanceServiceHealth {
             status: "unconfigured".into(),
@@ -140,7 +144,10 @@ fn value_array(value: &Value, key: &str) -> Vec<Value> {
 }
 
 fn value_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(ToString::to_string)
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn value_f64(value: &Value, key: &str) -> Option<f64> {
@@ -186,7 +193,9 @@ fn infer_price_from_tables(payload: &Value) -> Option<f64> {
             }
         }
         for column in columns {
-            let Some(column_name) = column.as_str() else { continue };
+            let Some(column_name) = column.as_str() else {
+                continue;
+            };
             if let Some(price) = first_row.get(column_name).and_then(|v| {
                 v.as_f64()
                     .or_else(|| v.as_str().and_then(parse_first_number))
@@ -223,11 +232,15 @@ async fn infer_latest_price(state: &AppState, symbol: &str) -> Result<f64, Strin
     infer_price_from_tables(&tables).ok_or_else(|| format!("无法为 {symbol} 推断最新价格"))
 }
 
-async fn build_order_preview(state: &AppState, intent: &Value) -> Result<FinanceOrderPreview, String> {
+async fn build_order_preview(
+    state: &AppState,
+    intent: &Value,
+) -> Result<FinanceOrderPreview, String> {
     let symbol = value_string(intent, "symbol").ok_or_else(|| "intent 缺少 symbol".to_string())?;
     let market = value_string(intent, "market").unwrap_or_else(|| "SSE".into());
     let intent_direction = value_string(intent, "direction").unwrap_or_else(|| "buy".into());
-    let approval_status = value_string(intent, "approval_status").unwrap_or_else(|| "pending".into());
+    let approval_status =
+        value_string(intent, "approval_status").unwrap_or_else(|| "pending".into());
     if approval_status != "approved" && approval_status != "reduced" {
         return Err("只有 approved 或 reduced 的意图才可进入执行准备".into());
     }
@@ -237,10 +250,15 @@ async fn build_order_preview(state: &AppState, intent: &Value) -> Result<Finance
         .and_then(parse_first_number)
         .or_else(|| value_f64(intent, "price"))
         .unwrap_or(0.0);
-    let resolved_price = if price > 0.0 { price } else { infer_latest_price(state, &symbol).await? };
+    let resolved_price = if price > 0.0 {
+        price
+    } else {
+        infer_latest_price(state, &symbol).await?
+    };
 
     let balance = finance_call(state, "exec", "get_balance", json!({})).await?;
-    let total_assets = value_f64(&balance, "total_assets").ok_or_else(|| "无法读取 total_assets".to_string())?;
+    let total_assets =
+        value_f64(&balance, "total_assets").ok_or_else(|| "无法读取 total_assets".to_string())?;
     let positions_payload = finance_call(state, "exec", "get_positions", json!({})).await?;
     let positions = value_array(&positions_payload, "positions");
     let current_position = positions
@@ -280,7 +298,13 @@ async fn build_order_preview(state: &AppState, intent: &Value) -> Result<Finance
     }
 
     let mut notes = Vec::new();
-    notes.push(format!("价格基于 {}", value_string(intent, "entry_rule").filter(|s| parse_first_number(s).is_some()).map(|_| "entry_rule").unwrap_or_else(|| "实时行情".into())));
+    notes.push(format!(
+        "价格基于 {}",
+        value_string(intent, "entry_rule")
+            .filter(|s| parse_first_number(s).is_some())
+            .map(|_| "entry_rule")
+            .unwrap_or("实时行情")
+    ));
     if approval_status == "reduced" {
         notes.push("本意图已被风控降仓，数量按 adjusted_position_pct 计算".into());
     }
@@ -324,19 +348,21 @@ pub async fn finance_overview_snapshot(
     let watchlist = finance_call(&app_state, "intel", "get_watchlist", json!({})).await?;
     let balance = finance_call(&app_state, "exec", "get_balance", json!({})).await?;
     let positions = finance_call(&app_state, "exec", "get_positions", json!({})).await?;
-    let orders = finance_call(&app_state, "exec", "get_orders", json!({})).await.unwrap_or_else(|_| json!({ "orders": [] }));
+    let orders = finance_call(&app_state, "exec", "get_orders", json!({}))
+        .await
+        .unwrap_or_else(|_| json!({ "orders": [] }));
     let trades = finance_call(&app_state, "exec", "get_today_trades", json!({})).await?;
     let pnl = finance_call(&app_state, "exec", "get_pnl", json!({ "period": "today" })).await?;
 
     Ok(FinanceOverviewSnapshot {
-      health,
-      market_status,
-      balance,
-      positions: value_array(&positions, "positions"),
-      watchlist: value_array(&watchlist, "stocks"),
-      pnl,
-      active_order_count: value_array(&orders, "orders").len(),
-      today_trade_count: value_array(&trades, "trades").len(),
+        health,
+        market_status,
+        balance,
+        positions: value_array(&positions, "positions"),
+        watchlist: value_array(&watchlist, "stocks"),
+        pnl,
+        active_order_count: value_array(&orders, "orders").len(),
+        today_trade_count: value_array(&trades, "trades").len(),
     })
 }
 
@@ -347,7 +373,9 @@ pub async fn finance_orders_snapshot(
     let app_state = state.inner().clone();
     let balance = finance_call(&app_state, "exec", "get_balance", json!({})).await?;
     let positions = finance_call(&app_state, "exec", "get_positions", json!({})).await?;
-    let orders = finance_call(&app_state, "exec", "get_orders", json!({})).await.unwrap_or_else(|_| json!({ "orders": [] }));
+    let orders = finance_call(&app_state, "exec", "get_orders", json!({}))
+        .await
+        .unwrap_or_else(|_| json!({ "orders": [] }));
     let trades = finance_call(&app_state, "exec", "get_today_trades", json!({})).await?;
     let pnl = finance_call(&app_state, "exec", "get_pnl", json!({ "period": "today" })).await?;
 

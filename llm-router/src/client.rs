@@ -7,9 +7,9 @@ use futures_util::Stream;
 use crate::config::{ProviderConfig, ProviderProtocol, RouteTarget, RoutingConfig};
 use crate::error::{Result, RouterError};
 use crate::protocols::anthropic::AnthropicProvider;
+use crate::protocols::ollama::OllamaProvider;
 use crate::protocols::openai_compatible::OpenAiCompatibleProvider;
 use crate::protocols::openai_responses::OpenAiResponsesProvider;
-use crate::protocols::ollama::OllamaProvider;
 use crate::types::{ChatRequest, ChatResponse, EmbeddingRequest, EmbeddingResponse, StreamEvent};
 
 #[derive(Clone, Copy)]
@@ -73,12 +73,14 @@ impl Client {
 
     pub async fn chat(&self, messages: Vec<crate::types::Message>) -> Result<ChatResponse> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Primary)?;
-        self.chat_on_provider(&provider, model, messages, Vec::new()).await
+        self.chat_on_provider(&provider, model, messages, Vec::new())
+            .await
     }
 
     pub async fn chat_mini(&self, messages: Vec<crate::types::Message>) -> Result<ChatResponse> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Mini)?;
-        self.chat_on_provider(&provider, model, messages, Vec::new()).await
+        self.chat_on_provider(&provider, model, messages, Vec::new())
+            .await
     }
 
     pub async fn chat_stream(
@@ -86,7 +88,8 @@ impl Client {
         messages: Vec<crate::types::Message>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Primary)?;
-        self.stream_on_provider(&provider, model, messages, Vec::new()).await
+        self.stream_on_provider(&provider, model, messages, Vec::new())
+            .await
     }
 
     pub async fn chat_stream_mini(
@@ -94,7 +97,8 @@ impl Client {
         messages: Vec<crate::types::Message>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Mini)?;
-        self.stream_on_provider(&provider, model, messages, Vec::new()).await
+        self.stream_on_provider(&provider, model, messages, Vec::new())
+            .await
     }
 
     pub async fn chat_with_tools(
@@ -103,7 +107,8 @@ impl Client {
         tools: Vec<crate::types::ToolDefinition>,
     ) -> Result<ChatResponse> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Primary)?;
-        self.chat_on_provider(&provider, model, messages, tools).await
+        self.chat_on_provider(&provider, model, messages, tools)
+            .await
     }
 
     pub async fn chat_with_tools_stream(
@@ -112,7 +117,8 @@ impl Client {
         tools: Vec<crate::types::ToolDefinition>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let (provider, model) = self.resolve_provider_and_model(Slot::Primary)?;
-        self.stream_on_provider(&provider, model, messages, tools).await
+        self.stream_on_provider(&provider, model, messages, tools)
+            .await
     }
 
     pub async fn embed(&self, input: Vec<String>) -> Result<EmbeddingResponse> {

@@ -675,7 +675,10 @@ pub async fn build_app(
         .with_context(|| format!("initialize workspace at {}", workspace_root.display()))?;
 
     let cfg = crate::config::load_with_env();
-    let llm_client = Arc::new(LlmClient::new(cfg.llm.providers.clone(), cfg.llm.routing.clone()));
+    let llm_client = Arc::new(LlmClient::new(
+        cfg.llm.providers.clone(),
+        cfg.llm.routing.clone(),
+    ));
 
     let memory = Arc::new(
         MemorySystem::new(

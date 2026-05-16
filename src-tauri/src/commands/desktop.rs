@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
-#[cfg(target_os = "windows")]
-use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+#[cfg(target_os = "windows")]
+use winreg::RegKey;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -61,7 +63,11 @@ pub fn save_desktop_behavior_settings(
 }
 
 fn autostart_supported() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows"))
+    cfg!(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    ))
 }
 
 fn current_executable() -> Result<PathBuf, String> {
@@ -71,7 +77,10 @@ fn current_executable() -> Result<PathBuf, String> {
 #[cfg(target_os = "macos")]
 fn autostart_target_path() -> Result<PathBuf, String> {
     dirs::home_dir()
-        .map(|home| home.join("Library/LaunchAgents").join(format!("{AUTOSTART_IDENTIFIER}.plist")))
+        .map(|home| {
+            home.join("Library/LaunchAgents")
+                .join(format!("{AUTOSTART_IDENTIFIER}.plist"))
+        })
         .ok_or_else(|| "无法确定 LaunchAgents 目录".to_string())
 }
 
@@ -161,26 +170,25 @@ fn set_autostart_enabled(_app: &AppHandle, enabled: bool) -> Result<(), String> 
 #[cfg(target_os = "windows")]
 fn set_autostart_enabled(_app: &AppHandle, enabled: bool) -> Result<(), String> {
     let value_name = "OpenPup";
-    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (run_key, _) = hkcu
+        .create_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            KEY_READ | KEY_SET_VALUE,
+        )
+        .map_err(|e| format!("打开开机启动注册表失败: {e}"))?;
     if enabled {
         let exe = current_executable()?;
         let quoted = format!("\"{}\"", exe.to_string_lossy());
-        let output = Command::new("reg")
-            .args(["add", key, "/v", value_name, "/t", "REG_SZ", "/d", &quoted, "/f"])
-            .output()
+        run_key
+            .set_value(value_name, &quoted)
             .map_err(|e| format!("写入开机启动注册表失败: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
     } else {
-        let output = Command::new("reg")
-            .args(["delete", key, "/v", value_name, "/f"])
-            .output()
-            .map_err(|e| format!("移除开机启动注册表失败: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.contains("unable to find") && !stderr.contains("无法找到") {
-                return Err(stderr.trim().to_string());
+        match run_key.delete_value(value_name) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!("移除开机启动注册表失败: {err}"));
             }
         }
     }
@@ -204,16 +212,15 @@ fn query_autostart_enabled(_app: &AppHandle) -> Result<bool, String> {
 
 #[cfg(target_os = "windows")]
 fn query_autostart_enabled(_app: &AppHandle) -> Result<bool, String> {
-    let output = Command::new("reg")
-        .args([
-            "query",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-            "/v",
-            "OpenPup",
-        ])
-        .output()
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run_key = hkcu
+        .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_READ)
         .map_err(|e| format!("读取开机启动注册表失败: {e}"))?;
-    Ok(output.status.success())
+    match run_key.get_value::<String, _>("OpenPup") {
+        Ok(value) => Ok(!value.trim().is_empty()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("读取开机启动注册表失败: {err}")),
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

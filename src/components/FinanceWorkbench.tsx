@@ -241,9 +241,6 @@ export const FinanceWorkbench: React.FC = () => {
         <button
           onClick={() => {
             void loadOverview(true);
-            if (activeTab === 'research') {
-              void loadWatchlist(true);
-            }
           }}
           style={{ borderRadius: 12, border: '1px solid rgba(16,59,47,0.12)', background: 'rgba(255,255,255,0.90)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '9px 12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
         >

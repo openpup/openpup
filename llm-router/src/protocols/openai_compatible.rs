@@ -86,7 +86,12 @@ impl OpenAiCompatibleProvider {
 
         let byte_stream = response.bytes_stream();
         let s = stream::try_unfold(
-            (byte_stream, String::new(), VecDeque::<StreamEvent>::new(), false),
+            (
+                byte_stream,
+                String::new(),
+                VecDeque::<StreamEvent>::new(),
+                false,
+            ),
             |(mut bytes, mut buffer, mut pending, mut done)| async move {
                 loop {
                     if let Some(event) = pending.pop_front() {
@@ -154,7 +159,11 @@ impl OpenAiCompatibleProvider {
             .map_err(|e| RouterError::Parse(e.to_string()))?;
         payload.data.sort_by_key(|item| item.index);
         Ok(EmbeddingResponse {
-            vectors: payload.data.into_iter().map(|item| item.embedding).collect(),
+            vectors: payload
+                .data
+                .into_iter()
+                .map(|item| item.embedding)
+                .collect(),
             usage: payload.usage.map(Self::usage_from_payload),
         })
     }
@@ -194,7 +203,8 @@ impl OpenAiCompatibleProvider {
     }
 
     fn build_chat_body(req: &ChatRequest, stream: bool) -> serde_json::Value {
-        let messages: Vec<serde_json::Value> = req.messages.iter().map(Self::message_to_json).collect();
+        let messages: Vec<serde_json::Value> =
+            req.messages.iter().map(Self::message_to_json).collect();
         let tools: Vec<serde_json::Value> = req.tools.iter().map(Self::tool_to_json).collect();
         let mut body = serde_json::json!({
             "model": req.model,

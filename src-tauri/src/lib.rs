@@ -15,9 +15,9 @@ pub use openpup_core::skills;
 pub use openpup_core::tools;
 pub use openpup_core::workspace;
 
-use std::sync::Arc;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use commands::AppState;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -33,13 +33,13 @@ use openpup_runtime_desktop::DesktopRuntimeFactory;
 use openpup_runtime_ios::IosRuntimeFactory;
 use serde::{Deserialize, Serialize};
 use skills::scheduler::SkillScheduler;
-use tokio::runtime::Runtime;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::menu::{Menu, MenuItem};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Manager;
+use tokio::runtime::Runtime;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const MAIN_TRAY_ID: &str = "main-tray";
@@ -598,7 +598,10 @@ fn run_desktop() -> anyhow::Result<()> {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if desktop_behavior_state_for_events.allow_exit.load(Ordering::Relaxed) {
+                if desktop_behavior_state_for_events
+                    .allow_exit
+                    .load(Ordering::Relaxed)
+                {
                     return;
                 }
                 let cfg = crate::config::load();
@@ -631,7 +634,7 @@ fn run_desktop() -> anyhow::Result<()> {
             channel_manager_for_setup.set_event_sink(event_sink.clone());
             app_for_setup.set_conversation_event_sink(event_sink.clone());
             bridge_manager.set_event_sink(event_sink.clone());
-            if let Err(err) = setup_desktop_tray(&app.handle(), desktop_behavior_state.clone()) {
+            if let Err(err) = setup_desktop_tray(app.handle(), desktop_behavior_state.clone()) {
                 tracing::warn!("failed to initialize tray icon: {err}");
             }
             spawn_xmtp_event_pump(app_for_setup.clone(), xmtp_helper.clone());

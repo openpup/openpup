@@ -62,7 +62,12 @@ impl OllamaProvider {
 
         let byte_stream = response.bytes_stream();
         let s = stream::try_unfold(
-            (byte_stream, String::new(), VecDeque::<StreamEvent>::new(), false),
+            (
+                byte_stream,
+                String::new(),
+                VecDeque::<StreamEvent>::new(),
+                false,
+            ),
             |(mut bytes, mut buffer, mut pending, mut done)| async move {
                 loop {
                     if let Some(event) = pending.pop_front() {
@@ -194,7 +199,8 @@ impl OllamaProvider {
     }
 
     fn build_chat_body(req: &ChatRequest, stream: bool) -> serde_json::Value {
-        let messages: Vec<serde_json::Value> = req.messages.iter().map(Self::message_to_json).collect();
+        let messages: Vec<serde_json::Value> =
+            req.messages.iter().map(Self::message_to_json).collect();
         let tools: Vec<serde_json::Value> = req.tools.iter().map(Self::tool_to_json).collect();
         let mut body = serde_json::json!({
             "model": req.model,
@@ -282,7 +288,8 @@ impl OllamaProvider {
             reasoning_content.as_deref(),
             &tool_calls,
         );
-        let usage = if payload["prompt_eval_count"].is_number() || payload["eval_count"].is_number() {
+        let usage = if payload["prompt_eval_count"].is_number() || payload["eval_count"].is_number()
+        {
             Some(Usage {
                 prompt_tokens: payload["prompt_eval_count"].as_u64().unwrap_or(0),
                 completion_tokens: payload["eval_count"].as_u64().unwrap_or(0),

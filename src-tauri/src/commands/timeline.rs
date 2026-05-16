@@ -1,6 +1,6 @@
 use pulldown_cmark::{html, Options, Parser};
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use tauri::State;
 
 use super::AppState;
@@ -25,7 +25,11 @@ pub struct TimelineExportEvent {
 
 fn format_timestamp_local(timestamp: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|| "invalid-timestamp".to_string())
 }
 

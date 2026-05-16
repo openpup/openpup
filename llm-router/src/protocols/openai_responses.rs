@@ -70,10 +70,20 @@ impl OpenAiResponsesProvider {
                 VecDeque::<StreamEvent>::new(),
                 false,
             ),
-            |(mut bytes, mut buffer, mut current_event, mut current_data, mut pending, mut done)| async move {
+            |(
+                mut bytes,
+                mut buffer,
+                mut current_event,
+                mut current_data,
+                mut pending,
+                mut done,
+            )| async move {
                 loop {
                     if let Some(event) = pending.pop_front() {
-                        return Ok(Some((event, (bytes, buffer, current_event, current_data, pending, done))));
+                        return Ok(Some((
+                            event,
+                            (bytes, buffer, current_event, current_data, pending, done),
+                        )));
                     }
                     if done {
                         return Ok(None);
@@ -86,8 +96,9 @@ impl OpenAiResponsesProvider {
                                 buffer.drain(..=pos);
                                 if line.is_empty() {
                                     if current_event.is_some() || !current_data.is_empty() {
-                                        let event_name =
-                                            current_event.take().unwrap_or_else(|| "message".to_string());
+                                        let event_name = current_event
+                                            .take()
+                                            .unwrap_or_else(|| "message".to_string());
                                         let data = current_data.join("\n");
                                         current_data.clear();
                                         if !data.is_empty() {
@@ -201,7 +212,9 @@ impl OpenAiResponsesProvider {
                     }));
                 }
                 MessageRole::Assistant => {
-                    if let Some(content) = message.content.as_deref().filter(|text| !text.is_empty()) {
+                    if let Some(content) =
+                        message.content.as_deref().filter(|text| !text.is_empty())
+                    {
                         out.push(serde_json::json!({
                             "role": "assistant",
                             "content": [{
@@ -249,7 +262,8 @@ impl OpenAiResponsesProvider {
     }
 
     fn parse_chat_response(payload: serde_json::Value) -> Result<ChatResponse> {
-        let (content, reasoning_content, tool_calls) = Self::parse_output_items(payload["output"].as_array())?;
+        let (content, reasoning_content, tool_calls) =
+            Self::parse_output_items(payload["output"].as_array())?;
         let content = content.or_else(|| payload["output_text"].as_str().map(str::to_string));
         let usage = payload.get("usage").map(Self::usage_from_value);
         let raw_message = Self::build_assistant_raw_message(
@@ -320,7 +334,11 @@ impl OpenAiResponsesProvider {
         }
 
         Ok((
-            if content.is_empty() { None } else { Some(content) },
+            if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
             if reasoning.is_empty() {
                 None
             } else {

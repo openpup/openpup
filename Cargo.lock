@@ -2524,7 +2524,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "llm-router"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3045,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "openpup"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3062,7 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-capabilities"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3073,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-core"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3108,7 +3108,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-daemon"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-android"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-desktop"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-runtime-ios"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3178,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "openpup-tauri"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3219,6 +3219,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "walkdir",
+ "winreg 0.52.0",
 ]
 
 [[package]]
@@ -7354,6 +7355,16 @@ name = "winreg"
 version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "winreg"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a277a57398d4bfa075df44f501a17cfdf8542d224f0d36095a2adc7aee4ef0a5"
 dependencies = [
  "cfg-if",
  "windows-sys 0.48.0",

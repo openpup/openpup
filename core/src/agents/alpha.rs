@@ -3201,7 +3201,11 @@ impl AlphaPup {
         let user_snippet: String = msg.chars().take(60).collect();
         let user_ellipsis = if msg.chars().count() > 60 { "…" } else { "" };
         let reply_snippet: String = reply.chars().take(60).collect();
-        let reply_ellipsis = if reply.chars().count() > 60 { "…" } else { "" };
+        let reply_ellipsis = if reply.chars().count() > 60 {
+            "…"
+        } else {
+            ""
+        };
         let diary_line = format!(
             "对话速记｜[{pup_label}] 用户：{}{user_ellipsis}；回复：{}{reply_ellipsis}",
             user_snippet, reply_snippet

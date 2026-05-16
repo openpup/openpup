@@ -705,7 +705,9 @@ async fn show_status(runtime: &HeadlessRuntime) -> Result<()> {
     let provider_label = primary
         .map(|provider| provider.provider.as_str())
         .unwrap_or("unknown");
-    let api_key = primary.map(|provider| provider.api_key.as_str()).unwrap_or("");
+    let api_key = primary
+        .map(|provider| provider.api_key.as_str())
+        .unwrap_or("");
     let api_base = primary
         .map(|provider| provider.api_base.as_str())
         .filter(|base| !base.is_empty());

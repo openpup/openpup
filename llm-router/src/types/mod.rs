@@ -1,18 +1,13 @@
 use crate::usage::Usage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MessageRole {
     System,
+    #[default]
     User,
     Assistant,
     Tool,
-}
-
-impl Default for MessageRole {
-    fn default() -> Self {
-        Self::User
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -26,15 +21,10 @@ pub struct Message {
     pub reasoning_content: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ToolType {
+    #[default]
     Function,
-}
-
-impl Default for ToolType {
-    fn default() -> Self {
-        Self::Function
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -353,9 +353,7 @@ pub fn ensure_xmtp_config() -> Result<XmtpConfig> {
 }
 
 /// Load config from `~/.openpup/config.toml`.
-/// Returns defaults if the file does not exist.
-/// `api_key` is transparently decrypted if stored as enc2.
-pub fn load() -> AppConfig {
+fn load_internal(resolve_secrets: bool) -> AppConfig {
     let Ok(path) = config_path() else {
         return AppConfig::default();
     };
@@ -366,27 +364,39 @@ pub fn load() -> AppConfig {
         return AppConfig::default();
     };
     let mut cfg: AppConfig = toml::from_str(&text).unwrap_or_default();
-    // Transparent decrypt — in-memory value is always plaintext
-    match crate::crypto::ensure_decrypted(&cfg.llm.api_key) {
-        Ok(plain) => cfg.llm.api_key = plain,
-        Err(e) => warn!("failed to decrypt api_key: {e}"),
-    }
-    for provider in &mut cfg.llm.providers {
-        match crate::crypto::ensure_decrypted(&provider.api_key) {
-            Ok(plain) => provider.api_key = plain,
-            Err(e) => warn!("failed to decrypt provider api_key ({}): {e}", provider.id),
+    if resolve_secrets {
+        match crate::crypto::ensure_decrypted(&cfg.llm.api_key) {
+            Ok(plain) => cfg.llm.api_key = plain,
+            Err(e) => warn!("failed to decrypt api_key: {e}"),
         }
-    }
-    match crate::crypto::ensure_decrypted(&cfg.xmtp.identity_private_key) {
-        Ok(plain) => cfg.xmtp.identity_private_key = plain,
-        Err(e) => warn!("failed to decrypt xmtp identity_private_key: {e}"),
-    }
-    match crate::crypto::ensure_decrypted(&cfg.xmtp.db_encryption_key) {
-        Ok(plain) => cfg.xmtp.db_encryption_key = plain,
-        Err(e) => warn!("failed to decrypt xmtp db_encryption_key: {e}"),
+        for provider in &mut cfg.llm.providers {
+            match crate::crypto::ensure_decrypted(&provider.api_key) {
+                Ok(plain) => provider.api_key = plain,
+                Err(e) => warn!("failed to decrypt provider api_key ({}): {e}", provider.id),
+            }
+        }
+        match crate::crypto::ensure_decrypted(&cfg.xmtp.identity_private_key) {
+            Ok(plain) => cfg.xmtp.identity_private_key = plain,
+            Err(e) => warn!("failed to decrypt xmtp identity_private_key: {e}"),
+        }
+        match crate::crypto::ensure_decrypted(&cfg.xmtp.db_encryption_key) {
+            Ok(plain) => cfg.xmtp.db_encryption_key = plain,
+            Err(e) => warn!("failed to decrypt xmtp db_encryption_key: {e}"),
+        }
     }
     normalize_llm_config(&mut cfg.llm);
     cfg
+}
+
+/// Returns defaults if the file does not exist.
+/// `api_key` is transparently decrypted if stored as enc2.
+pub fn load() -> AppConfig {
+    load_internal(true)
+}
+
+/// Lightweight config load for read-only settings/state snapshots.
+pub fn load_fast() -> AppConfig {
+    load_internal(false)
 }
 
 /// Persist config to `~/.openpup/config.toml`.
@@ -440,11 +450,7 @@ fn normalize_llm_config(llm: &mut LlmConfig) {
 }
 
 fn apply_llm_env_overrides(llm: &mut LlmConfig) {
-    let primary_provider_id = llm
-        .routing
-        .primary
-        .provider_id
-        .clone();
+    let primary_provider_id = llm.routing.primary.provider_id.clone();
 
     let primary_provider_index = llm
         .providers
@@ -458,8 +464,10 @@ fn apply_llm_env_overrides(llm: &mut LlmConfig) {
             primary_provider.provider = v;
             normalize_provider_identity(primary_provider);
             if primary_provider.api_base.trim().is_empty() {
-                primary_provider.api_base =
-                    default_api_base_for_provider(&primary_provider.kind, &primary_provider.provider);
+                primary_provider.api_base = default_api_base_for_provider(
+                    &primary_provider.kind,
+                    &primary_provider.provider,
+                );
             }
         }
 
@@ -592,7 +600,11 @@ fn ensure_routing_defaults(llm: &mut LlmConfig) {
         &mut llm.routing.mini,
         &mut llm.routing.embedding,
     ] {
-        if let Some(provider) = llm.providers.iter_mut().find(|item| item.id == route.provider_id) {
+        if let Some(provider) = llm
+            .providers
+            .iter_mut()
+            .find(|item| item.id == route.provider_id)
+        {
             let model = route.model.trim();
             if !model.is_empty() && !provider.models.iter().any(|item| item == model) {
                 provider.models.push(model.to_string());

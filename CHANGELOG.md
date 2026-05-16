@@ -7,7 +7,30 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.1.33...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.2.0...HEAD)
+
+---
+
+## [0.2.0](https://github.com/openpup/openpup/compare/v0.1.33...v0.2.0) — 2026-05-16
+
+### Added
+- **Finance workbench** — added a dedicated finance workspace with overview, research, orders, and pipeline surfaces, plus watchlist, risk-check, and order-preparation flows backed by the finance MCP stack.
+- **Desktop behavior controls** — added settings for close-to-tray behavior and launch-at-startup, with tray restore/quit actions and platform-specific startup registration.
+- **Timeline export** — timeline history can now be exported as Markdown or HTML for archive and review.
+- **`llm-router` runtime foundation** — introduced a protocol-oriented local LLM routing crate to unify provider configuration, routing, and protocol adapters across desktop and CLI runtimes.
+
+### Changed
+- **LLM configuration model** — replaced the old single-provider setup with provider registry plus primary/mini/embedding routing, and simplified the UI so provider choice stays user-facing while runtime `kind` stays internal.
+- **Supported LLM protocols** — OpenPup now routes through built-in protocol adapters for OpenAI-compatible, OpenAI Responses, Anthropic Messages, and Ollama instead of relying on LiteLLM integration.
+- **Settings-page loading** — LLM settings now load through a single snapshot payload and desktop settings render with immediate defaults, reducing visible delayed-pop-in on Windows.
+- **Desktop tray behavior** — tray clicks now restore hidden windows directly, while visible windows keep menu access; macOS Dock reopen also restores the main window.
+- **Release baseline** — desktop app metadata, npm package version, XMTP helper package version, workspace crates, and lockfiles are aligned to `0.2.0`.
+
+### Fixed
+- **Conversation return-to-latest** — switching back to the main chat view now returns to the latest message instead of leaving the scroll position behind.
+- **Diary semantics** — daily logs now capture conversation summaries and memory changes with clearer labels instead of looking like issue-only notes.
+- **Streaming event ordering** — protocol stream event queues now use explicit FIFO ordering, reducing the risk of out-of-order token/tool event delivery.
+- **Provider validation feedback** — testing or syncing remote providers without an API key now fails fast with explicit guidance instead of surfacing confusing downstream errors.
 
 ---
 
@@ -110,7 +133,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Scheduled job cron display and execution** — cron schedule handling now normalizes weekdays and local timezone display so next-run calculations match the UI.
 - **Filesystem and shell risk checks** — capability roots and context-aware shell checks now block high-risk reads such as private home paths or root scans while preserving normal workspace and allowed absolute executable use.
 
-### Planned — v0.2.0: Configurable Organization OS
+### Roadmap — Configurable Organization OS
 
 Roadmap 2.0 is tracked in `docs/roadmap2.0.md`.
 
