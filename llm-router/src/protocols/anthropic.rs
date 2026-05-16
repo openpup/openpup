@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 
 use futures_util::{stream, Stream, StreamExt};
@@ -74,7 +75,7 @@ impl AnthropicProvider {
                 String::new(),
                 None::<String>,
                 Vec::<String>::new(),
-                Vec::<StreamEvent>::new(),
+                VecDeque::<StreamEvent>::new(),
                 false,
                 0_u64,
                 0_u64,
@@ -90,7 +91,7 @@ impl AnthropicProvider {
                 mut output_tokens,
             )| async move {
                 loop {
-                    if let Some(event) = pending.pop() {
+                    if let Some(event) = pending.pop_front() {
                         return Ok(Some((
                             event,
                             (
@@ -145,7 +146,6 @@ impl AnthropicProvider {
                                                 emitted.push(StreamEvent::Done);
                                                 done = true;
                                             }
-                                            emitted.reverse();
                                             pending.extend(emitted);
                                             if done {
                                                 break;
@@ -167,14 +167,14 @@ impl AnthropicProvider {
                         Some(Err(err)) => return Err(RouterError::Request(err.to_string())),
                         None => {
                             if input_tokens > 0 || output_tokens > 0 {
-                                pending.push(StreamEvent::Done);
-                                pending.push(StreamEvent::Usage(Usage {
+                                pending.push_back(StreamEvent::Usage(Usage {
                                     prompt_tokens: input_tokens,
                                     completion_tokens: output_tokens,
                                     total_tokens: input_tokens + output_tokens,
                                 }));
+                                pending.push_back(StreamEvent::Done);
                             } else {
-                                pending.push(StreamEvent::Done);
+                                pending.push_back(StreamEvent::Done);
                             }
                             done = true;
                         }

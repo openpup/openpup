@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 
 use futures_util::{stream, Stream, StreamExt};
@@ -66,12 +67,12 @@ impl OpenAiResponsesProvider {
                 String::new(),
                 None::<String>,
                 Vec::<String>::new(),
-                Vec::<StreamEvent>::new(),
+                VecDeque::<StreamEvent>::new(),
                 false,
             ),
             |(mut bytes, mut buffer, mut current_event, mut current_data, mut pending, mut done)| async move {
                 loop {
-                    if let Some(event) = pending.pop() {
+                    if let Some(event) = pending.pop_front() {
                         return Ok(Some((event, (bytes, buffer, current_event, current_data, pending, done))));
                     }
                     if done {
@@ -96,7 +97,6 @@ impl OpenAiResponsesProvider {
                                                 emitted.push(StreamEvent::Done);
                                                 done = true;
                                             }
-                                            emitted.reverse();
                                             pending.extend(emitted);
                                             if done {
                                                 break;
@@ -116,7 +116,7 @@ impl OpenAiResponsesProvider {
                         }
                         Some(Err(err)) => return Err(RouterError::Request(err.to_string())),
                         None => {
-                            pending.push(StreamEvent::Done);
+                            pending.push_back(StreamEvent::Done);
                             done = true;
                         }
                     }

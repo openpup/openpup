@@ -147,7 +147,6 @@ interface LlmConfigInfo {
 interface ProviderPayload {
   id: string;
   name: string;
-  kind: string;
   provider: string;
   apiBase: string;
   apiKey: string;
@@ -175,7 +174,6 @@ interface ProviderTestResult {
 interface ProviderCatalogItem {
   key: string;
   label: string;
-  kind: string;
   defaultApiBase: string;
   defaultName: string;
   defaultId: string;
@@ -190,8 +188,7 @@ const LlmConfigPanel: React.FC = () => {
   const [providerForm, setProviderForm] = React.useState<ProviderPayload>({
     id: '',
     name: '',
-    kind: 'openai_compatible',
-    provider: 'openai',
+    provider: 'openai_compatible',
     apiBase: 'https://api.openai.com/v1',
     apiKey: '',
     enabled: true,
@@ -233,14 +230,12 @@ const LlmConfigPanel: React.FC = () => {
     void loadAll();
   }, []);
 
-  const setProviderKey = (value: string) => {
-    const previousProvider = providerForm.provider;
-    const previousCatalog = providerCatalog.find((item) => item.key === previousProvider);
+  const setProviderProtocol = (value: string) => {
+    const previousCatalog = providerCatalog.find((item) => item.key === providerForm.provider);
     const nextCatalog = providerCatalog.find((item) => item.key === value);
     setProviderForm((f) => ({
       ...f,
-      provider: value,
-      kind: nextCatalog?.kind ?? (value.trim().toLowerCase() === 'ollama' ? 'ollama' : 'openai_compatible'),
+      provider: nextCatalog?.key ?? value,
       id:
         !f.id.trim() || f.id === previousCatalog?.defaultId
           ? (nextCatalog?.defaultId ?? f.id)
@@ -311,7 +306,7 @@ const LlmConfigPanel: React.FC = () => {
         setProviderForm({ ...next, apiKey: '' });
         setModelsText(next.models.join(', '));
       } else {
-        setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
+        setProviderForm({ id: '', name: '', provider: 'openai_compatible', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
         setModelsText('');
       }
     } catch (e) {
@@ -458,7 +453,7 @@ const LlmConfigPanel: React.FC = () => {
                         color: provider.enabled ? 'var(--color-text-tertiary)' : 'var(--color-text-quaternary)',
                       }}
                     >
-                      {provider.provider}
+                      {providerCatalog.find((item) => item.key === provider.provider)?.label ?? provider.provider}
                     </span>
                     <span
                       style={{
@@ -476,7 +471,7 @@ const LlmConfigPanel: React.FC = () => {
               <button
                 onClick={() => {
                   setSelectedProviderId(null);
-                  setProviderForm({ id: '', name: '', kind: 'openai_compatible', provider: 'openai', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
+                  setProviderForm({ id: '', name: '', provider: 'openai_compatible', apiBase: 'https://api.openai.com/v1', apiKey: '', enabled: true, models: [] });
                   setModelsText('');
                   setProviderDrawerOpen(true);
                 }}
@@ -740,10 +735,10 @@ const LlmConfigPanel: React.FC = () => {
                 <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_name_hint', lang)}</div>
               </div>
               <div className="space-y-1.5 md:col-span-2">
-                <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key', lang)}</label>
+                <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor', lang)}</label>
                 <select
                   value={providerForm.provider}
-                  onChange={(e) => setProviderKey(e.target.value)}
+                  onChange={(e) => setProviderProtocol(e.target.value)}
                   className="w-full focus:outline-none transition-colors"
                   style={{ width: '100%', height: '37px', fontSize: "13px", padding: '0 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
                 >
@@ -756,13 +751,13 @@ const LlmConfigPanel: React.FC = () => {
                     </option>
                   ))}
                 </select>
-                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_key_hint', lang)}</div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor_hint', lang)}</div>
               </div>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 mt-3">
               {field(t('llm_provider_base', lang), providerForm.apiBase, (value) => setProviderForm((f) => ({ ...f, apiBase: value })), 'https://api.openai.com/v1')}
-              {field(t('llm_provider_secret', lang), providerForm.apiKey, (value) => setProviderForm((f) => ({ ...f, apiKey: value })), 'sk-...', 'password')}
+              {field(t('llm_provider_secret', lang), providerForm.apiKey, (value) => setProviderForm((f) => ({ ...f, apiKey: value })), providerForm.provider === 'ollama' ? t('llm_provider_secret_optional', lang) : 'sk-...', 'password')}
             </div>
 
             <div className="mt-3 space-y-1.5">

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::{
-    default_api_base_for_provider, load, save, LlmProviderConfig, LlmRouteTarget, LlmRoutingConfig,
+    canonical_provider_value, default_api_base_for_provider, infer_provider_kind, load, save,
+    LlmProviderConfig, LlmRouteTarget, LlmRoutingConfig,
 };
 
 use super::AppState;
@@ -14,7 +15,6 @@ use super::AppState;
 pub struct ProviderPayload {
     pub id: String,
     pub name: String,
-    pub kind: String,
     pub provider: String,
     pub api_base: String,
     pub api_key: String,
@@ -70,7 +70,6 @@ pub struct ProviderTestResult {
 pub struct ProviderCatalogItem {
     pub key: String,
     pub label: String,
-    pub kind: String,
     pub default_api_base: String,
     pub default_name: String,
     pub default_id: String,
@@ -111,7 +110,6 @@ fn payload_from_provider(provider: &LlmProviderConfig) -> ProviderPayload {
     ProviderPayload {
         id: provider.id.clone(),
         name: provider.name.clone(),
-        kind: provider.kind.clone(),
         provider: provider.provider.clone(),
         api_base: provider.api_base.clone(),
         api_key: String::new(),
@@ -121,22 +119,15 @@ fn payload_from_provider(provider: &LlmProviderConfig) -> ProviderPayload {
 }
 
 fn provider_from_payload(payload: ProviderPayload) -> LlmProviderConfig {
-    let kind = if payload.kind.trim().is_empty() {
-        if payload.provider.eq_ignore_ascii_case("ollama") {
-            "ollama".to_string()
-        } else {
-            "openai_compatible".to_string()
-        }
-    } else {
-        payload.kind
-    };
+    let provider = canonical_provider_value(&payload.provider);
+    let kind = infer_provider_kind(&provider);
     LlmProviderConfig {
         id: payload.id.trim().to_string(),
         name: payload.name.trim().to_string(),
         kind: kind.clone(),
-        provider: payload.provider.trim().to_string(),
+        provider: provider.clone(),
         api_base: if payload.api_base.trim().is_empty() {
-            default_api_base_for_provider(&kind, &payload.provider)
+            default_api_base_for_provider(&kind, &provider)
         } else {
             payload.api_base.trim().to_string()
         },
@@ -212,29 +203,18 @@ fn normalize_provider_for_test(mut provider: LlmProviderConfig) -> LlmProviderCo
 
 fn provider_catalog() -> Vec<ProviderCatalogItem> {
     let items = [
-        ("openai", "OpenAI", "openai_compatible"),
-        ("anthropic", "Anthropic", "openai_compatible"),
-        ("openrouter", "OpenRouter", "openai_compatible"),
-        ("ollama", "Ollama", "ollama"),
-        ("gemini", "Gemini", "openai_compatible"),
-        ("vertex_ai", "Vertex AI", "openai_compatible"),
-        ("bedrock", "Bedrock", "openai_compatible"),
-        ("azure", "Azure OpenAI", "openai_compatible"),
-        ("deepseek", "DeepSeek", "openai_compatible"),
-        ("groq", "Groq", "openai_compatible"),
-        ("xai", "xAI", "openai_compatible"),
-        ("mistral", "Mistral", "openai_compatible"),
-        ("cohere", "Cohere", "openai_compatible"),
-        ("huggingface", "Hugging Face", "openai_compatible"),
+        ("openai_compatible", "OpenAI-compatible"),
+        ("openai_responses", "OpenAI Responses"),
+        ("anthropic", "Anthropic Messages"),
+        ("ollama", "Ollama"),
     ];
 
     items
         .into_iter()
-        .map(|(key, label, kind)| ProviderCatalogItem {
+        .map(|(key, label)| ProviderCatalogItem {
             key: key.to_string(),
             label: label.to_string(),
-            kind: kind.to_string(),
-            default_api_base: default_api_base_for_provider(kind, key),
+            default_api_base: default_api_base_for_provider(&infer_provider_kind(key), key),
             default_name: label.to_string(),
             default_id: format!("{}-main", key.replace('_', "-")),
         })
@@ -267,7 +247,11 @@ async fn fetch_provider_models(provider: &LlmProviderConfig) -> Result<Vec<Strin
     let mut req = client
         .get(&url)
         .header(CONTENT_TYPE, "application/json");
-    if !provider.api_key.trim().is_empty() {
+    if provider.kind == "anthropic_messages" && !provider.api_key.trim().is_empty() {
+        req = req
+            .header("x-api-key", provider.api_key.clone())
+            .header("anthropic-version", "2023-06-01");
+    } else if !provider.api_key.trim().is_empty() {
         req = req.header(AUTHORIZATION, format!("Bearer {}", provider.api_key));
     }
     let val: serde_json::Value = req.send().await?.error_for_status()?.json().await?;

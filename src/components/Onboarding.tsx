@@ -16,12 +16,17 @@ interface LlmConfig {
   api_key: string;
   model: string;
   api_base: string; // empty = use provider default
+  embed_model: string;
 }
 
 interface OnboardingProviderPreset {
+  label: string;
+  value: string;
   provider: string;
-  kind: string;
   api_base: string;
+  model: string;
+  embed_model: string;
+  require_api_key: boolean;
 }
 
 const QUESTIONS_BY_LANG: Record<Lang, {
@@ -136,9 +141,25 @@ function buildOwnerMd(answers: Partial<OnboardingData>, lang: Lang): string {
 
 function presetModels(lang: Lang) {
   return [
-    { label: 'GPT-4o (OpenAI)', value: 'gpt-4o', base: '', provider: 'openai', kind: 'openai_compatible' },
-    { label: 'GPT-4o-mini (OpenAI)', value: 'gpt-4o-mini', base: '', provider: 'openai', kind: 'openai_compatible' },
-    { label: t('onboarding_custom_model', lang), value: '__custom__', base: '', provider: 'openai', kind: 'openai_compatible' },
+    {
+      label: t('onboarding_protocol_openai_compatible', lang),
+      value: 'openai_compatible',
+      api_base: 'https://api.openai.com/v1',
+      provider: 'openai_compatible',
+      model: 'gpt-4o',
+      embed_model: 'text-embedding-3-small',
+      require_api_key: true,
+    },
+    {
+      label: t('onboarding_protocol_ollama', lang),
+      value: 'ollama',
+      api_base: 'http://127.0.0.1:11434/v1',
+      provider: 'ollama',
+      kind: 'ollama',
+      model: 'qwen3:8b',
+      embed_model: 'nomic-embed-text',
+      require_api_key: false,
+    },
   ];
 }
 
@@ -160,7 +181,12 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
   // LLM config state
   const [llmPreset, setLlmPreset] = useState(models[0].value);
-  const [llmConfig, setLlmConfig] = useState<LlmConfig>({ api_key: '', model: 'gpt-4o', api_base: '' });
+  const [llmConfig, setLlmConfig] = useState<LlmConfig>({
+    api_key: '',
+    model: models[0].model,
+    api_base: models[0].api_base,
+    embed_model: models[0].embed_model,
+  });
   const [llmError, setLlmError] = useState('');
 
   useEffect(() => {
@@ -205,16 +231,20 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
   const handlePresetChange = (value: string) => {
     setLlmPreset(value);
-    if (value !== '__custom__') {
-      const preset = models.find((p) => p.value === value);
-      if (preset) {
-        setLlmConfig((prev) => ({ ...prev, model: preset.value, api_base: preset.base }));
-      }
+    const preset = models.find((p) => p.value === value);
+    if (preset) {
+      setLlmConfig((prev) => ({
+        ...prev,
+        model: preset.model,
+        api_base: preset.api_base,
+        embed_model: preset.embed_model,
+      }));
     }
   };
 
   const handleLlmNext = () => {
-    if (!llmConfig.api_key.trim()) { setLlmError(t('onboarding_llm_required', lang)); return; }
+    const preset = models.find((item) => item.value === llmPreset) ?? models[0];
+    if (preset.require_api_key && !llmConfig.api_key.trim()) { setLlmError(t('onboarding_llm_required', lang)); return; }
     if (!llmConfig.model.trim()) { setLlmError(t('onboarding_model_required', lang)); return; }
     setLlmError('');
     setEditableOwnerMd(buildOwnerMd(answers, lang));
@@ -228,29 +258,26 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
     try {
       // 1. Save LLM config first — so the embed API key is available when
       //    save_onboarding_data seeds long-term memory (prevents timeout hang).
-      if (llmConfig.api_key.trim()) {
-        const preset = models.find((item) => item.value === llmPreset) ?? models[0];
-        const providerId = 'default';
-        await invoke('save_llm_provider', {
-          provider: {
-            id: providerId,
-            name: 'Default Provider',
-            kind: preset.kind,
-            provider: preset.provider,
-            apiBase: llmConfig.api_base.trim() || preset.base || 'https://api.openai.com/v1',
-            apiKey: llmConfig.api_key.trim(),
-            enabled: true,
-            models: [llmConfig.model.trim(), 'text-embedding-3-small'],
-          },
-        });
-        await invoke('set_llm_routing', {
-          routing: {
-            primary: { providerId, model: llmConfig.model.trim() },
-            mini: { providerId, model: llmConfig.model.trim() },
-            embedding: { providerId, model: 'text-embedding-3-small' },
-          },
-        });
-      }
+      const preset = models.find((item) => item.value === llmPreset) ?? models[0];
+      const providerId = 'default';
+      await invoke('save_llm_provider', {
+        provider: {
+          id: providerId,
+          name: 'Default Provider',
+          provider: preset.provider,
+          apiBase: llmConfig.api_base.trim() || preset.api_base,
+          apiKey: llmConfig.api_key.trim(),
+          enabled: true,
+          models: [llmConfig.model.trim(), llmConfig.embed_model.trim()].filter(Boolean),
+        },
+      });
+      await invoke('set_llm_routing', {
+        routing: {
+          primary: { providerId, model: llmConfig.model.trim() },
+          mini: { providerId, model: llmConfig.model.trim() },
+          embedding: { providerId, model: llmConfig.embed_model.trim() },
+        },
+      });
 
       // 2. Save OWNER.md profile + seed memory (embedding now has a valid key)
       await invoke('save_onboarding_data', {
@@ -275,7 +302,6 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isCustomPreset = llmPreset === '__custom__';
   const stepLabel = step < TOTAL_PROFILE
     ? `${step + 1} / ${TOTAL_PROFILE}`
     : step === STEP_LLM ? t('onboarding_step_ai', lang) : t('onboarding_step_confirm', lang);
@@ -386,7 +412,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 <div style={{ paddingLeft: '40px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* Preset picker */}
                   <div>
-                    <label style={labelStyle}>{t('onboarding_select_model', lang)}</label>
+                    <label style={labelStyle}>{t('onboarding_select_protocol', lang)}</label>
                     <select
                       style={{ ...inputStyle, cursor: 'pointer' }}
                       value={llmPreset}
@@ -398,18 +424,15 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     </select>
                   </div>
 
-                  {/* Custom model name */}
-                  {isCustomPreset && (
-                    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                      <label style={labelStyle}>{t('onboarding_model_name', lang)}</label>
-                      <input
-                        style={inputStyle}
-                        placeholder={t('onboarding_model_name_ph', lang)}
-                        value={llmConfig.model}
-                        onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
-                      />
-                    </div>
-                  )}
+                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label style={labelStyle}>{t('onboarding_model_name', lang)}</label>
+                    <input
+                      style={inputStyle}
+                      placeholder={t('onboarding_model_name_ph', lang)}
+                      value={llmConfig.model}
+                      onChange={(e) => setLlmConfig((prev) => ({ ...prev, model: e.target.value }))}
+                    />
+                  </div>
 
                   {/* API Key */}
                   <div>
@@ -417,7 +440,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     <input
                       style={inputStyle}
                       type="password"
-                      placeholder="sk-..."
+                      placeholder={(models.find((item) => item.value === llmPreset)?.require_api_key ?? true) ? 'sk-...' : t('onboarding_api_key_optional', lang)}
                       value={llmConfig.api_key}
                       onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_key: e.target.value }))}
                     />
@@ -426,20 +449,17 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     </p>
                   </div>
 
-                  {/* Base URL */}
-                  {(isCustomPreset || llmConfig.api_base) && (
-                    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                      <label style={labelStyle}>
-                        {t('onboarding_base_url_optional', lang)}
-                      </label>
-                      <input
-                        style={inputStyle}
-                        placeholder="https://api.openai.com/v1"
-                        value={llmConfig.api_base}
-                        onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_base: e.target.value }))}
-                      />
-                    </div>
-                  )}
+                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label style={labelStyle}>
+                      {t('onboarding_base_url_optional', lang)}
+                    </label>
+                    <input
+                      style={inputStyle}
+                      placeholder="https://api.openai.com/v1"
+                      value={llmConfig.api_base}
+                      onChange={(e) => setLlmConfig((prev) => ({ ...prev, api_base: e.target.value }))}
+                    />
+                  </div>
 
                   {llmError && (
                     <div className="animate-in fade-in duration-300" style={{ fontSize: '13px', color: 'var(--color-text-danger)', background: 'var(--color-background-danger)', border: '1px solid var(--color-border-tertiary)', padding: '10px 12px', borderRadius: '8px' }}>

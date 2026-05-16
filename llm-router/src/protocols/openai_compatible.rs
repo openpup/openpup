@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 
 use futures_util::{stream, Stream, StreamExt};
@@ -85,10 +86,10 @@ impl OpenAiCompatibleProvider {
 
         let byte_stream = response.bytes_stream();
         let s = stream::try_unfold(
-            (byte_stream, String::new(), Vec::<StreamEvent>::new(), false),
+            (byte_stream, String::new(), VecDeque::<StreamEvent>::new(), false),
             |(mut bytes, mut buffer, mut pending, mut done)| async move {
                 loop {
-                    if let Some(event) = pending.pop() {
+                    if let Some(event) = pending.pop_front() {
                         return Ok(Some((event, (bytes, buffer, pending, done))));
                     }
                     if done {
@@ -105,20 +106,18 @@ impl OpenAiCompatibleProvider {
                                 }
                                 let data = &line["data: ".len()..];
                                 if data == "[DONE]" {
-                                    pending.push(StreamEvent::Done);
+                                    pending.push_back(StreamEvent::Done);
                                     done = true;
                                     break;
                                 }
                                 let val: serde_json::Value = serde_json::from_str(data)
                                     .map_err(|e| RouterError::Parse(e.to_string()))?;
-                                let mut emitted = Self::parse_stream_events(&val)?;
-                                emitted.reverse();
-                                pending.extend(emitted);
+                                pending.extend(Self::parse_stream_events(&val)?);
                             }
                         }
                         Some(Err(err)) => return Err(RouterError::Request(err.to_string())),
                         None => {
-                            pending.push(StreamEvent::Done);
+                            pending.push_back(StreamEvent::Done);
                             done = true;
                         }
                     }

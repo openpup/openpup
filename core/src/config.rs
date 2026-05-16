@@ -151,10 +151,29 @@ pub struct SkillsConfig {
 // ── default helpers ──────────────────────────────────────────────────────────
 
 fn default_provider() -> String {
-    "openai".into()
+    "openai_compatible".into()
 }
 fn default_provider_kind() -> String {
     "openai_compatible".into()
+}
+pub fn canonical_provider_value(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openai_responses" => "openai_responses".to_string(),
+        "anthropic" | "anthropic_messages" => "anthropic".to_string(),
+        "ollama" => "ollama".to_string(),
+        "openai_compatible" | "openai" | "openrouter" | "deepseek" | "siliconflow" => {
+            "openai_compatible".to_string()
+        }
+        _ => default_provider(),
+    }
+}
+pub fn infer_provider_kind(provider: &str) -> String {
+    match canonical_provider_value(provider).as_str() {
+        "openai_responses" => "openai_responses".to_string(),
+        "anthropic" => "anthropic_messages".to_string(),
+        "ollama" => "ollama".to_string(),
+        _ => default_provider_kind(),
+    }
 }
 fn default_provider_enabled() -> bool {
     true
@@ -188,13 +207,12 @@ fn default_kb_summary_frequency() -> String {
 }
 
 pub fn default_api_base_for_provider(kind: &str, provider: &str) -> String {
-    if kind == "ollama" {
-        return "http://127.0.0.1:11434/v1".to_string();
-    }
-    match provider.to_ascii_lowercase().as_str() {
-        "deepseek" => "https://api.deepseek.com/v1".to_string(),
-        "openrouter" => "https://openrouter.ai/api/v1".to_string(),
-        "siliconflow" => "https://api.siliconflow.cn/v1".to_string(),
+    match canonical_provider_value(provider).as_str() {
+        "ollama" => "http://127.0.0.1:11434/v1".to_string(),
+        "anthropic" => "https://api.anthropic.com/v1".to_string(),
+        "openai_responses" => "https://api.openai.com/v1".to_string(),
+        _ if kind == "openai_responses" => "https://api.openai.com/v1".to_string(),
+        _ if kind == "anthropic_messages" => "https://api.anthropic.com/v1".to_string(),
         _ => "https://api.openai.com/v1".to_string(),
     }
 }
@@ -423,11 +441,7 @@ fn apply_llm_env_overrides(llm: &mut LlmConfig) {
         let primary_provider = &mut llm.providers[index];
         if let Ok(v) = std::env::var("OPENPUP_LLM_PROVIDER") {
             primary_provider.provider = v.clone();
-            primary_provider.kind = if v.eq_ignore_ascii_case("ollama") {
-                "ollama".to_string()
-            } else {
-                default_provider_kind()
-            };
+            primary_provider.kind = infer_provider_kind(&v);
             if primary_provider.api_base.trim().is_empty() {
                 primary_provider.api_base =
                     default_api_base_for_provider(&primary_provider.kind, &primary_provider.provider);
@@ -458,11 +472,8 @@ fn migrate_legacy_provider(llm: &mut LlmConfig) {
     }
 
     let id = "default".to_string();
-    let kind = if llm.provider.eq_ignore_ascii_case("ollama") {
-        "ollama".to_string()
-    } else {
-        "openai_compatible".to_string()
-    };
+    llm.provider = canonical_provider_value(&llm.provider);
+    let kind = infer_provider_kind(&llm.provider);
     let name = if llm.provider.eq_ignore_ascii_case("ollama") {
         "Local Ollama".to_string()
     } else {
@@ -509,20 +520,12 @@ fn ensure_provider_defaults(llm: &mut LlmConfig) {
         if provider.name.trim().is_empty() {
             provider.name = provider.id.clone();
         }
+        provider.provider = canonical_provider_value(&provider.provider);
         if provider.kind.trim().is_empty() {
-            provider.kind = if provider.provider.eq_ignore_ascii_case("ollama") {
-                "ollama".to_string()
-            } else {
-                default_provider_kind()
-            };
+            provider.kind = infer_provider_kind(&provider.provider);
         }
-        if provider.provider.trim().is_empty() {
-            provider.provider = default_provider();
-        }
-        if provider.kind == "ollama" && provider.api_base.trim().is_empty() {
-            provider.api_base = default_api_base_for_provider(&provider.kind, &provider.provider);
-        }
-        if provider.kind != "ollama" && provider.api_base.trim().is_empty() {
+        provider.kind = infer_provider_kind(&provider.provider);
+        if provider.api_base.trim().is_empty() {
             provider.api_base = default_api_base_for_provider(&provider.kind, &provider.provider);
         }
         provider.models.retain(|model| !model.trim().is_empty());
@@ -598,11 +601,7 @@ fn sync_legacy_fields_from_routing(llm: &mut LlmConfig) {
         .cloned();
 
     if let Some(provider) = primary_provider {
-        llm.provider = if provider.kind == "ollama" {
-            "ollama".to_string()
-        } else {
-            provider.provider.clone()
-        };
+        llm.provider = provider.provider.clone();
         llm.api_base = provider.api_base;
         llm.api_key = provider.api_key;
     }

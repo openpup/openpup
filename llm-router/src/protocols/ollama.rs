@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 
 use futures_util::{stream, Stream, StreamExt};
@@ -61,10 +62,10 @@ impl OllamaProvider {
 
         let byte_stream = response.bytes_stream();
         let s = stream::try_unfold(
-            (byte_stream, String::new(), Vec::<StreamEvent>::new(), false),
+            (byte_stream, String::new(), VecDeque::<StreamEvent>::new(), false),
             |(mut bytes, mut buffer, mut pending, mut done)| async move {
                 loop {
-                    if let Some(event) = pending.pop() {
+                    if let Some(event) = pending.pop_front() {
                         return Ok(Some((event, (bytes, buffer, pending, done))));
                     }
                     if done {
@@ -86,7 +87,6 @@ impl OllamaProvider {
                                     emitted.push(StreamEvent::Done);
                                     done = true;
                                 }
-                                emitted.reverse();
                                 pending.extend(emitted);
                                 if done {
                                     break;
@@ -95,7 +95,7 @@ impl OllamaProvider {
                         }
                         Some(Err(err)) => return Err(RouterError::Request(err.to_string())),
                         None => {
-                            pending.push(StreamEvent::Done);
+                            pending.push_back(StreamEvent::Done);
                             done = true;
                         }
                     }

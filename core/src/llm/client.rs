@@ -453,11 +453,8 @@ fn map_provider_config(provider: &LlmProviderConfig) -> RouterProviderConfig {
         name: provider.name.clone(),
         protocol: match provider.kind.to_ascii_lowercase().as_str() {
             "ollama" => RouterProviderProtocol::Ollama,
-            "anthropic" => RouterProviderProtocol::AnthropicMessages,
+            "anthropic_messages" => RouterProviderProtocol::AnthropicMessages,
             "openai_responses" => RouterProviderProtocol::OpenAiResponses,
-            _ if provider.provider.eq_ignore_ascii_case("anthropic") => {
-                RouterProviderProtocol::AnthropicMessages
-            }
             _ => RouterProviderProtocol::OpenAiCompatible,
         },
         provider_key: provider.provider.clone(),
