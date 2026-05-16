@@ -14,7 +14,7 @@ pub enum RouterError {
     ProviderDisabled(String),
     #[error("provider `{0}` has no model configured")]
     ProviderModelMissing(String),
-    #[error("provider `{provider}` uses unsupported protocol `{protocol}` in phase 1")]
+    #[error("provider `{provider}` uses unsupported protocol `{protocol}`")]
     UnsupportedProtocol { provider: String, protocol: String },
     #[error("provider `{0}` is missing api_key")]
     MissingApiKey(String),

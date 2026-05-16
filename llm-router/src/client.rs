@@ -6,7 +6,10 @@ use futures_util::Stream;
 
 use crate::config::{ProviderConfig, ProviderProtocol, RouteTarget, RoutingConfig};
 use crate::error::{Result, RouterError};
+use crate::protocols::anthropic::AnthropicProvider;
 use crate::protocols::openai_compatible::OpenAiCompatibleProvider;
+use crate::protocols::openai_responses::OpenAiResponsesProvider;
+use crate::protocols::ollama::OllamaProvider;
 use crate::types::{ChatRequest, ChatResponse, EmbeddingRequest, EmbeddingResponse, StreamEvent};
 
 #[derive(Clone, Copy)]
@@ -120,10 +123,21 @@ impl Client {
                     .embed(EmbeddingRequest { model, input })
                     .await
             }
-            protocol => Err(RouterError::UnsupportedProtocol {
-                provider: provider.id,
-                protocol: format!("{protocol:?}"),
-            }),
+            ProviderProtocol::AnthropicMessages => {
+                AnthropicProvider::new(provider, self.http.clone())
+                    .embed(EmbeddingRequest { model, input })
+                    .await
+            }
+            ProviderProtocol::Ollama => {
+                OllamaProvider::new(provider, self.http.clone())
+                    .embed(EmbeddingRequest { model, input })
+                    .await
+            }
+            ProviderProtocol::OpenAiResponses => {
+                OpenAiResponsesProvider::new(provider, self.http.clone())
+                    .embed(EmbeddingRequest { model, input })
+                    .await
+            }
         }
     }
 
@@ -198,10 +212,39 @@ impl Client {
                     })
                     .await
             }
-            protocol => Err(RouterError::UnsupportedProtocol {
-                provider: provider.id.clone(),
-                protocol: format!("{protocol:?}"),
-            }),
+            ProviderProtocol::AnthropicMessages => {
+                AnthropicProvider::new(provider.clone(), self.http.clone())
+                    .chat(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
+            ProviderProtocol::OpenAiResponses => {
+                OpenAiResponsesProvider::new(provider.clone(), self.http.clone())
+                    .chat(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
+            ProviderProtocol::Ollama => {
+                OllamaProvider::new(provider.clone(), self.http.clone())
+                    .chat(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
         }
     }
 
@@ -224,10 +267,39 @@ impl Client {
                     })
                     .await
             }
-            protocol => Err(RouterError::UnsupportedProtocol {
-                provider: provider.id.clone(),
-                protocol: format!("{protocol:?}"),
-            }),
+            ProviderProtocol::AnthropicMessages => {
+                AnthropicProvider::new(provider.clone(), self.http.clone())
+                    .chat_stream(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
+            ProviderProtocol::OpenAiResponses => {
+                OpenAiResponsesProvider::new(provider.clone(), self.http.clone())
+                    .chat_stream(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
+            ProviderProtocol::Ollama => {
+                OllamaProvider::new(provider.clone(), self.http.clone())
+                    .chat_stream(ChatRequest {
+                        model,
+                        messages,
+                        tools,
+                        temperature: None,
+                        max_tokens: None,
+                    })
+                    .await
+            }
         }
     }
 }
