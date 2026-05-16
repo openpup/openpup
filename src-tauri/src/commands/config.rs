@@ -75,6 +75,15 @@ pub struct ProviderCatalogItem {
     pub default_id: String,
 }
 
+fn provider_catalog_definitions() -> [(&'static str, &'static str); 4] {
+    [
+        ("openai_compatible", "OpenAI (Compatible)"),
+        ("openai_responses", "OpenAI (Responses)"),
+        ("anthropic", "Anthropic"),
+        ("ollama", "Ollama"),
+    ]
+}
+
 fn resolved_primary_snapshot(
     cfg: &crate::config::AppConfig,
 ) -> (Option<&LlmProviderConfig>, String, String, String) {
@@ -202,14 +211,7 @@ fn normalize_provider_for_test(mut provider: LlmProviderConfig) -> LlmProviderCo
 }
 
 fn provider_catalog() -> Vec<ProviderCatalogItem> {
-    let items = [
-        ("openai_compatible", "OpenAI-compatible"),
-        ("openai_responses", "OpenAI Responses"),
-        ("anthropic", "Anthropic Messages"),
-        ("ollama", "Ollama"),
-    ];
-
-    items
+    provider_catalog_definitions()
         .into_iter()
         .map(|(key, label)| ProviderCatalogItem {
             key: key.to_string(),

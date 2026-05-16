@@ -142,7 +142,7 @@ function buildOwnerMd(answers: Partial<OnboardingData>, lang: Lang): string {
 function presetModels(lang: Lang) {
   return [
     {
-      label: t('onboarding_protocol_openai_compatible', lang),
+      label: t('onboarding_provider_openai_compatible', lang),
       value: 'openai_compatible',
       api_base: 'https://api.openai.com/v1',
       provider: 'openai_compatible',
@@ -151,11 +151,10 @@ function presetModels(lang: Lang) {
       require_api_key: true,
     },
     {
-      label: t('onboarding_protocol_ollama', lang),
+      label: t('onboarding_provider_ollama', lang),
       value: 'ollama',
       api_base: 'http://127.0.0.1:11434/v1',
       provider: 'ollama',
-      kind: 'ollama',
       model: 'qwen3:8b',
       embed_model: 'nomic-embed-text',
       require_api_key: false,
@@ -412,7 +411,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 <div style={{ paddingLeft: '40px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* Preset picker */}
                   <div>
-                    <label style={labelStyle}>{t('onboarding_select_protocol', lang)}</label>
+                    <label style={labelStyle}>{t('onboarding_select_provider', lang)}</label>
                     <select
                       style={{ ...inputStyle, cursor: 'pointer' }}
                       value={llmPreset}

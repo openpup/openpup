@@ -175,6 +175,10 @@ pub fn infer_provider_kind(provider: &str) -> String {
         _ => default_provider_kind(),
     }
 }
+fn normalize_provider_identity(provider: &mut LlmProviderConfig) {
+    provider.provider = canonical_provider_value(&provider.provider);
+    provider.kind = infer_provider_kind(&provider.provider);
+}
 fn default_provider_enabled() -> bool {
     true
 }
@@ -440,8 +444,8 @@ fn apply_llm_env_overrides(llm: &mut LlmConfig) {
     if let Some(index) = primary_provider_index {
         let primary_provider = &mut llm.providers[index];
         if let Ok(v) = std::env::var("OPENPUP_LLM_PROVIDER") {
-            primary_provider.provider = v.clone();
-            primary_provider.kind = infer_provider_kind(&v);
+            primary_provider.provider = v;
+            normalize_provider_identity(primary_provider);
             if primary_provider.api_base.trim().is_empty() {
                 primary_provider.api_base =
                     default_api_base_for_provider(&primary_provider.kind, &primary_provider.provider);
@@ -520,11 +524,7 @@ fn ensure_provider_defaults(llm: &mut LlmConfig) {
         if provider.name.trim().is_empty() {
             provider.name = provider.id.clone();
         }
-        provider.provider = canonical_provider_value(&provider.provider);
-        if provider.kind.trim().is_empty() {
-            provider.kind = infer_provider_kind(&provider.provider);
-        }
-        provider.kind = infer_provider_kind(&provider.provider);
+        normalize_provider_identity(provider);
         if provider.api_base.trim().is_empty() {
             provider.api_base = default_api_base_for_provider(&provider.kind, &provider.provider);
         }

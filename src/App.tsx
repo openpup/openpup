@@ -230,7 +230,7 @@ const LlmConfigPanel: React.FC = () => {
     void loadAll();
   }, []);
 
-  const setProviderProtocol = (value: string) => {
+  const setProviderSelection = (value: string) => {
     const previousCatalog = providerCatalog.find((item) => item.key === providerForm.provider);
     const nextCatalog = providerCatalog.find((item) => item.key === value);
     setProviderForm((f) => ({
@@ -738,7 +738,7 @@ const LlmConfigPanel: React.FC = () => {
                 <label style={{ fontSize: "11px", color: 'var(--color-text-tertiary)' }}>{t('llm_provider_vendor', lang)}</label>
                 <select
                   value={providerForm.provider}
-                  onChange={(e) => setProviderProtocol(e.target.value)}
+                  onChange={(e) => setProviderSelection(e.target.value)}
                   className="w-full focus:outline-none transition-colors"
                   style={{ width: '100%', height: '37px', fontSize: "13px", padding: '0 10px', borderRadius: '10px', border: '0.5px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}
                 >
