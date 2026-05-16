@@ -16,6 +16,8 @@ pub use openpup_core::tools;
 pub use openpup_core::workspace;
 
 use std::sync::Arc;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use commands::AppState;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -32,6 +34,18 @@ use openpup_runtime_ios::IosRuntimeFactory;
 use serde::{Deserialize, Serialize};
 use skills::scheduler::SkillScheduler;
 use tokio::runtime::Runtime;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Manager;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::menu::{Menu, MenuItem};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+#[derive(Default)]
+pub struct DesktopBehaviorState {
+    pub allow_exit: AtomicBool,
+    pub tray_available: AtomicBool,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +189,8 @@ macro_rules! all_commands {
             commands::deny_permission,
             commands::get_execution_mode,
             commands::set_execution_mode,
+            commands::get_desktop_behavior_settings,
+            commands::save_desktop_behavior_settings,
             commands::list_skill_runs,
             commands::search_conversations,
             commands::create_task,
@@ -564,12 +580,37 @@ fn run_desktop() -> anyhow::Result<()> {
         xmtp_helper: xmtp_helper.clone(),
     };
     let app_for_setup = app.clone();
+    let desktop_behavior_state = Arc::new(DesktopBehaviorState::default());
+    let desktop_behavior_state_for_events = desktop_behavior_state.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .manage(desktop_behavior_state.clone())
         .manage(permission_checker.clone())
         .invoke_handler(all_commands!())
+        .on_window_event(move |window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if desktop_behavior_state_for_events.allow_exit.load(Ordering::Relaxed) {
+                    return;
+                }
+                let cfg = crate::config::load();
+                if cfg.app.minimize_to_tray_on_close {
+                    api.prevent_close();
+                    if desktop_behavior_state_for_events
+                        .tray_available
+                        .load(Ordering::Relaxed)
+                    {
+                        hide_main_window_to_tray(window.app_handle());
+                    } else {
+                        let _ = window.minimize();
+                    }
+                }
+            }
+        })
         .setup(move |app| {
             #[cfg(target_os = "windows")]
             {
@@ -586,6 +627,9 @@ fn run_desktop() -> anyhow::Result<()> {
             channel_manager_for_setup.set_event_sink(event_sink.clone());
             app_for_setup.set_conversation_event_sink(event_sink.clone());
             bridge_manager.set_event_sink(event_sink.clone());
+            if let Err(err) = setup_desktop_tray(&app.handle(), desktop_behavior_state.clone()) {
+                tracing::warn!("failed to initialize tray icon: {err}");
+            }
             spawn_xmtp_event_pump(app_for_setup.clone(), xmtp_helper.clone());
             tauri::async_runtime::spawn(async move {
                 scheduler_for_setup.start(Some(event_sink));
@@ -596,6 +640,71 @@ fn run_desktop() -> anyhow::Result<()> {
         .run(tauri::generate_context!())
         .map_err(|err| anyhow::anyhow!("error while running openpup tauri application: {err}"))?;
 
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn hide_main_window_to_tray(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_skip_taskbar(true);
+        let _ = window.hide();
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn setup_desktop_tray(
+    app: &tauri::AppHandle,
+    desktop_behavior_state: Arc<DesktopBehaviorState>,
+) -> anyhow::Result<()> {
+    let show_item = MenuItem::with_id(app, "show", "Open OpenPup", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing default window icon"))?;
+    let state_for_menu = desktop_behavior_state.clone();
+    let app_for_click = app.clone();
+
+    TrayIconBuilder::new()
+        .icon(icon)
+        .tooltip("OpenPup")
+        .menu(&menu)
+        .on_tray_icon_event(move |_tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => show_main_window(&app_for_click),
+            _ => {}
+        })
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => {
+                state_for_menu.allow_exit.store(true, Ordering::Relaxed);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    desktop_behavior_state
+        .tray_available
+        .store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -667,9 +776,11 @@ fn run_mobile() -> anyhow::Result<()> {
         xmtp_helper: xmtp_helper.clone(),
     };
     let app_for_setup = app.clone();
+    let desktop_behavior_state = Arc::new(DesktopBehaviorState::default());
 
     tauri_app.manage(app_state);
     tauri_app.manage(permission_checker.clone());
+    tauri_app.manage(desktop_behavior_state);
 
     let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(
         tauri_app.handle().clone(),

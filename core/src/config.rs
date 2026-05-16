@@ -117,6 +117,12 @@ pub struct AppSettings {
     /// "zh" or "en"
     #[serde(default = "default_language")]
     pub language: String,
+    /// Hide to tray or minimize instead of quitting when the main window closes.
+    #[serde(default = "default_minimize_to_tray_on_close")]
+    pub minimize_to_tray_on_close: bool,
+    /// Start the desktop app automatically when the user logs in.
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +203,9 @@ fn default_theme() -> String {
 fn default_language() -> String {
     "zh".into()
 }
+fn default_minimize_to_tray_on_close() -> bool {
+    true
+}
 fn default_enabled_pups() -> Vec<String> {
     vec!["alpha", "dev", "writer", "ops", "research", "life_admin"]
         .into_iter()
@@ -241,6 +250,8 @@ impl Default for AppSettings {
             execution_mode: default_execution_mode(),
             theme: default_theme(),
             language: default_language(),
+            minimize_to_tray_on_close: default_minimize_to_tray_on_close(),
+            launch_at_startup: false,
         }
     }
 }

@@ -17,6 +17,7 @@ import { PackChannel } from './components/PackChannel';
 import { BridgeSettings } from './components/BridgeSettings';
 import { KnowledgeBase } from './components/KnowledgeBase';
 import { KnowledgeSettings } from './components/KnowledgeSettings';
+import { DesktopSettings } from './components/DesktopSettings';
 import { GroupChat } from './components/GroupChat';
 import { FinanceWorkbench } from './components/FinanceWorkbench';
 import { usePackChannel } from './hooks/usePackChannel';
@@ -2151,6 +2152,10 @@ const AppInner: React.FC = () => {
               <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 
               <KnowledgeSettings />
+
+              <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
+
+              <DesktopSettings />
 
               <div style={{ borderTop: '0.5px solid var(--color-border-tertiary)' }} />
 
