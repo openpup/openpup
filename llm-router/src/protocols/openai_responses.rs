@@ -212,6 +212,15 @@ impl OpenAiResponsesProvider {
                     }));
                 }
                 MessageRole::Assistant => {
+                    if let Some(output) = message
+                        .raw_message
+                        .as_ref()
+                        .and_then(|raw| raw.get("output"))
+                        .and_then(|value| value.as_array())
+                    {
+                        out.extend(output.iter().cloned());
+                        continue;
+                    }
                     if let Some(content) =
                         message.content.as_deref().filter(|text| !text.is_empty())
                     {
@@ -266,17 +275,15 @@ impl OpenAiResponsesProvider {
             Self::parse_output_items(payload["output"].as_array())?;
         let content = content.or_else(|| payload["output_text"].as_str().map(str::to_string));
         let usage = payload.get("usage").map(Self::usage_from_value);
-        let raw_message = Self::build_assistant_raw_message(
-            content.as_deref(),
-            reasoning_content.as_deref(),
-            &tool_calls,
-        );
         Ok(ChatResponse {
             content,
             tool_calls,
             reasoning_content,
             usage,
-            raw_message,
+            raw_message: serde_json::json!({
+                "role": "assistant",
+                "output": payload["output"].clone(),
+            }),
         })
     }
 
@@ -354,17 +361,29 @@ impl OpenAiResponsesProvider {
         let mut out = Vec::new();
         match payload["type"].as_str().unwrap_or_default() {
             "response.output_text.delta" => {
+                out.push(StreamEvent::RawOutputItemDelta {
+                    index: payload["output_index"].as_u64().unwrap_or(0) as usize,
+                    delta: payload.clone(),
+                });
                 if let Some(text) = payload["delta"].as_str() {
                     out.push(StreamEvent::TextDelta(text.to_string()));
                 }
             }
             "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
+                out.push(StreamEvent::RawOutputItemDelta {
+                    index: payload["output_index"].as_u64().unwrap_or(0) as usize,
+                    delta: payload.clone(),
+                });
                 if let Some(text) = payload["delta"].as_str() {
                     out.push(StreamEvent::ReasoningDelta(text.to_string()));
                 }
             }
             "response.output_item.added" => {
                 let item = &payload["item"];
+                out.push(StreamEvent::RawOutputItemAdded {
+                    index: payload["output_index"].as_u64().unwrap_or(0) as usize,
+                    item: item.clone(),
+                });
                 if item["type"].as_str() == Some("function_call") {
                     out.push(StreamEvent::ToolCallDelta(ToolCallDelta {
                         index: payload["output_index"].as_u64().unwrap_or(0) as usize,
@@ -378,6 +397,10 @@ impl OpenAiResponsesProvider {
                 }
             }
             "response.function_call_arguments.delta" => {
+                out.push(StreamEvent::RawOutputItemDelta {
+                    index: payload["output_index"].as_u64().unwrap_or(0) as usize,
+                    delta: payload.clone(),
+                });
                 out.push(StreamEvent::ToolCallDelta(ToolCallDelta {
                     index: payload["output_index"].as_u64().unwrap_or(0) as usize,
                     id: None,
@@ -404,43 +427,6 @@ impl OpenAiResponsesProvider {
                     + value["output_tokens"].as_u64().unwrap_or(0)
             }),
         }
-    }
-
-    fn build_assistant_raw_message(
-        content: Option<&str>,
-        reasoning_content: Option<&str>,
-        tool_calls: &[ToolCall],
-    ) -> serde_json::Value {
-        let content_val = content
-            .filter(|text| !text.is_empty())
-            .map(|text| serde_json::Value::String(text.to_string()))
-            .unwrap_or(serde_json::Value::Null);
-
-        let mut raw = serde_json::json!({
-            "role": "assistant",
-            "content": content_val,
-        });
-        if let Some(reasoning) = reasoning_content.filter(|text| !text.is_empty()) {
-            raw["reasoning_content"] = serde_json::Value::String(reasoning.to_string());
-        }
-        if !tool_calls.is_empty() {
-            raw["tool_calls"] = serde_json::Value::Array(
-                tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string()),
-                            }
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        raw
     }
 }
 
@@ -518,17 +504,27 @@ mod tests {
     fn parse_stream_payload_maps_text_reasoning_tool_and_usage() {
         let text = OpenAiResponsesProvider::parse_stream_payload(
             "response.output_text.delta",
-            r#"{"type":"response.output_text.delta","delta":"Hel"}"#,
+            r#"{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hel"}"#,
         )
         .unwrap();
-        assert!(matches!(&text[0], StreamEvent::TextDelta(delta) if delta == "Hel"));
+        assert!(matches!(
+            &text[0],
+            StreamEvent::RawOutputItemDelta { index, delta }
+                if *index == 0 && delta["type"] == "response.output_text.delta"
+        ));
+        assert!(matches!(&text[1], StreamEvent::TextDelta(delta) if delta == "Hel"));
 
         let reasoning = OpenAiResponsesProvider::parse_stream_payload(
             "response.reasoning.delta",
-            r#"{"type":"response.reasoning.delta","delta":"think"}"#,
+            r#"{"type":"response.reasoning.delta","output_index":1,"delta":"think"}"#,
         )
         .unwrap();
-        assert!(matches!(&reasoning[0], StreamEvent::ReasoningDelta(delta) if delta == "think"));
+        assert!(matches!(
+            &reasoning[0],
+            StreamEvent::RawOutputItemDelta { index, delta }
+                if *index == 1 && delta["type"] == "response.reasoning.delta"
+        ));
+        assert!(matches!(&reasoning[1], StreamEvent::ReasoningDelta(delta) if delta == "think"));
 
         let tool = OpenAiResponsesProvider::parse_stream_payload(
             "response.output_item.added",
@@ -537,6 +533,11 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &tool[0],
+            StreamEvent::RawOutputItemAdded { index, item }
+                if *index == 0 && item["type"] == "function_call"
+        ));
+        assert!(matches!(
+            &tool[1],
             StreamEvent::ToolCallDelta(delta)
                 if delta.id.as_deref() == Some("call_1")
                 && delta.name.as_deref() == Some("lookup")

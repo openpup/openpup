@@ -19,7 +19,7 @@ use crate::agents::specialist::{Message, PupToolPermissions, SpecialistPup, Task
 use crate::channel::dag::build_execution_layers;
 use crate::channel::manager::{ChannelManager, ReviewDecision};
 use crate::channel::types::{DelegationPlan, Subtask};
-use crate::llm::client::{AbortFlag, LlmClient, LlmMessage};
+use crate::llm::client::{extract_text_from_raw_message, AbortFlag, LlmClient, LlmMessage};
 use crate::mcp::orchestrator::MCPOrchestrator;
 use crate::memory::compaction::CompactionEngine;
 use crate::memory::extractor::MemoryExtractor;
@@ -641,7 +641,9 @@ impl ToolLoopDelegate for AlphaToolLoopState<'_> {
             .chat_with_tools_stream(self.msgs.clone(), vec![], on_token_shim, abort)
             .await?
         {
-            Some(r) => Ok(AgentRunResult::FinalText(r.content.unwrap_or_default())),
+            Some(r) => Ok(AgentRunResult::FinalText(
+                extract_text_from_raw_message(&r.raw_message).unwrap_or_default(),
+            )),
             None => Ok(AgentRunResult::FinalText(String::new())),
         }
     }

@@ -228,6 +228,9 @@ impl OpenAiCompatibleProvider {
     }
 
     fn message_to_json(message: &Message) -> serde_json::Value {
+        if let Some(raw) = message.raw_message.as_ref().and_then(|raw| raw.as_object()) {
+            return serde_json::Value::Object(raw.clone());
+        }
         let mut out = serde_json::json!({
             "role": match message.role {
                 MessageRole::System => "system",
@@ -283,10 +286,7 @@ impl OpenAiCompatibleProvider {
 
     fn parse_chat_response(payload: serde_json::Value) -> Result<ChatResponse> {
         let message = payload["choices"][0]["message"].clone();
-        let content = message["content"]
-            .as_str()
-            .filter(|item| !item.is_empty())
-            .map(str::to_string);
+        let content = Self::extract_text_content(message.get("content"));
         let reasoning_content = message["reasoning_content"].as_str().map(str::to_string);
         let tool_calls = message["tool_calls"]
             .as_array()
@@ -297,10 +297,11 @@ impl OpenAiCompatibleProvider {
                         Some(ToolCall {
                             id: item["id"].as_str()?.to_string(),
                             name: item["function"]["name"].as_str()?.to_string(),
-                            arguments: serde_json::from_str(
-                                item["function"]["arguments"].as_str().unwrap_or("{}"),
-                            )
-                            .unwrap_or_else(|_| serde_json::json!({})),
+                            arguments: match &item["function"]["arguments"] {
+                                serde_json::Value::String(text) => serde_json::from_str(text)
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                                value => value.clone(),
+                            },
                         })
                     })
                     .collect()
@@ -322,6 +323,9 @@ impl OpenAiCompatibleProvider {
             out.push(StreamEvent::Usage(Self::usage_from_value(usage)));
         }
         if let Some(delta) = payload["choices"][0].get("delta") {
+            out.push(StreamEvent::RawAssistantMessageDelta {
+                delta: delta.clone(),
+            });
             if let Some(content) = delta["content"].as_str() {
                 out.push(StreamEvent::TextDelta(content.to_string()));
             }
@@ -342,6 +346,22 @@ impl OpenAiCompatibleProvider {
             }
         }
         Ok(out)
+    }
+
+    fn extract_text_content(content: Option<&serde_json::Value>) -> Option<String> {
+        match content {
+            Some(serde_json::Value::String(text)) if !text.is_empty() => Some(text.clone()),
+            Some(serde_json::Value::Array(items)) => {
+                let mut text = String::new();
+                for item in items {
+                    if let Some(part) = item["text"].as_str().or_else(|| item.as_str()) {
+                        text.push_str(part);
+                    }
+                }
+                (!text.is_empty()).then_some(text)
+            }
+            _ => None,
+        }
     }
 
     fn usage_from_value(value: &serde_json::Value) -> Usage {
@@ -458,12 +478,17 @@ mod tests {
         });
 
         let events = OpenAiCompatibleProvider::parse_stream_events(&payload).unwrap();
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 5);
         assert!(matches!(&events[0], StreamEvent::Usage(usage) if usage.total_tokens == 3));
-        assert!(matches!(&events[1], StreamEvent::TextDelta(text) if text == "Hel"));
-        assert!(matches!(&events[2], StreamEvent::ReasoningDelta(text) if text == "think"));
         assert!(matches!(
-            &events[3],
+            &events[1],
+            StreamEvent::RawAssistantMessageDelta { delta }
+                if delta["content"] == "Hel" && delta["reasoning_content"] == "think"
+        ));
+        assert!(matches!(&events[2], StreamEvent::TextDelta(text) if text == "Hel"));
+        assert!(matches!(&events[3], StreamEvent::ReasoningDelta(text) if text == "think"));
+        assert!(matches!(
+            &events[4],
             StreamEvent::ToolCallDelta(delta)
                 if delta.index == 0
                 && delta.id.as_deref() == Some("call_1")

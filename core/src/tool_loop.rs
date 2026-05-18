@@ -5,7 +5,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::llm::client::{AbortFlag, LlmClient, ToolCall};
+use crate::llm::client::{
+    extract_text_from_raw_message, extract_tool_calls_from_raw_message, AbortFlag, LlmClient,
+    ToolCall,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct TrimCandidate {
@@ -115,6 +118,9 @@ impl ContextBudget {
         if let Some(content) = message.get("content") {
             tokens += Self::estimate_json_tokens(content);
         }
+        if let Some(output) = message.get("output") {
+            tokens += Self::estimate_json_tokens(output);
+        }
         if let Some(reasoning) = message.get("reasoning_content") {
             tokens += Self::estimate_json_tokens(reasoning);
         }
@@ -178,10 +184,7 @@ pub fn message_role(message: &Value) -> Option<&str> {
 
 pub fn assistant_has_tool_calls(message: &Value) -> bool {
     message_role(message) == Some("assistant")
-        && message
-            .get("tool_calls")
-            .and_then(|tool_calls| tool_calls.as_array())
-            .is_some_and(|tool_calls| !tool_calls.is_empty())
+        && !extract_tool_calls_from_raw_message(message).is_empty()
 }
 
 pub fn tool_group_start_for_tool_message(msgs: &[Value], tool_idx: usize) -> Option<usize> {
@@ -360,14 +363,17 @@ where
             None => return Ok(delegate.aborted_output()),
         };
 
-        if response.tool_calls.is_empty() {
+        let tool_calls = response.tool_calls();
+        if tool_calls.is_empty() {
             return delegate
-                .finalize_text_response(response.content.unwrap_or_default())
+                .finalize_text_response(
+                    extract_text_from_raw_message(&response.raw_message).unwrap_or_default(),
+                )
                 .await;
         }
 
         delegate.messages_mut().push(response.raw_message);
-        for tool_call in &response.tool_calls {
+        for tool_call in &tool_calls {
             match delegate.handle_tool_call(tool_call, &budget).await? {
                 ToolLoopControl::AppendToolResult { content } => {
                     let content = if delegate.should_truncate_tool_result(&tool_call.name) {

@@ -84,9 +84,17 @@ pub struct ToolCall {
 }
 
 pub struct ChatWithToolsResponse {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ToolCall>,
     pub raw_message: serde_json::Value,
+}
+
+impl ChatWithToolsResponse {
+    pub fn text(&self) -> Option<String> {
+        extract_text_from_raw_message(&self.raw_message)
+    }
+
+    pub fn tool_calls(&self) -> Vec<ToolCall> {
+        extract_tool_calls_from_raw_message(&self.raw_message)
+    }
 }
 
 const CACHE_CAPACITY: usize = 64;
@@ -251,7 +259,13 @@ impl LlmClient {
                         on_token(&text, true);
                     }
                     StreamEvent::Usage(usage) => self.record_usage(Some(&usage)),
-                    StreamEvent::ToolCallDelta(_) | StreamEvent::Done => {}
+                    StreamEvent::ToolCallDelta(_)
+                    | StreamEvent::RawContentBlockStart { .. }
+                    | StreamEvent::RawContentBlockDelta { .. }
+                    | StreamEvent::RawOutputItemAdded { .. }
+                    | StreamEvent::RawOutputItemDelta { .. }
+                    | StreamEvent::RawAssistantMessageDelta { .. }
+                    | StreamEvent::Done => {}
                 },
             }
         }
@@ -340,6 +354,10 @@ impl LlmClient {
         let mut full_content = String::new();
         let mut full_reasoning_content = String::new();
         let mut tool_call_acc: Vec<(String, String, String)> = Vec::new();
+        let mut raw_blocks: Vec<serde_json::Value> = Vec::new();
+        let mut raw_block_json_acc: Vec<String> = Vec::new();
+        let mut raw_output_items: Vec<serde_json::Value> = Vec::new();
+        let mut raw_assistant_message: Option<serde_json::Value> = None;
 
         loop {
             let next =
@@ -361,26 +379,50 @@ impl LlmClient {
                     StreamEvent::ToolCallDelta(delta) => {
                         apply_tool_call_delta(&mut tool_call_acc, delta);
                     }
+                    StreamEvent::RawContentBlockStart { index, block } => {
+                        set_raw_content_block(&mut raw_blocks, index, block);
+                    }
+                    StreamEvent::RawContentBlockDelta { index, delta } => {
+                        apply_raw_content_block_delta(
+                            &mut raw_blocks,
+                            &mut raw_block_json_acc,
+                            index,
+                            delta,
+                        );
+                    }
+                    StreamEvent::RawOutputItemAdded { index, item } => {
+                        set_raw_output_item(&mut raw_output_items, index, item);
+                    }
+                    StreamEvent::RawOutputItemDelta { index, delta } => {
+                        apply_raw_output_item_delta(&mut raw_output_items, index, delta);
+                    }
+                    StreamEvent::RawAssistantMessageDelta { delta } => {
+                        apply_raw_assistant_message_delta(&mut raw_assistant_message, delta);
+                    }
                     StreamEvent::Usage(usage) => self.record_usage(Some(&usage)),
                     StreamEvent::Done => break,
                 },
             }
         }
 
-        let tool_calls = finalize_tool_calls(tool_call_acc);
-        let raw_message =
-            build_assistant_raw_message(&full_content, &full_reasoning_content, &tool_calls);
-        let content = if full_content.is_empty() {
-            None
+        let raw_message = if !raw_output_items.is_empty() {
+            serde_json::json!({
+                "role": "assistant",
+                "output": raw_output_items,
+            })
+        } else if let Some(message) = raw_assistant_message {
+            message
+        } else if raw_blocks.is_empty() {
+            let tool_calls = finalize_tool_calls(tool_call_acc);
+            build_assistant_raw_message(&full_content, &full_reasoning_content, &tool_calls)
         } else {
-            Some(full_content)
+            serde_json::json!({
+                "role": "assistant",
+                "content": raw_blocks,
+            })
         };
 
-        Ok(Some(ChatWithToolsResponse {
-            content,
-            tool_calls,
-            raw_message,
-        }))
+        Ok(Some(ChatWithToolsResponse { raw_message }))
     }
 
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -499,6 +541,7 @@ fn map_message(message: LlmMessage) -> RouterMessage {
             _ => RouterMessageRole::User,
         },
         content: Some(message.content),
+        raw_message: None,
         name: message.name,
         tool_calls: Vec::new(),
         tool_call_id: None,
@@ -537,8 +580,9 @@ fn router_message_from_raw(value: serde_json::Value) -> Result<RouterMessage> {
         content: value.get("content").and_then(|item| match item {
             serde_json::Value::Null => None,
             serde_json::Value::String(text) => Some(text.clone()),
-            other => Some(other.to_string()),
+            _ => None,
         }),
+        raw_message: Some(value.clone()),
         name: value["name"].as_str().map(str::to_string),
         tool_calls,
         tool_call_id: value["tool_call_id"].as_str().map(str::to_string),
@@ -564,16 +608,6 @@ fn router_tool_from_raw(value: serde_json::Value) -> Result<RouterToolDefinition
 
 fn map_chat_with_tools_response(response: RouterChatResponse) -> ChatWithToolsResponse {
     ChatWithToolsResponse {
-        content: response.content,
-        tool_calls: response
-            .tool_calls
-            .into_iter()
-            .map(|call| ToolCall {
-                id: call.id,
-                name: call.name,
-                arguments: call.arguments,
-            })
-            .collect(),
         raw_message: response.raw_message,
     }
 }
@@ -603,6 +637,407 @@ fn finalize_tool_calls(acc: Vec<(String, String, String)>) -> Vec<ToolCall> {
                 .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
         })
         .collect()
+}
+
+fn set_raw_content_block(
+    blocks: &mut Vec<serde_json::Value>,
+    index: usize,
+    block: serde_json::Value,
+) {
+    while blocks.len() <= index {
+        blocks.push(serde_json::Value::Null);
+    }
+    blocks[index] = block;
+}
+
+fn apply_raw_content_block_delta(
+    blocks: &mut Vec<serde_json::Value>,
+    json_acc: &mut Vec<String>,
+    index: usize,
+    delta: serde_json::Value,
+) {
+    while blocks.len() <= index {
+        blocks.push(serde_json::json!({}));
+    }
+    while json_acc.len() <= index {
+        json_acc.push(String::new());
+    }
+
+    let block = blocks[index]
+        .as_object_mut()
+        .expect("raw content block must be an object");
+    match delta["type"].as_str().unwrap_or_default() {
+        "text_delta" => {
+            let current = block
+                .entry("text".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(text) = delta["text"].as_str() {
+                current
+                    .as_str()
+                    .map(|existing| format!("{existing}{text}"))
+                    .map(serde_json::Value::String)
+                    .into_iter()
+                    .for_each(|value| *current = value);
+            }
+        }
+        "thinking_delta" => {
+            let current = block
+                .entry("thinking".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(text) = delta["thinking"].as_str() {
+                current
+                    .as_str()
+                    .map(|existing| format!("{existing}{text}"))
+                    .map(serde_json::Value::String)
+                    .into_iter()
+                    .for_each(|value| *current = value);
+            }
+        }
+        "signature_delta" => {
+            let current = block
+                .entry("signature".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(text) = delta["signature"].as_str() {
+                current
+                    .as_str()
+                    .map(|existing| format!("{existing}{text}"))
+                    .map(serde_json::Value::String)
+                    .into_iter()
+                    .for_each(|value| *current = value);
+            }
+        }
+        "input_json_delta" => {
+            if let Some(fragment) = delta["partial_json"].as_str() {
+                json_acc[index].push_str(fragment);
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json_acc[index]) {
+                    block.insert("input".to_string(), value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn set_raw_output_item(items: &mut Vec<serde_json::Value>, index: usize, item: serde_json::Value) {
+    while items.len() <= index {
+        items.push(serde_json::Value::Null);
+    }
+    items[index] = item;
+}
+
+fn apply_raw_output_item_delta(
+    items: &mut Vec<serde_json::Value>,
+    index: usize,
+    delta: serde_json::Value,
+) {
+    while items.len() <= index {
+        items.push(serde_json::json!({}));
+    }
+
+    let item = items[index]
+        .as_object_mut()
+        .expect("raw output item must be an object");
+    match delta["type"].as_str().unwrap_or_default() {
+        "response.output_text.delta" => {
+            let content_index = delta["content_index"].as_u64().unwrap_or(0) as usize;
+            let content = item
+                .entry("content".to_string())
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            let content = content
+                .as_array_mut()
+                .expect("message content must be an array");
+            while content.len() <= content_index {
+                content.push(serde_json::json!({"type": "output_text", "text": ""}));
+            }
+            let part = content[content_index]
+                .as_object_mut()
+                .expect("content part must be an object");
+            part.entry("type".to_string())
+                .or_insert_with(|| serde_json::Value::String("output_text".to_string()));
+            let current = part
+                .entry("text".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(fragment) = delta["delta"].as_str() {
+                let next = format!("{}{}", current.as_str().unwrap_or_default(), fragment);
+                *current = serde_json::Value::String(next);
+            }
+        }
+        "response.reasoning.delta" => {
+            let current = item
+                .entry("text".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(fragment) = delta["delta"].as_str() {
+                let next = format!("{}{}", current.as_str().unwrap_or_default(), fragment);
+                *current = serde_json::Value::String(next);
+            }
+        }
+        "response.reasoning_summary_text.delta" => {
+            let summary_index = delta["summary_index"].as_u64().unwrap_or(0) as usize;
+            let summary = item
+                .entry("summary".to_string())
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            let summary = summary
+                .as_array_mut()
+                .expect("reasoning summary must be an array");
+            while summary.len() <= summary_index {
+                summary.push(serde_json::json!({"type": "summary_text", "text": ""}));
+            }
+            let part = summary[summary_index]
+                .as_object_mut()
+                .expect("summary part must be an object");
+            let current = part
+                .entry("text".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(fragment) = delta["delta"].as_str() {
+                let next = format!("{}{}", current.as_str().unwrap_or_default(), fragment);
+                *current = serde_json::Value::String(next);
+            }
+        }
+        "response.function_call_arguments.delta" => {
+            let current = item
+                .entry("arguments".to_string())
+                .or_insert_with(|| serde_json::Value::String(String::new()));
+            if let Some(fragment) = delta["delta"].as_str() {
+                let next = format!("{}{}", current.as_str().unwrap_or_default(), fragment);
+                *current = serde_json::Value::String(next);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_raw_assistant_message_delta(
+    message: &mut Option<serde_json::Value>,
+    delta: serde_json::Value,
+) {
+    if message.is_none() {
+        *message = Some(serde_json::json!({
+            "role": "assistant",
+            "content": serde_json::Value::Null,
+        }));
+    }
+
+    let root = message
+        .as_mut()
+        .and_then(|value| value.as_object_mut())
+        .expect("raw assistant message must be an object");
+
+    for (key, value) in delta.as_object().into_iter().flatten() {
+        match key.as_str() {
+            "content" => match value {
+                serde_json::Value::String(fragment) => {
+                    let existing = root
+                        .entry("content".to_string())
+                        .or_insert(serde_json::Value::Null);
+                    match existing {
+                        serde_json::Value::Null => {
+                            *existing = serde_json::Value::String(fragment.clone())
+                        }
+                        serde_json::Value::String(current) => current.push_str(fragment),
+                        other => *other = serde_json::Value::String(fragment.clone()),
+                    }
+                }
+                other => {
+                    root.insert("content".to_string(), other.clone());
+                }
+            },
+            "reasoning_content" => {
+                if let Some(fragment) = value.as_str() {
+                    let existing = root
+                        .entry("reasoning_content".to_string())
+                        .or_insert_with(|| serde_json::Value::String(String::new()));
+                    match existing {
+                        serde_json::Value::String(current) => current.push_str(fragment),
+                        other => *other = serde_json::Value::String(fragment.to_string()),
+                    }
+                } else {
+                    root.insert("reasoning_content".to_string(), value.clone());
+                }
+            }
+            "tool_calls" => {
+                let existing = root
+                    .entry("tool_calls".to_string())
+                    .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                let existing = existing
+                    .as_array_mut()
+                    .expect("tool_calls must be an array");
+                if let Some(items) = value.as_array() {
+                    for (fallback_index, item) in items.iter().enumerate() {
+                        let index = item["index"]
+                            .as_u64()
+                            .map(|value| value as usize)
+                            .unwrap_or(fallback_index);
+                        while existing.len() <= index {
+                            existing.push(serde_json::json!({}));
+                        }
+                        merge_tool_call_delta_value(&mut existing[index], item);
+                    }
+                }
+            }
+            _ => {
+                root.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn merge_tool_call_delta_value(target: &mut serde_json::Value, item: &serde_json::Value) {
+    let obj = target
+        .as_object_mut()
+        .expect("tool call delta target must be an object");
+    if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
+        obj.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+    }
+    if let Some(item_type) = item.get("type") {
+        obj.insert("type".to_string(), item_type.clone());
+    }
+    let function = obj
+        .entry("function".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let function = function
+        .as_object_mut()
+        .expect("tool call function must be an object");
+    if let Some(name) = item["function"]["name"].as_str() {
+        function.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+    }
+    if let Some(arguments) = item["function"].get("arguments") {
+        let current = function
+            .entry("arguments".to_string())
+            .or_insert_with(|| serde_json::Value::String(String::new()));
+        match (current, arguments) {
+            (serde_json::Value::String(existing), serde_json::Value::String(fragment)) => {
+                existing.push_str(fragment);
+            }
+            (slot, other) => *slot = other.clone(),
+        }
+    }
+}
+
+pub fn extract_text_from_raw_message(message: &serde_json::Value) -> Option<String> {
+    if let Some(content) = message.get("content") {
+        match content {
+            serde_json::Value::String(text) if !text.is_empty() => return Some(text.clone()),
+            serde_json::Value::Array(blocks) => {
+                let mut text = String::new();
+                for block in blocks {
+                    match block {
+                        serde_json::Value::String(part) => text.push_str(part),
+                        serde_json::Value::Object(_) => {
+                            match block["type"].as_str().unwrap_or_default() {
+                                "text" | "output_text" | "input_text" => {
+                                    if let Some(part) = block["text"].as_str() {
+                                        text.push_str(part);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(output) = message.get("output").and_then(|value| value.as_array()) {
+        let mut text = String::new();
+        for item in output {
+            match item["type"].as_str().unwrap_or_default() {
+                "message" => {
+                    if let Some(content_items) = item["content"].as_array() {
+                        for content_item in content_items {
+                            match content_item["type"].as_str().unwrap_or_default() {
+                                "output_text" | "text" => {
+                                    if let Some(part) = content_item["text"].as_str() {
+                                        text.push_str(part);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+
+    None
+}
+
+pub fn extract_tool_calls_from_raw_message(message: &serde_json::Value) -> Vec<ToolCall> {
+    if let Some(content) = message.get("content").and_then(|value| value.as_array()) {
+        let calls: Vec<ToolCall> = content
+            .iter()
+            .filter_map(|block| {
+                if block["type"].as_str() != Some("tool_use") {
+                    return None;
+                }
+                Some(ToolCall {
+                    id: block["id"].as_str()?.to_string(),
+                    name: block["name"].as_str()?.to_string(),
+                    arguments: block["input"].clone(),
+                })
+            })
+            .collect();
+        if !calls.is_empty() {
+            return calls;
+        }
+    }
+
+    if let Some(tool_calls) = message.get("tool_calls").and_then(|value| value.as_array()) {
+        return tool_calls
+            .iter()
+            .filter_map(|item| {
+                Some(ToolCall {
+                    id: item["id"].as_str()?.to_string(),
+                    name: item["function"]["name"].as_str()?.to_string(),
+                    arguments: match &item["function"]["arguments"] {
+                        serde_json::Value::String(text) => {
+                            serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}))
+                        }
+                        value => value.clone(),
+                    },
+                })
+            })
+            .collect();
+    }
+
+    message
+        .get("output")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    if item["type"].as_str() != Some("function_call") {
+                        return None;
+                    }
+                    Some(ToolCall {
+                        id: item["call_id"]
+                            .as_str()
+                            .or_else(|| item["id"].as_str())?
+                            .to_string(),
+                        name: item["name"].as_str()?.to_string(),
+                        arguments: item["arguments"]
+                            .as_str()
+                            .and_then(|text| serde_json::from_str(text).ok())
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn build_assistant_raw_message(
@@ -773,9 +1208,11 @@ fn average_embeddings(embeddings: &[Vec<f32>]) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_tool_call_delta, average_embeddings, batch_embedding_inputs,
-        build_assistant_raw_message, finalize_tool_calls, split_embedding_input, ToolCall,
-        EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK, EMBED_MAX_ITEMS_PER_BATCH,
+        apply_raw_assistant_message_delta, apply_raw_output_item_delta, apply_tool_call_delta,
+        average_embeddings, batch_embedding_inputs, build_assistant_raw_message,
+        extract_text_from_raw_message, extract_tool_calls_from_raw_message, finalize_tool_calls,
+        split_embedding_input, ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
+        EMBED_MAX_ITEMS_PER_BATCH,
     };
     use llm_router::ToolCallDelta as RouterToolCallDelta;
 
@@ -824,6 +1261,179 @@ mod tests {
         assert_eq!(raw["reasoning_content"], "reason");
         assert_eq!(raw["tool_calls"][0]["id"], "call_1");
         assert_eq!(raw["tool_calls"][0]["function"]["name"], "file_read");
+    }
+
+    #[test]
+    fn extract_helpers_read_anthropic_raw_blocks() {
+        let raw = serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                {"type": "text", "text": "answer"},
+                {"type": "tool_use", "id": "tool_1", "name": "search", "input": {"q": "hello"}}
+            ]
+        });
+
+        assert_eq!(
+            extract_text_from_raw_message(&raw).as_deref(),
+            Some("answer")
+        );
+        let tool_calls = extract_tool_calls_from_raw_message(&raw);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "tool_1");
+        assert_eq!(tool_calls[0].arguments["q"], "hello");
+    }
+
+    #[test]
+    fn extract_helpers_read_openai_responses_raw_output() {
+        let raw = serde_json::json!({
+            "role": "assistant",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "final answer"}
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{\"city\":\"Shanghai\"}"
+                }
+            ]
+        });
+
+        assert_eq!(
+            extract_text_from_raw_message(&raw).as_deref(),
+            Some("final answer")
+        );
+        let tool_calls = extract_tool_calls_from_raw_message(&raw);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].name, "lookup");
+        assert_eq!(tool_calls[0].arguments["city"], "Shanghai");
+    }
+
+    #[test]
+    fn raw_output_item_delta_rebuilds_streamed_openai_responses_message() {
+        let mut items = vec![serde_json::json!({
+            "type": "message",
+            "id": "msg_1",
+            "content": []
+        })];
+
+        apply_raw_output_item_delta(
+            &mut items,
+            0,
+            serde_json::json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hel"
+            }),
+        );
+        apply_raw_output_item_delta(
+            &mut items,
+            0,
+            serde_json::json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "lo"
+            }),
+        );
+
+        let raw = serde_json::json!({
+            "role": "assistant",
+            "output": items
+        });
+
+        assert_eq!(
+            extract_text_from_raw_message(&raw).as_deref(),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn raw_assistant_message_delta_rebuilds_openai_compatible_stream() {
+        let mut raw = None;
+        apply_raw_assistant_message_delta(
+            &mut raw,
+            serde_json::json!({
+                "content": "Hel",
+                "reasoning_content": "think",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "arguments": "{\"q\":\"hel"
+                    }
+                }]
+            }),
+        );
+        apply_raw_assistant_message_delta(
+            &mut raw,
+            serde_json::json!({
+                "content": "lo",
+                "tool_calls": [{
+                    "index": 0,
+                    "function": {
+                        "arguments": "lo\"}"
+                    }
+                }]
+            }),
+        );
+        let raw = raw.unwrap();
+        assert_eq!(
+            extract_text_from_raw_message(&raw).as_deref(),
+            Some("Hello")
+        );
+        let tool_calls = extract_tool_calls_from_raw_message(&raw);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].arguments["q"], "hello");
+    }
+
+    #[test]
+    fn raw_assistant_message_delta_merges_ollama_tool_calls_by_position() {
+        let mut raw = None;
+        apply_raw_assistant_message_delta(
+            &mut raw,
+            serde_json::json!({
+                "content": "Hel",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"city": "Shanghai"}
+                    }
+                }]
+            }),
+        );
+        apply_raw_assistant_message_delta(
+            &mut raw,
+            serde_json::json!({
+                "content": "lo",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"city": "Shanghai"}
+                    }
+                }]
+            }),
+        );
+
+        let raw = raw.unwrap();
+        assert_eq!(
+            extract_text_from_raw_message(&raw).as_deref(),
+            Some("Hello")
+        );
+        let tool_calls = extract_tool_calls_from_raw_message(&raw);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].arguments["city"], "Shanghai");
     }
 
     #[test]

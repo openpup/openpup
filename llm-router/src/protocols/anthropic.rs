@@ -269,7 +269,13 @@ impl AnthropicProvider {
                     }));
                 }
                 MessageRole::Assistant => {
-                    let content = Self::assistant_content_blocks(message);
+                    let content = message
+                        .raw_message
+                        .as_ref()
+                        .and_then(|raw| raw.get("content"))
+                        .and_then(|value| value.as_array())
+                        .cloned()
+                        .unwrap_or_else(|| Self::assistant_content_blocks(message));
                     if !content.is_empty() {
                         out.push(serde_json::json!({
                             "role": "assistant",
@@ -325,31 +331,25 @@ impl AnthropicProvider {
     }
 
     fn tool_to_json(tool: &ToolDefinition) -> serde_json::Value {
-        let tool_type = match tool.tool_type {
-            ToolType::Function => "function",
-        };
+        match tool.tool_type {
+            ToolType::Function => {}
+        }
         serde_json::json!({
             "name": tool.function.name,
             "description": tool.function.description,
             "input_schema": tool.function.parameters,
-            "type": tool_type,
         })
     }
 
     fn parse_chat_response(payload: serde_json::Value) -> Result<ChatResponse> {
         let (content, reasoning_content, tool_calls) =
             Self::parse_content_blocks(payload["content"].as_array())?;
-        let raw_message = Self::build_assistant_raw_message(
-            content.as_deref(),
-            reasoning_content.as_deref(),
-            &tool_calls,
-        );
         Ok(ChatResponse {
             content,
             tool_calls,
             reasoning_content,
             usage: payload.get("usage").map(Self::usage_from_value),
-            raw_message,
+            raw_message: payload,
         })
     }
 
@@ -428,6 +428,10 @@ impl AnthropicProvider {
             }
             "content_block_start" => {
                 let block = &payload["content_block"];
+                out.events.push(StreamEvent::RawContentBlockStart {
+                    index: payload["index"].as_u64().unwrap_or(0) as usize,
+                    block: block.clone(),
+                });
                 if block["type"].as_str() == Some("tool_use") {
                     out.events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
                         index: payload["index"].as_u64().unwrap_or(0) as usize,
@@ -439,6 +443,10 @@ impl AnthropicProvider {
             }
             "content_block_delta" => {
                 let delta = &payload["delta"];
+                out.events.push(StreamEvent::RawContentBlockDelta {
+                    index: payload["index"].as_u64().unwrap_or(0) as usize,
+                    delta: delta.clone(),
+                });
                 match delta["type"].as_str().unwrap_or_default() {
                     "text_delta" => {
                         if let Some(text) = delta["text"].as_str() {
@@ -459,6 +467,7 @@ impl AnthropicProvider {
                             arguments_fragment: delta["partial_json"].as_str().map(str::to_string),
                         }));
                     }
+                    "signature_delta" => {}
                     _ => {}
                 }
             }
@@ -490,43 +499,6 @@ impl AnthropicProvider {
             completion_tokens,
             total_tokens: prompt_tokens + completion_tokens,
         }
-    }
-
-    fn build_assistant_raw_message(
-        content: Option<&str>,
-        reasoning_content: Option<&str>,
-        tool_calls: &[ToolCall],
-    ) -> serde_json::Value {
-        let content_val = content
-            .filter(|text| !text.is_empty())
-            .map(|text| serde_json::Value::String(text.to_string()))
-            .unwrap_or(serde_json::Value::Null);
-
-        let mut raw = serde_json::json!({
-            "role": "assistant",
-            "content": content_val,
-        });
-        if let Some(reasoning) = reasoning_content.filter(|text| !text.is_empty()) {
-            raw["reasoning_content"] = serde_json::Value::String(reasoning.to_string());
-        }
-        if !tool_calls.is_empty() {
-            raw["tool_calls"] = serde_json::Value::Array(
-                tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string()),
-                            }
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        raw
     }
 }
 
@@ -570,6 +542,7 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
         assert_eq!(body["tools"][0]["name"], "get_weather");
+        assert!(body["tools"][0].get("type").is_none());
         assert_eq!(body["tool_choice"]["type"], "auto");
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_tokens"], 512);
@@ -578,6 +551,7 @@ mod tests {
     #[test]
     fn parse_chat_response_extracts_text_reasoning_and_tools() {
         let payload = serde_json::json!({
+            "role": "assistant",
             "content": [
                 { "type": "thinking", "thinking": "step one" },
                 { "type": "text", "text": "final answer" },
@@ -598,6 +572,7 @@ mod tests {
         assert_eq!(response.tool_calls[0].arguments["q"], "hello");
         assert_eq!(response.usage.unwrap().total_tokens, 13);
         assert_eq!(response.raw_message["role"], "assistant");
+        assert!(response.raw_message["content"].is_array());
     }
 
     #[test]
@@ -616,6 +591,11 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &thinking.events[0],
+            StreamEvent::RawContentBlockDelta { index, delta }
+                if *index == 0 && delta["type"] == "thinking_delta"
+        ));
+        assert!(matches!(
+            &thinking.events[1],
             StreamEvent::ReasoningDelta(text) if text == "plan"
         ));
 
@@ -626,6 +606,11 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &tool.events[0],
+            StreamEvent::RawContentBlockStart { index, block }
+                if *index == 1 && block["type"] == "tool_use"
+        ));
+        assert!(matches!(
+            &tool.events[1],
             StreamEvent::ToolCallDelta(delta)
                 if delta.index == 1
                 && delta.id.as_deref() == Some("tool_1")
@@ -639,11 +624,36 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &json_delta.events[0],
+            StreamEvent::RawContentBlockDelta { index, delta }
+                if *index == 1 && delta["type"] == "input_json_delta"
+        ));
+        assert!(matches!(
+            &json_delta.events[1],
             StreamEvent::ToolCallDelta(delta)
                 if delta.arguments_fragment.as_deref() == Some("{\"q\":\"hello\"}")
         ));
 
         let stop = AnthropicProvider::parse_stream_payload("message_stop", r#"{}"#).unwrap();
         assert!(stop.stop);
+    }
+
+    #[test]
+    fn messages_to_anthropic_round_trips_raw_assistant_blocks() {
+        let (_, messages) = AnthropicProvider::messages_to_anthropic(&[Message {
+            role: MessageRole::Assistant,
+            raw_message: Some(serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": "sig"},
+                    {"type": "text", "text": "answer"}
+                ]
+            })),
+            ..Default::default()
+        }]);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["content"][0]["type"], "thinking");
+        assert_eq!(messages[0]["content"][0]["signature"], "sig");
+        assert_eq!(messages[0]["content"][1]["text"], "answer");
     }
 }

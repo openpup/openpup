@@ -14,6 +14,8 @@ pub enum MessageRole {
 pub struct Message {
     pub role: MessageRole,
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_message: Option<serde_json::Value>,
     pub name: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
@@ -81,6 +83,25 @@ pub enum StreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
     ToolCallDelta(ToolCallDelta),
+    RawContentBlockStart {
+        index: usize,
+        block: serde_json::Value,
+    },
+    RawContentBlockDelta {
+        index: usize,
+        delta: serde_json::Value,
+    },
+    RawOutputItemAdded {
+        index: usize,
+        item: serde_json::Value,
+    },
+    RawOutputItemDelta {
+        index: usize,
+        delta: serde_json::Value,
+    },
+    RawAssistantMessageDelta {
+        delta: serde_json::Value,
+    },
     Usage(Usage),
     Done,
 }

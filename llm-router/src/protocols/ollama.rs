@@ -224,6 +224,9 @@ impl OllamaProvider {
     }
 
     fn message_to_json(message: &Message) -> serde_json::Value {
+        if let Some(raw) = message.raw_message.as_ref().and_then(|raw| raw.as_object()) {
+            return serde_json::Value::Object(raw.clone());
+        }
         let mut out = serde_json::json!({
             "role": match message.role {
                 MessageRole::System => "system",
@@ -277,17 +280,9 @@ impl OllamaProvider {
 
     fn parse_chat_response(payload: serde_json::Value) -> Result<ChatResponse> {
         let message = payload["message"].clone();
-        let content = message["content"]
-            .as_str()
-            .filter(|text| !text.is_empty())
-            .map(str::to_string);
+        let content = Self::extract_text_content(message.get("content"));
         let reasoning_content = message["reasoning_content"].as_str().map(str::to_string);
         let tool_calls = Self::parse_tool_calls(message.get("tool_calls"))?;
-        let raw_message = Self::build_assistant_raw_message(
-            content.as_deref(),
-            reasoning_content.as_deref(),
-            &tool_calls,
-        );
         let usage = if payload["prompt_eval_count"].is_number() || payload["eval_count"].is_number()
         {
             Some(Usage {
@@ -304,13 +299,16 @@ impl OllamaProvider {
             tool_calls,
             reasoning_content,
             usage,
-            raw_message,
+            raw_message: message,
         })
     }
 
     fn parse_stream_events(payload: &serde_json::Value) -> Result<Vec<StreamEvent>> {
         let mut out = Vec::new();
         if let Some(message) = payload.get("message") {
+            out.push(StreamEvent::RawAssistantMessageDelta {
+                delta: message.clone(),
+            });
             if let Some(text) = message["content"].as_str().filter(|text| !text.is_empty()) {
                 out.push(StreamEvent::TextDelta(text.to_string()));
             }
@@ -348,6 +346,22 @@ impl OllamaProvider {
         Ok(out)
     }
 
+    fn extract_text_content(content: Option<&serde_json::Value>) -> Option<String> {
+        match content {
+            Some(serde_json::Value::String(text)) if !text.is_empty() => Some(text.clone()),
+            Some(serde_json::Value::Array(items)) => {
+                let mut text = String::new();
+                for item in items {
+                    if let Some(part) = item["text"].as_str().or_else(|| item.as_str()) {
+                        text.push_str(part);
+                    }
+                }
+                (!text.is_empty()).then_some(text)
+            }
+            _ => None,
+        }
+    }
+
     fn parse_tool_calls(value: Option<&serde_json::Value>) -> Result<Vec<ToolCall>> {
         Ok(value
             .and_then(|item| item.as_array())
@@ -380,43 +394,6 @@ impl OllamaProvider {
             serde_json::Value::String(text) => Some(text.clone()),
             other => serde_json::to_string(other).ok(),
         }
-    }
-
-    fn build_assistant_raw_message(
-        content: Option<&str>,
-        reasoning_content: Option<&str>,
-        tool_calls: &[ToolCall],
-    ) -> serde_json::Value {
-        let content_val = content
-            .filter(|text| !text.is_empty())
-            .map(|text| serde_json::Value::String(text.to_string()))
-            .unwrap_or(serde_json::Value::Null);
-
-        let mut raw = serde_json::json!({
-            "role": "assistant",
-            "content": content_val,
-        });
-        if let Some(reasoning) = reasoning_content.filter(|text| !text.is_empty()) {
-            raw["reasoning_content"] = serde_json::Value::String(reasoning.to_string());
-        }
-        if !tool_calls.is_empty() {
-            raw["tool_calls"] = serde_json::Value::Array(
-                tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string()),
-                            }
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        raw
     }
 }
 
@@ -496,12 +473,17 @@ mod tests {
             "eval_count": 3
         });
         let events = OllamaProvider::parse_stream_events(&payload).unwrap();
-        assert!(matches!(&events[0], StreamEvent::TextDelta(text) if text == "Hel"));
         assert!(matches!(
-            &events[1],
+            &events[0],
+            StreamEvent::RawAssistantMessageDelta { delta }
+                if delta["content"] == "Hel"
+        ));
+        assert!(matches!(&events[1], StreamEvent::TextDelta(text) if text == "Hel"));
+        assert!(matches!(
+            &events[2],
             StreamEvent::ToolCallDelta(delta)
                 if delta.name.as_deref() == Some("lookup")
         ));
-        assert!(matches!(&events[2], StreamEvent::Usage(usage) if usage.total_tokens == 7));
+        assert!(matches!(&events[3], StreamEvent::Usage(usage) if usage.total_tokens == 7));
     }
 }
