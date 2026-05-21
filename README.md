@@ -26,8 +26,8 @@
 <p><a href="./openpup-backup-Ming.zip">openpup-backup-Ming.zip</a></p>
 
 <p><strong>AI Trading</strong></p>
-<img src="openpup-trading.png" width="860" alt="Pack Channel collaboration interface">
-<p><a href="./openpup-backup-Trading.zip">openpup-backup-Trading.zip</a></p>
+<img src="openpup-finance.png" width="860" alt="OpenPup finance and trading workspace">
+<p><a href="./openpup-backup-Trading.zip">openpup-backup-Trading.zip</a> · <a href="./docs/trading-setup-guide.md">Trading setup guide</a></p>
 
 </div>
 
@@ -61,6 +61,7 @@ All data lives in `~/.openpup/` — plain files, SQLite, no cloud.
 | [docs/roadmap2.0.md](docs/roadmap2.0.md) | Configurable Organization OS |
 | [docs/roadmap2.1.md](docs/roadmap2.1.md) | Agent collaboration spaces |
 | [docs/architecture.md](docs/architecture.md) | Technical design — agent routing, memory system, IPC, data flow |
+| [docs/trading-setup-guide.md](docs/trading-setup-guide.md) | A-share trading setup — MCP servers, pups, rules, skills, schedules |
 
 ## Mascot & Merch
 
