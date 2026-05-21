@@ -27,7 +27,7 @@
 
 <p><strong>AI Trading</strong></p>
 <img src="openpup-finance.png" width="860" alt="OpenPup finance and trading workspace">
-<p><a href="./openpup-backup-Trading.zip">openpup-backup-Trading.zip</a> · <a href="./docs/trading-setup-guide.md">Trading setup guide</a></p>
+<p><a href="./openpup-backup-Trading.zip">openpup-backup-Trading.zip</a> · <a href="./docs/trading-setup-guide.md">Trading setup guide</a> · <a href="https://b23.tv/Is9MpJh">▶ Live replay</a></p>
 
 </div>
 
