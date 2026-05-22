@@ -6,16 +6,23 @@
 
 ### 1. 准备版本号
 
-1. 选择一个新的语义化版本号，例如 `v0.1.12`。
+1. 选择一个新的语义化版本号，例如 `v0.2.1`。
 2. 在以下位置统一更新版本号（保持一致）：
-   - `src-tauri/Cargo.toml`
-   - `core/Cargo.toml`
-   - `cli/Cargo.toml`
-   - `daemon/Cargo.toml`
    - `package.json`
    - `package-lock.json`
+   - `xmtp-helper/package.json`
+   - `capabilities/Cargo.toml`
+   - `core/Cargo.toml`
+   - `llm-router/Cargo.toml`
+   - `cli/Cargo.toml`
+   - `daemon/Cargo.toml`
+   - `runtime-desktop/Cargo.toml`
+   - `runtime-android/Cargo.toml`
+   - `runtime-ios/Cargo.toml`
+   - `src-tauri/Cargo.toml`
    - `src-tauri/tauri.conf.json`
    - `CHANGELOG.md` 中的发布区间与版本条目
+   - 相关 `Cargo.lock`（根目录、`src-tauri/`、`cli/`）如果本地 crate 版本发生变化，需一并刷新
 3. 为该版本补齐 `CHANGELOG.md` 发布说明，并确认最近提交已覆盖目标版本的范围。
 
 ---
@@ -26,8 +33,9 @@
 
 ```bash
 cargo fmt --all
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+npm run build
 ```
 
 如果你希望在本地先构建 release 二进制，可以执行：
@@ -50,8 +58,8 @@ cargo build --release
 #### 3.1 创建 Tag 并推送
 
 ```bash
-git tag v0.1.12
-git push origin v0.1.12
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 当 tag 被推送到远程后：
@@ -76,7 +84,7 @@ git push origin v0.1.12
 2. 将构建产物打包：
 
    ```bash
-   tar czvf openpup-0.1.12-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release openpup
+   tar czvf openpup-0.2.1-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release openpup
    ```
 
 3. 在 GitHub 页面上新建一个 Release，上传打包文件，并填写版本说明。
@@ -90,4 +98,3 @@ git push origin v0.1.12
 - 在至少一个平台上下载 Release 产物并运行，确认启动流程正常。
 - 检查 `README.md` 中的描述与实际功能是否一致。
 - 在必要时更新后续 Roadmap 或 Issue 列表，标记已完成的工作。
-

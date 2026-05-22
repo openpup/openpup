@@ -7,7 +7,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.2.0...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.2.1...HEAD)
+
+---
+
+## [0.2.1](https://github.com/openpup/openpup/compare/v0.2.0...v0.2.1) — 2026-05-22
+
+### Added
+- **MCP server tool allowlists** — MCP server entries can now restrict which tools are exposed and callable through an `allowed_tools` whitelist, giving each server a hard tool boundary instead of relying on prompt discipline alone.
+
+### Changed
+- **MCP settings management** — the MCP settings page now lets users edit per-server allowed-tool lists and shows localized allowlist hints and status labels in both English and Chinese.
+- **Finance workspace interaction feedback** — research and pipeline actions now surface clearer busy, disabled, and success states so high-frequency finance workflows feel more responsive and legible.
+- **Release baseline** — desktop app metadata, npm package version, XMTP helper package version, workspace crates, and lockfiles are aligned to `0.2.1`.
+
+### Fixed
+- **MCP tool exposure enforcement** — non-allowlisted MCP tools are now filtered at discovery time and rejected again at call time, preventing cached or manually referenced tools from slipping past server policy.
 
 ---
 
