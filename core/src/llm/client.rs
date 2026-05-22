@@ -405,22 +405,15 @@ impl LlmClient {
             }
         }
 
-        let raw_message = if !raw_output_items.is_empty() {
-            serde_json::json!({
-                "role": "assistant",
-                "output": raw_output_items,
-            })
-        } else if let Some(message) = raw_assistant_message {
-            message
-        } else if raw_blocks.is_empty() {
-            let tool_calls = finalize_tool_calls(tool_call_acc);
-            build_assistant_raw_message(&full_content, &full_reasoning_content, &tool_calls)
-        } else {
-            serde_json::json!({
-                "role": "assistant",
-                "content": raw_blocks,
-            })
-        };
+        let tool_calls = finalize_tool_calls(tool_call_acc);
+        let raw_message = finalize_stream_assistant_message(
+            &full_content,
+            &full_reasoning_content,
+            &tool_calls,
+            raw_blocks,
+            raw_output_items,
+            raw_assistant_message,
+        );
 
         Ok(Some(ChatWithToolsResponse { raw_message }))
     }
@@ -1079,6 +1072,82 @@ fn build_assistant_raw_message(
     raw_message
 }
 
+fn finalize_stream_assistant_message(
+    full_content: &str,
+    full_reasoning_content: &str,
+    tool_calls: &[ToolCall],
+    raw_blocks: Vec<serde_json::Value>,
+    raw_output_items: Vec<serde_json::Value>,
+    raw_assistant_message: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let normalized = build_assistant_raw_message(full_content, full_reasoning_content, tool_calls);
+
+    if !raw_output_items.is_empty() {
+        return serde_json::json!({
+            "role": "assistant",
+            "output": raw_output_items,
+        });
+    }
+
+    if let Some(message) = raw_assistant_message {
+        return merge_normalized_assistant_message(message, &normalized);
+    }
+
+    if raw_blocks.is_empty() {
+        normalized
+    } else {
+        merge_normalized_assistant_message(
+            serde_json::json!({
+                "role": "assistant",
+                "content": raw_blocks,
+            }),
+            &normalized,
+        )
+    }
+}
+
+fn merge_normalized_assistant_message(
+    mut raw_message: serde_json::Value,
+    normalized: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(raw) = raw_message.as_object_mut() else {
+        return normalized.clone();
+    };
+
+    raw.insert(
+        "role".to_string(),
+        serde_json::Value::String("assistant".to_string()),
+    );
+
+    if !raw.contains_key("content") {
+        if let Some(content) = normalized.get("content") {
+            raw.insert("content".to_string(), content.clone());
+        }
+    }
+
+    let has_reasoning = raw
+        .get("reasoning_content")
+        .and_then(|value| value.as_str())
+        .is_some_and(|text| !text.is_empty());
+    if !has_reasoning {
+        if let Some(reasoning) = normalized.get("reasoning_content") {
+            raw.insert("reasoning_content".to_string(), reasoning.clone());
+        }
+    }
+
+    let has_tool_calls = raw
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+        .is_some_and(|items| !items.is_empty());
+    if !has_tool_calls {
+        if let Some(tool_calls) = normalized.get("tool_calls") {
+            raw.insert("tool_calls".to_string(), tool_calls.clone());
+        }
+    }
+
+    raw_message
+}
+
 fn split_embedding_input(text: &str) -> Vec<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1210,9 +1279,9 @@ mod tests {
     use super::{
         apply_raw_assistant_message_delta, apply_raw_output_item_delta, apply_tool_call_delta,
         average_embeddings, batch_embedding_inputs, build_assistant_raw_message,
-        extract_text_from_raw_message, extract_tool_calls_from_raw_message, finalize_tool_calls,
-        split_embedding_input, ToolCall, EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK,
-        EMBED_MAX_ITEMS_PER_BATCH,
+        extract_text_from_raw_message, extract_tool_calls_from_raw_message,
+        finalize_stream_assistant_message, finalize_tool_calls, split_embedding_input, ToolCall,
+        EMBED_MAX_CHARS_PER_BATCH, EMBED_MAX_CHARS_PER_CHUNK, EMBED_MAX_ITEMS_PER_BATCH,
     };
     use llm_router::ToolCallDelta as RouterToolCallDelta;
 
@@ -1393,6 +1462,29 @@ mod tests {
         let tool_calls = extract_tool_calls_from_raw_message(&raw);
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].arguments["q"], "hello");
+    }
+
+    #[test]
+    fn finalize_stream_message_merges_reasoning_back_into_raw_assistant_message() {
+        let raw = finalize_stream_assistant_message(
+            "done",
+            "think",
+            &[ToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: serde_json::json!({"q": "hello"}),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Some(serde_json::json!({
+                "role": "assistant",
+                "content": "done"
+            })),
+        );
+
+        assert_eq!(raw["content"], "done");
+        assert_eq!(raw["reasoning_content"], "think");
+        assert_eq!(raw["tool_calls"][0]["function"]["name"], "search");
     }
 
     #[test]

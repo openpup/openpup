@@ -228,9 +228,7 @@ impl OpenAiCompatibleProvider {
     }
 
     fn message_to_json(message: &Message) -> serde_json::Value {
-        if let Some(raw) = message.raw_message.as_ref().and_then(|raw| raw.as_object()) {
-            return serde_json::Value::Object(raw.clone());
-        }
+        let raw = message.raw_message.as_ref().and_then(|raw| raw.as_object());
         let mut out = serde_json::json!({
             "role": match message.role {
                 MessageRole::System => "system",
@@ -238,7 +236,7 @@ impl OpenAiCompatibleProvider {
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",
             },
-            "content": message.content.clone(),
+            "content": Self::compatible_message_content(message, raw),
         });
         if let Some(name) = &message.name {
             out["name"] = serde_json::Value::String(name.clone());
@@ -246,13 +244,25 @@ impl OpenAiCompatibleProvider {
         if let Some(tool_call_id) = &message.tool_call_id {
             out["tool_call_id"] = serde_json::Value::String(tool_call_id.clone());
         }
-        if let Some(reasoning) = &message.reasoning_content {
+        if let Some(reasoning) = message.reasoning_content.clone().or_else(|| {
+            raw.and_then(|value| {
+                value
+                    .get("reasoning_content")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+        }) {
             out["reasoning_content"] = serde_json::Value::String(reasoning.clone());
         }
-        if !message.tool_calls.is_empty() {
+        let tool_calls = if !message.tool_calls.is_empty() {
+            Some(message.tool_calls.clone())
+        } else {
+            raw.map(Self::extract_tool_calls_from_raw)
+                .filter(|items| !items.is_empty())
+        };
+        if let Some(tool_calls) = tool_calls {
             out["tool_calls"] = serde_json::Value::Array(
-                message
-                    .tool_calls
+                tool_calls
                     .iter()
                     .map(|call| {
                         serde_json::json!({
@@ -362,6 +372,42 @@ impl OpenAiCompatibleProvider {
             }
             _ => None,
         }
+    }
+
+    fn compatible_message_content(
+        message: &Message,
+        raw: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> serde_json::Value {
+        message
+            .content
+            .clone()
+            .or_else(|| raw.and_then(|value| Self::extract_text_content(value.get("content"))))
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    fn extract_tool_calls_from_raw(
+        raw: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<ToolCall> {
+        raw.get("tool_calls")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some(ToolCall {
+                            id: item["id"].as_str()?.to_string(),
+                            name: item["function"]["name"].as_str()?.to_string(),
+                            arguments: match &item["function"]["arguments"] {
+                                serde_json::Value::String(text) => serde_json::from_str(text)
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                                value => value.clone(),
+                            },
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn usage_from_value(value: &serde_json::Value) -> Usage {
@@ -494,6 +540,30 @@ mod tests {
                 && delta.id.as_deref() == Some("call_1")
                 && delta.name.as_deref() == Some("search")
         ));
+    }
+
+    #[test]
+    fn message_to_json_rehydrates_reasoning_and_tool_calls_from_message_fields() {
+        let message = Message {
+            role: MessageRole::Assistant,
+            content: Some("done".to_string()),
+            raw_message: Some(serde_json::json!({
+                "role": "assistant",
+                "content": "done"
+            })),
+            reasoning_content: Some("think".to_string()),
+            tool_calls: vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: serde_json::json!({"q":"hello"}),
+            }],
+            ..Default::default()
+        };
+
+        let json = OpenAiCompatibleProvider::message_to_json(&message);
+        assert_eq!(json["content"], "done");
+        assert_eq!(json["reasoning_content"], "think");
+        assert_eq!(json["tool_calls"][0]["function"]["name"], "search");
     }
 
     #[test]

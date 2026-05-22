@@ -224,9 +224,7 @@ impl OllamaProvider {
     }
 
     fn message_to_json(message: &Message) -> serde_json::Value {
-        if let Some(raw) = message.raw_message.as_ref().and_then(|raw| raw.as_object()) {
-            return serde_json::Value::Object(raw.clone());
-        }
+        let raw = message.raw_message.as_ref().and_then(|raw| raw.as_object());
         let mut out = serde_json::json!({
             "role": match message.role {
                 MessageRole::System => "system",
@@ -234,7 +232,18 @@ impl OllamaProvider {
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",
             },
-            "content": message.content.clone().unwrap_or_default(),
+            "content": message
+                .content
+                .clone()
+                .or_else(|| {
+                    raw.and_then(|value| {
+                        value
+                            .get("content")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                })
+                .unwrap_or_default(),
         });
         if let Some(name) = &message.name {
             out["name"] = serde_json::Value::String(name.clone());
@@ -242,13 +251,38 @@ impl OllamaProvider {
         if let Some(tool_call_id) = &message.tool_call_id {
             out["tool_call_id"] = serde_json::Value::String(tool_call_id.clone());
         }
-        if let Some(reasoning) = &message.reasoning_content {
+        if let Some(reasoning) = message.reasoning_content.clone().or_else(|| {
+            raw.and_then(|value| {
+                value
+                    .get("reasoning_content")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+        }) {
             out["reasoning_content"] = serde_json::Value::String(reasoning.clone());
         }
-        if !message.tool_calls.is_empty() {
+        let tool_calls = if !message.tool_calls.is_empty() {
+            Some(message.tool_calls.clone())
+        } else {
+            raw.and_then(|value| value.get("tool_calls"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            Some(ToolCall {
+                                id: item["id"].as_str()?.to_string(),
+                                name: item["function"]["name"].as_str()?.to_string(),
+                                arguments: item["function"]["arguments"].clone(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter(|items| !items.is_empty())
+        };
+        if let Some(tool_calls) = tool_calls {
             out["tool_calls"] = serde_json::Value::Array(
-                message
-                    .tool_calls
+                tool_calls
                     .iter()
                     .map(|call| {
                         serde_json::json!({
