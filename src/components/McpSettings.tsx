@@ -8,6 +8,7 @@ interface McpServer {
   token: string;
   description: string;
   enabled: boolean;
+  allowed_tools: string[];
 }
 
 interface McpToolInfo {
@@ -100,6 +101,29 @@ const pillStyle: React.CSSProperties = {
   color: 'var(--color-text-secondary)',
 };
 
+const textareaStyle: React.CSSProperties = {
+  ...inputStyle,
+  minHeight: 86,
+  resize: 'vertical',
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+};
+
+function allowToolsToText(allowedTools: string[]): string {
+  return allowedTools.join('\n');
+}
+
+function parseAllowedTools(text: string): string[] {
+  const seen = new Set<string>();
+  return text
+    .split('\n')
+    .map((tool) => tool.trim())
+    .filter((tool) => {
+      if (!tool || seen.has(tool)) return false;
+      seen.add(tool);
+      return true;
+    });
+}
+
 export const McpSettings: React.FC = () => {
   const { lang } = useLang();
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -111,6 +135,7 @@ export const McpSettings: React.FC = () => {
   const [mcpUrl, setMcpUrl] = useState('');
   const [token, setToken] = useState('');
   const [description, setDescription] = useState('');
+  const [allowedTools, setAllowedTools] = useState('');
   const [adding, setAdding] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -118,6 +143,7 @@ export const McpSettings: React.FC = () => {
   const [editUrl, setEditUrl] = useState('');
   const [editToken, setEditToken] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editAllowedTools, setEditAllowedTools] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -163,12 +189,19 @@ export const McpSettings: React.FC = () => {
     setError(null);
     try {
       await invoke('add_mcp_server', {
-        entry: { name: name.trim(), base_url: mcpUrl.trim(), token: token.trim(), description: description.trim() },
+        entry: {
+          name: name.trim(),
+          base_url: mcpUrl.trim(),
+          token: token.trim(),
+          description: description.trim(),
+          allowed_tools: parseAllowedTools(allowedTools),
+        },
       });
       setName('');
       setMcpUrl('');
       setToken('');
       setDescription('');
+      setAllowedTools('');
       setAddOpen(false);
       await load();
       await loadTools();
@@ -185,6 +218,7 @@ export const McpSettings: React.FC = () => {
     setMcpUrl('');
     setToken('');
     setDescription('');
+    setAllowedTools('');
     setAddOpen(true);
   };
 
@@ -195,6 +229,7 @@ export const McpSettings: React.FC = () => {
     setEditUrl(server.base_url);
     setEditToken(server.token);
     setEditDescription(server.description);
+    setEditAllowedTools(allowToolsToText(server.allowed_tools));
   };
 
   const cancelEdit = () => {
@@ -203,6 +238,7 @@ export const McpSettings: React.FC = () => {
     setEditUrl('');
     setEditToken('');
     setEditDescription('');
+    setEditAllowedTools('');
   };
 
   const saveEdit = async () => {
@@ -218,6 +254,7 @@ export const McpSettings: React.FC = () => {
           token: editToken.trim(),
           description: editDescription.trim(),
           enabled: servers.find((server) => server.name === editingName)?.enabled ?? true,
+          allowed_tools: parseAllowedTools(editAllowedTools),
         },
       });
       cancelEdit();
@@ -240,6 +277,7 @@ export const McpSettings: React.FC = () => {
   const toggle = async (serverName: string, enabled: boolean) => {
     await invoke('toggle_mcp_server', { name: serverName, enabled }).catch((e) => setError(String(e)));
     setServers((prev) => prev.map((server) => server.name === serverName ? { ...server, enabled } : server));
+    await loadTools();
   };
 
   const toolsByServer = useMemo(() => {
@@ -344,6 +382,17 @@ export const McpSettings: React.FC = () => {
               <input style={inputStyle} placeholder={t('mcp_token_ph', lang)} type="password" value={token} onChange={(e) => setToken(e.target.value)} />
               <input style={inputStyle} placeholder={t('mcp_desc_ph', lang)} value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
+            <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+              <textarea
+                style={textareaStyle}
+                placeholder={t('mcp_allowed_tools_ph', lang)}
+                value={allowedTools}
+                onChange={(e) => setAllowedTools(e.target.value)}
+              />
+              <div style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>
+                {t('mcp_allowed_tools_hint', lang)}
+              </div>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
               <button onClick={() => setAddOpen(false)} style={ghostButtonStyle}>
                 {t('common_cancel', lang)}
@@ -406,6 +455,11 @@ export const McpSettings: React.FC = () => {
                     <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                       {serverTools.length} {t('mcp_tool_count_suffix', lang)}
                     </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                      · {server.allowed_tools.length > 0
+                        ? `${server.allowed_tools.length} ${t('mcp_allowlisted_suffix', lang)}`
+                        : t('mcp_all_tools_allowed', lang)}
+                    </span>
                     {server.description && (
                       <span
                         style={{
@@ -460,6 +514,17 @@ export const McpSettings: React.FC = () => {
                       <input style={inputStyle} placeholder={t('mcp_url_ph', lang)} value={editUrl} onChange={(e) => setEditUrl(e.target.value)} />
                       <input style={inputStyle} placeholder={t('mcp_token_ph', lang)} type="password" value={editToken} onChange={(e) => setEditToken(e.target.value)} />
                       <input style={inputStyle} placeholder={t('mcp_desc_ph', lang)} value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+                    </div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <textarea
+                        style={textareaStyle}
+                        placeholder={t('mcp_allowed_tools_ph', lang)}
+                        value={editAllowedTools}
+                        onChange={(e) => setEditAllowedTools(e.target.value)}
+                      />
+                      <div style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>
+                        {t('mcp_allowed_tools_hint', lang)}
+                      </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                       <button onClick={cancelEdit} style={ghostButtonStyle}>{t('common_cancel', lang)}</button>

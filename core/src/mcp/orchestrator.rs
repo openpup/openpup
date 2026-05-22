@@ -27,6 +27,8 @@ pub struct McpServerEntry {
     pub token: String,
     pub description: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
 }
 
 /// Legacy alias used in main.rs env-var bootstrap.
@@ -146,7 +148,10 @@ impl MCPOrchestrator {
                 .and_then(|t| serde_json::from_str::<Vec<McpServerEntry>>(&t).ok())
                 .unwrap_or_default()
                 .into_iter()
-                .map(|e| (e.name.clone(), e))
+                .map(|e| {
+                    let normalized = Self::normalize_server_entry(e);
+                    (normalized.name.clone(), normalized)
+                })
                 .collect()
         } else {
             HashMap::new()
@@ -190,6 +195,7 @@ impl MCPOrchestrator {
     // ── Server management ───────────────────────────────────────────────────────
 
     pub async fn add_server(&self, entry: McpServerEntry) -> Result<()> {
+        let entry = Self::normalize_server_entry(entry);
         self.servers
             .write()
             .await
@@ -214,6 +220,7 @@ impl MCPOrchestrator {
     }
 
     pub async fn update_server(&self, name: &str, entry: McpServerEntry) -> Result<()> {
+        let entry = Self::normalize_server_entry(entry);
         {
             let mut guard = self.servers.write().await;
             if !guard.contains_key(name) {
@@ -315,7 +322,8 @@ impl MCPOrchestrator {
     ///
     /// `base_url` is treated as the full MCP endpoint URL configured by the user.
     async fn discover_server_tools(&self, entry: &McpServerEntry) -> Result<Vec<McpToolInfo>> {
-        rmcp_list_tools(&entry.base_url, entry).await
+        let tools = rmcp_list_tools(&entry.base_url, entry).await?;
+        Ok(Self::filter_tools_by_allowlist(entry, tools))
     }
 
     /// Return all discovered tools (remote cache + built-in local tools).
@@ -1302,6 +1310,7 @@ impl MCPOrchestrator {
         }
         let entry = entry.clone();
         drop(guard);
+        Self::ensure_tool_allowed(&entry, tool)?;
         call_remote(&entry, tool, params).await
     }
 
@@ -1458,6 +1467,61 @@ impl MCPOrchestrator {
         }
 
         normalized
+    }
+
+    fn normalize_server_entry(mut entry: McpServerEntry) -> McpServerEntry {
+        let mut seen = HashSet::new();
+        entry.allowed_tools = entry
+            .allowed_tools
+            .into_iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .filter(|tool| seen.insert(tool.clone()))
+            .collect();
+        entry
+    }
+
+    fn filter_tools_by_allowlist(
+        entry: &McpServerEntry,
+        tools: Vec<McpToolInfo>,
+    ) -> Vec<McpToolInfo> {
+        if entry.allowed_tools.is_empty() {
+            return tools;
+        }
+
+        let allowed: HashSet<&str> = entry
+            .allowed_tools
+            .iter()
+            .map(|tool| tool.as_str())
+            .collect();
+        let total = tools.len();
+        let filtered: Vec<McpToolInfo> = tools
+            .into_iter()
+            .filter(|tool| allowed.contains(tool.name.as_str()))
+            .collect();
+
+        debug!(
+            "[mcp] allowlist '{}' retained {} of {} discovered tools",
+            entry.name,
+            filtered.len(),
+            total
+        );
+
+        filtered
+    }
+
+    fn ensure_tool_allowed(entry: &McpServerEntry, tool_name: &str) -> Result<()> {
+        if entry.allowed_tools.is_empty()
+            || entry.allowed_tools.iter().any(|tool| tool == tool_name)
+        {
+            return Ok(());
+        }
+
+        bail!(
+            "MCP tool '{}' is not allowlisted for server '{}'",
+            tool_name,
+            entry.name
+        )
     }
 }
 
@@ -1895,5 +1959,54 @@ mod tests {
             MCPOrchestrator::hash_text(&MCPOrchestrator::tool_retrieval_document(&after));
 
         assert_ne!(before_hash, after_hash);
+    }
+
+    #[test]
+    fn allowlist_filters_discovered_tools() {
+        let entry = McpServerEntry {
+            name: "intel".into(),
+            base_url: "http://localhost:9001/mcp".into(),
+            token: String::new(),
+            description: "intel".into(),
+            enabled: true,
+            allowed_tools: vec!["query_data".into(), "screen_stocks".into()],
+        };
+        let tools = vec![
+            McpToolInfo {
+                server: "intel".into(),
+                name: "query_data".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+            },
+            McpToolInfo {
+                server: "intel".into(),
+                name: "search_news".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+
+        let filtered = MCPOrchestrator::filter_tools_by_allowlist(&entry, tools);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "query_data");
+    }
+
+    #[test]
+    fn ensure_tool_allowed_rejects_non_allowlisted_tool() {
+        let entry = McpServerEntry {
+            name: "exec".into(),
+            base_url: "http://localhost:9003/mcp".into(),
+            token: String::new(),
+            description: "exec".into(),
+            enabled: true,
+            allowed_tools: vec!["get_balance".into()],
+        };
+
+        let err = MCPOrchestrator::ensure_tool_allowed(&entry, "place_order").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("is not allowlisted for server 'exec'"));
     }
 }

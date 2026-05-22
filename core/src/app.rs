@@ -703,6 +703,7 @@ pub async fn build_app(
                 token,
                 description: "Server from OPENPUP_MCP_SERVER_URL".to_string(),
                 enabled: true,
+                allowed_tools: Vec::new(),
             })
             .await;
     }

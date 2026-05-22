@@ -12,6 +12,7 @@ pub struct McpServerInfo {
     pub token: String,
     pub description: String,
     pub enabled: bool,
+    pub allowed_tools: Vec<String>,
 }
 
 #[tauri::command]
@@ -25,6 +26,7 @@ pub async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<McpServe
             token: e.token,
             description: e.description,
             enabled: e.enabled,
+            allowed_tools: e.allowed_tools,
         })
         .collect())
 }
@@ -35,6 +37,7 @@ pub struct AddMcpServerInput {
     pub base_url: String,
     pub token: String,
     pub description: String,
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -50,6 +53,7 @@ pub async fn add_mcp_server(
             token: entry.token,
             description: entry.description,
             enabled: true,
+            allowed_tools: entry.allowed_tools.unwrap_or_default(),
         })
         .await
         .map_err(|e| e.to_string())
@@ -63,6 +67,7 @@ pub struct UpdateMcpServerInput {
     pub token: String,
     pub description: String,
     pub enabled: bool,
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -80,6 +85,7 @@ pub async fn update_mcp_server(
                 token: entry.token,
                 description: entry.description,
                 enabled: entry.enabled,
+                allowed_tools: entry.allowed_tools.unwrap_or_default(),
             },
         )
         .await
