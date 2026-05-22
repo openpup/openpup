@@ -46,8 +46,22 @@ const fieldHintStyle: React.CSSProperties = {
   lineHeight: 1.5,
 };
 
+const buttonVars = (
+  bg: string,
+  hover: string,
+  fg: string,
+  border: string,
+): React.CSSProperties => ({
+  ['--finance-btn-bg' as string]: bg,
+  ['--finance-btn-bg-hover' as string]: hover,
+  ['--finance-btn-fg' as string]: fg,
+  ['--finance-btn-border' as string]: border,
+});
+
 export const FinancePipeline: React.FC = () => {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [feedback, setFeedback] = useState<{ tone: 'success' | 'info'; text: string } | null>(null);
+  const [rowAction, setRowAction] = useState<{ type: 'check' | 'delete' | 'preview' | null; index: number | null }>({ type: null, index: null });
   const {
     pipelineInput,
     setPipelineInput,
@@ -103,6 +117,12 @@ export const FinancePipeline: React.FC = () => {
           ? `已通过 ${summary.approved} 条，可进入执行准备`
           : '先导入或生成一条交易意图';
 
+  React.useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <section style={{ ...panel, display: 'grid', gap: 14, background: 'linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,248,245,0.98))' }}>
@@ -142,24 +162,46 @@ export const FinancePipeline: React.FC = () => {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 onClick={() => void batchCheckIntents()}
-                style={{ borderRadius: 10, border: 'none', background: '#103B2F', color: '#D7F4E8', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                disabled={loading.pipeline || intents.length === 0}
+                data-busy={loading.pipeline}
+                className="finance-button"
+                style={buttonVars('linear-gradient(180deg, #103B2F, #0C2F25)', 'linear-gradient(180deg, #164A3A, #103B2F)', '#D7F4E8', 'rgba(16,59,47,0.26)')}
               >
+                {loading.pipeline && <span className="finance-button__dot" />}
                 {loading.pipeline ? '风控校验中…' : '批量风控校验'}
               </button>
               <button
                 onClick={() => setPipelineInput(seedIntent)}
-                style={{ borderRadius: 10, border: '1px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                className="finance-button"
+                style={buttonVars('var(--color-background-secondary)', 'color-mix(in srgb, var(--color-background-secondary) 80%, white 20%)', 'var(--color-text-secondary)', 'var(--color-border-secondary)')}
               >
                 填充示例
               </button>
               <button
                 onClick={() => setIntents([])}
-                style={{ borderRadius: 10, border: '1px solid rgba(226,75,74,0.25)', background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                disabled={loading.pipeline || intents.length === 0}
+                className="finance-button"
+                style={buttonVars('var(--color-background-danger)', 'color-mix(in srgb, var(--color-background-danger) 75%, white 25%)', 'var(--color-text-danger)', 'rgba(226,75,74,0.25)')}
               >
                 清空列表
               </button>
             </div>
           </div>
+          {feedback && (
+            <div
+              style={{
+                borderRadius: 12,
+                padding: '10px 12px',
+                background: feedback.tone === 'success' ? 'rgba(29,158,117,0.10)' : 'rgba(55,138,221,0.10)',
+                color: feedback.tone === 'success' ? '#0E6A4C' : '#1A5EA0',
+                border: feedback.tone === 'success' ? '1px solid rgba(29,158,117,0.18)' : '1px solid rgba(55,138,221,0.18)',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {feedback.text}
+            </div>
+          )}
         </div>
       </section>
 
@@ -181,8 +223,13 @@ export const FinancePipeline: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>批量导入</div>
               <button
-                onClick={() => applyPipelineInput()}
-                style={{ borderRadius: 10, border: '1px solid var(--color-border-secondary)', background: 'var(--color-background-primary)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '7px 12px', cursor: 'pointer' }}
+                onClick={() => {
+                  applyPipelineInput();
+                  setFeedback({ tone: 'success', text: '已应用导入内容' });
+                }}
+                disabled={loading.pipeline || !pipelineInput.trim()}
+                className="finance-button"
+                style={buttonVars('var(--color-background-primary)', 'color-mix(in srgb, var(--color-background-primary) 82%, var(--color-background-secondary) 18%)', 'var(--color-text-secondary)', 'var(--color-border-secondary)')}
               >
                 应用导入内容
               </button>
@@ -259,12 +306,28 @@ export const FinancePipeline: React.FC = () => {
                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-tertiary)' }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                           <button
-                            onClick={(event) => {
+                            onClick={async (event) => {
                               event.stopPropagation();
-                              void checkIntentAt(index);
+                              setRowAction({ type: 'check', index });
+                              try {
+                                await checkIntentAt(index);
+                                setFeedback({ tone: 'success', text: `${intent.symbol} 已完成校验` });
+                              } finally {
+                                setRowAction({ type: null, index: null });
+                              }
                             }}
-                            style={{ border: 'none', background: 'transparent', color: '#0E6A4C', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                            disabled={loading.pipeline}
+                            data-busy={rowAction.type === 'check' && rowAction.index === index}
+                            className="finance-button"
+                            style={{
+                              ...buttonVars('rgba(29,158,117,0.08)', 'rgba(29,158,117,0.14)', '#0E6A4C', 'rgba(29,158,117,0.18)'),
+                              minHeight: 28,
+                              padding: '6px 9px',
+                              fontSize: 11,
+                              boxShadow: 'none',
+                            }}
                           >
+                            {rowAction.type === 'check' && rowAction.index === index && <span className="finance-button__dot" />}
                             校验
                           </button>
                           <button
@@ -272,8 +335,16 @@ export const FinancePipeline: React.FC = () => {
                               event.stopPropagation();
                               removeIntent(intent.symbol, index);
                               setSelectedIndex(Math.max(0, index - 1));
+                              setFeedback({ tone: 'info', text: `${intent.symbol} 已从列表移除` });
                             }}
-                            style={{ border: 'none', background: 'transparent', color: 'var(--color-text-danger)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                            className="finance-button"
+                            style={{
+                              ...buttonVars('rgba(226,75,74,0.08)', 'rgba(226,75,74,0.14)', 'var(--color-text-danger)', 'rgba(226,75,74,0.18)'),
+                              minHeight: 28,
+                              padding: '6px 9px',
+                              fontSize: 11,
+                              boxShadow: 'none',
+                            }}
                           >
                             删除
                           </button>
@@ -383,15 +454,35 @@ export const FinancePipeline: React.FC = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     <button
                       onClick={() => void checkIntentAt(selectedIndex)}
-                      style={{ borderRadius: 10, border: 'none', background: '#103B2F', color: '#D7F4E8', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                      disabled={loading.pipeline}
+                      data-busy={loading.pipeline}
+                      className="finance-button"
+                      style={buttonVars('linear-gradient(180deg, #103B2F, #0C2F25)', 'linear-gradient(180deg, #164A3A, #103B2F)', '#D7F4E8', 'rgba(16,59,47,0.26)')}
                     >
+                      {loading.pipeline && <span className="finance-button__dot" />}
                       {loading.pipeline ? '处理中…' : '仅校验当前意图'}
                     </button>
                     <button
-                      onClick={() => void prepareOrderAt(selectedIndex)}
+                      onClick={async () => {
+                        setRowAction({ type: 'preview', index: selectedIndex });
+                        try {
+                          await prepareOrderAt(selectedIndex);
+                          setFeedback({ tone: 'info', text: `${selectedIntent.symbol} 已生成下单预览` });
+                        } finally {
+                          setRowAction({ type: null, index: null });
+                        }
+                      }}
                       disabled={!selectedIntent || !['approved', 'reduced'].includes(selectedIntent.approval_status ?? '')}
-                      style={{ borderRadius: 10, border: '1px solid rgba(186,117,23,0.18)', background: ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? 'rgba(186,117,23,0.10)' : 'var(--color-background-secondary)', color: ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? '#8A5A10' : 'var(--color-text-tertiary)', fontSize: 12, padding: '9px 12px', cursor: ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? 'pointer' : 'not-allowed' }}
+                      data-busy={rowAction.type === 'preview' && rowAction.index === selectedIndex}
+                      className="finance-button"
+                      style={buttonVars(
+                        ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? 'rgba(186,117,23,0.10)' : 'var(--color-background-secondary)',
+                        ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? 'rgba(186,117,23,0.16)' : 'color-mix(in srgb, var(--color-background-secondary) 80%, white 20%)',
+                        ['approved', 'reduced'].includes(selectedIntent.approval_status ?? '') ? '#8A5A10' : 'var(--color-text-tertiary)',
+                        'rgba(186,117,23,0.18)',
+                      )}
                     >
+                      {rowAction.type === 'preview' && rowAction.index === selectedIndex && <span className="finance-button__dot" />}
                       下单预览
                     </button>
                   </div>
@@ -424,14 +515,23 @@ export const FinancePipeline: React.FC = () => {
                       </div>
                       <div style={{ display: 'flex', gap: 10 }}>
                         <button
-                          onClick={() => void placeOrderAt(selectedIndex)}
-                          style={{ borderRadius: 10, border: 'none', background: '#8A5A10', color: '#FFF7EB', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                          onClick={async () => {
+                            await placeOrderAt(selectedIndex);
+                            setFeedback({ tone: 'success', text: `${selectedIntent.symbol} 下单请求已提交` });
+                          }}
+                          disabled={loading.pipeline}
+                          data-busy={loading.pipeline}
+                          className="finance-button"
+                          style={buttonVars('linear-gradient(180deg, #8A5A10, #6F4709)', 'linear-gradient(180deg, #A46E18, #8A5A10)', '#FFF7EB', 'rgba(138,90,16,0.28)')}
                         >
-                          确认下单
+                          {loading.pipeline && <span className="finance-button__dot" />}
+                          {loading.pipeline ? '提交中…' : '确认下单'}
                         </button>
                         <button
                           onClick={() => clearOrderPreview()}
-                          style={{ borderRadius: 10, border: '1px solid var(--color-border-secondary)', background: 'var(--color-background-primary)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+                          disabled={loading.pipeline}
+                          className="finance-button"
+                          style={buttonVars('var(--color-background-primary)', 'color-mix(in srgb, var(--color-background-primary) 82%, var(--color-background-secondary) 18%)', 'var(--color-text-secondary)', 'var(--color-border-secondary)')}
                         >
                           取消
                         </button>

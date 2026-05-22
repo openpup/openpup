@@ -11,6 +11,8 @@ const panel: React.CSSProperties = {
 
 export const FinanceResearch: React.FC = () => {
   const [symbolInput, setSymbolInput] = useState('');
+  const [watchlistAction, setWatchlistAction] = useState<'add' | 'delete' | null>(null);
+  const [feedback, setFeedback] = useState<{ tone: 'success' | 'info'; text: string } | null>(null);
   const {
     watchlist,
     screenerResults,
@@ -30,6 +32,12 @@ export const FinanceResearch: React.FC = () => {
       void loadSymbolSnapshot(selectedSymbol);
     }
   }, [selectedSymbol]);
+
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   const displayList = useMemo(() => screenerResults.length > 0 ? screenerResults : watchlist, [screenerResults, watchlist]);
   const activeInstrument = useMemo(
@@ -70,7 +78,23 @@ export const FinanceResearch: React.FC = () => {
     } as const;
 
     addDraftIntent(draft);
+    setFeedback({ tone: 'success', text: `已为 ${selectedSymbol} 生成草稿` });
   };
+
+  const buttonVars = (
+    bg: string,
+    hover: string,
+    fg: string,
+    border: string,
+  ): React.CSSProperties => ({
+    ['--finance-btn-bg' as string]: bg,
+    ['--finance-btn-bg-hover' as string]: hover,
+    ['--finance-btn-fg' as string]: fg,
+    ['--finance-btn-border' as string]: border,
+  });
+
+  const queryBusy = loading.research && symbolInput.trim() === (selectedSymbol ?? symbolInput).trim();
+  const watchlistBusy = watchlistAction !== null;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px minmax(0, 1fr) 260px', gap: 16 }}>
@@ -117,13 +141,19 @@ export const FinanceResearch: React.FC = () => {
             style={{ flex: 1, borderRadius: 10, border: '1px solid var(--color-border-secondary)', background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)', padding: '9px 12px', fontSize: 12 }}
           />
           <button
-            onClick={() => {
-              setSelectedSymbol(symbolInput.trim());
-              void loadSymbolSnapshot(symbolInput.trim());
+            onClick={async () => {
+              const symbol = symbolInput.trim();
+              setSelectedSymbol(symbol);
+              await loadSymbolSnapshot(symbol);
+              setFeedback({ tone: 'info', text: `已加载 ${symbol} 的研究数据` });
             }}
-            style={{ borderRadius: 10, border: 'none', background: '#103B2F', color: '#D7F4E8', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+            disabled={!symbolInput.trim() || loading.research}
+            data-busy={queryBusy}
+            className="finance-button"
+            style={buttonVars('linear-gradient(180deg, #103B2F, #0C2F25)', 'linear-gradient(180deg, #164A3A, #103B2F)', '#D7F4E8', 'rgba(16,59,47,0.26)')}
           >
-            查询
+            {queryBusy && <span className="finance-button__dot" />}
+            {queryBusy ? '查询中…' : '查询'}
           </button>
         </div>
 
@@ -208,26 +238,66 @@ export const FinanceResearch: React.FC = () => {
           )}
         </div>
         <button
-          onClick={() => selectedSymbol && void updateWatchlist('add', selectedSymbol)}
-          disabled={!selectedSymbol}
-          style={{ borderRadius: 10, border: 'none', background: '#103B2F', color: '#D7F4E8', fontSize: 12, padding: '10px 12px', cursor: selectedSymbol ? 'pointer' : 'not-allowed', opacity: selectedSymbol ? 1 : 0.5 }}
+          onClick={async () => {
+            if (!selectedSymbol) return;
+            setWatchlistAction('add');
+            try {
+              await updateWatchlist('add', selectedSymbol);
+              setFeedback({ tone: 'success', text: `${selectedSymbol} 已加入自选` });
+            } finally {
+              setWatchlistAction(null);
+            }
+          }}
+          disabled={!selectedSymbol || watchlistBusy}
+          data-busy={watchlistAction === 'add'}
+          className="finance-button"
+          style={buttonVars('linear-gradient(180deg, #103B2F, #0C2F25)', 'linear-gradient(180deg, #164A3A, #103B2F)', '#D7F4E8', 'rgba(16,59,47,0.26)')}
         >
-          加入自选
+          {watchlistAction === 'add' && <span className="finance-button__dot" />}
+          {watchlistAction === 'add' ? '加入中…' : '加入自选'}
         </button>
         <button
-          onClick={() => selectedSymbol && void updateWatchlist('delete', selectedSymbol)}
-          disabled={!selectedSymbol}
-          style={{ borderRadius: 10, border: '1px solid rgba(226,75,74,0.25)', background: 'var(--color-background-danger)', color: 'var(--color-text-danger)', fontSize: 12, padding: '10px 12px', cursor: selectedSymbol ? 'pointer' : 'not-allowed', opacity: selectedSymbol ? 1 : 0.5 }}
+          onClick={async () => {
+            if (!selectedSymbol) return;
+            setWatchlistAction('delete');
+            try {
+              await updateWatchlist('delete', selectedSymbol);
+              setFeedback({ tone: 'info', text: `${selectedSymbol} 已从自选移除` });
+            } finally {
+              setWatchlistAction(null);
+            }
+          }}
+          disabled={!selectedSymbol || watchlistBusy}
+          data-busy={watchlistAction === 'delete'}
+          className="finance-button"
+          style={buttonVars('var(--color-background-danger)', 'color-mix(in srgb, var(--color-background-danger) 75%, white 25%)', 'var(--color-text-danger)', 'rgba(226,75,74,0.25)')}
         >
-          从自选移除
+          {watchlistAction === 'delete' && <span className="finance-button__dot" />}
+          {watchlistAction === 'delete' ? '移除中…' : '从自选移除'}
         </button>
         <button
           onClick={createDraftIntent}
           disabled={!selectedSymbol}
-          style={{ borderRadius: 10, border: 'none', background: '#BA7517', color: '#FFF7EB', fontSize: 12, padding: '10px 12px', cursor: selectedSymbol ? 'pointer' : 'not-allowed', opacity: selectedSymbol ? 1 : 0.5 }}
+          className="finance-button"
+          style={buttonVars('linear-gradient(180deg, #BA7517, #9B6210)', 'linear-gradient(180deg, #C78223, #A36513)', '#FFF7EB', 'rgba(155,98,16,0.28)')}
         >
           生成 TradeIntent 草稿
         </button>
+        {feedback && (
+          <div
+            style={{
+              borderRadius: 12,
+              padding: '10px 12px',
+              background: feedback.tone === 'success' ? 'rgba(29,158,117,0.10)' : 'rgba(55,138,221,0.10)',
+              color: feedback.tone === 'success' ? '#0E6A4C' : '#1A5EA0',
+              border: feedback.tone === 'success' ? '1px solid rgba(29,158,117,0.18)' : '1px solid rgba(55,138,221,0.18)',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            {feedback.text}
+          </div>
+        )}
         <div style={{ borderRadius: 12, padding: '12px 14px', background: 'var(--color-background-secondary)', fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
           当前闭环：
           <br />

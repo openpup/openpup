@@ -56,6 +56,18 @@ const microPill = (tone: string): React.CSSProperties => ({
   background: tone,
 });
 
+const buttonVars = (
+  bg: string,
+  hover: string,
+  fg: string,
+  border: string,
+): React.CSSProperties => ({
+  ['--finance-btn-bg' as string]: bg,
+  ['--finance-btn-bg-hover' as string]: hover,
+  ['--finance-btn-fg' as string]: fg,
+  ['--finance-btn-border' as string]: border,
+});
+
 export const FinanceWorkbench: React.FC = () => {
   const [screenQuery, setScreenQuery] = useState('市盈率小于20，非ST，成交额居前');
   const {
@@ -140,9 +152,13 @@ export const FinanceWorkbench: React.FC = () => {
             />
             <button
               onClick={() => void runScreenStocks(screenQuery, true)}
-              style={{ borderRadius: 12, border: 'none', background: 'linear-gradient(180deg, #BA7517, #9B6210)', color: '#FFF7EB', fontSize: 12, padding: '10px 12px', cursor: 'pointer', boxShadow: '0 10px 22px rgba(186,117,23,0.18)' }}
+              disabled={!screenQuery.trim() || loading.research}
+              data-busy={loading.research}
+              className="finance-button"
+              style={buttonVars('linear-gradient(180deg, #BA7517, #9B6210)', 'linear-gradient(180deg, #C78223, #A36513)', '#FFF7EB', 'rgba(155,98,16,0.28)')}
             >
-              运行筛选
+              {loading.research && <span className="finance-button__dot" />}
+              {loading.research ? '筛选中…' : '运行筛选'}
             </button>
           </div>
               <div style={{ display: 'grid', gap: 8 }}>
@@ -176,9 +192,13 @@ export const FinanceWorkbench: React.FC = () => {
           </div>
           <button
             onClick={() => void loadOrders(true)}
-            style={{ borderRadius: 12, border: '1px solid rgba(16,59,47,0.12)', background: 'rgba(255,255,255,0.90)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '9px 12px', cursor: 'pointer' }}
+            disabled={loading.orders}
+            data-busy={loading.orders}
+            className="finance-button"
+            style={buttonVars('rgba(255,255,255,0.90)', 'rgba(246,247,244,0.98)', 'var(--color-text-secondary)', 'rgba(16,59,47,0.12)')}
           >
-            刷新订单快照
+            {loading.orders && <span className="finance-button__dot" />}
+            {loading.orders ? '刷新中…' : '刷新订单快照'}
           </button>
         </>
       );
@@ -242,9 +262,16 @@ export const FinanceWorkbench: React.FC = () => {
           onClick={() => {
             void loadOverview(true);
           }}
-          style={{ borderRadius: 12, border: '1px solid rgba(16,59,47,0.12)', background: 'rgba(255,255,255,0.90)', color: 'var(--color-text-secondary)', fontSize: 12, padding: '9px 12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          disabled={loading.overview}
+          data-busy={loading.overview}
+          className="finance-button"
+          style={{
+            ...buttonVars('rgba(255,255,255,0.90)', 'rgba(246,247,244,0.98)', 'var(--color-text-secondary)', 'rgba(16,59,47,0.12)'),
+            whiteSpace: 'nowrap',
+          }}
         >
-          强制刷新
+          {loading.overview && <span className="finance-button__dot" />}
+          {loading.overview ? '刷新中…' : '强制刷新'}
         </button>
       </>
     );
