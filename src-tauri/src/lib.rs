@@ -175,6 +175,8 @@ macro_rules! all_commands {
             commands::update_pup,
             commands::add_custom_pup,
             commands::remove_custom_pup,
+            commands::get_scenario_settings_snapshot,
+            commands::save_finance_scenario_settings,
             commands::list_mcp_tools,
             commands::refresh_mcp_tools,
             commands::approve_permission,

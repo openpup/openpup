@@ -21,6 +21,7 @@ interface UIState {
   activeNav: NavItem;
   channelDetailMode: boolean;
   sidebarCollapsed: boolean;
+  financeConfigOpen: boolean;
   membersExpanded: boolean;
   toolsExpanded: boolean;
   configExpanded: boolean;
@@ -32,6 +33,7 @@ interface UIState {
   setActiveNav: (nav: NavItem) => void;
   setChannelDetailMode: (mode: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  setFinanceConfigOpen: (open: boolean) => void;
   setMembersExpanded: (expanded: boolean) => void;
   setToolsExpanded: (expanded: boolean) => void;
   setConfigExpanded: (expanded: boolean) => void;
@@ -45,6 +47,7 @@ export const useUIStore = create<UIState>((set) => ({
   activeNav: 'chat',
   channelDetailMode: false,
   sidebarCollapsed: false,
+  financeConfigOpen: false,
   membersExpanded: true,
   toolsExpanded: false,
   configExpanded: false,
@@ -56,6 +59,7 @@ export const useUIStore = create<UIState>((set) => ({
   setActiveNav: (nav) => set({ activeNav: nav }),
   setChannelDetailMode: (mode) => set({ channelDetailMode: mode }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  setFinanceConfigOpen: (open) => set({ financeConfigOpen: open }),
   setMembersExpanded: (expanded) => set({ membersExpanded: expanded }),
   setToolsExpanded: (expanded) => set({ toolsExpanded: expanded }),
   setConfigExpanded: (expanded) => set({ configExpanded: expanded }),

@@ -15,6 +15,7 @@ pub async fn send_message(
     app_handle: tauri::AppHandle,
     input: String,
     forced_pup: Option<String>,
+    scenario_mode: Option<String>,
 ) -> Result<(), String> {
     let (providers, routing) = state.app.current_llm_routing();
     let primary_provider = providers
@@ -46,7 +47,7 @@ pub async fn send_message(
     let event_sink = Arc::new(crate::runtime_tauri::TauriEventSink::new(app_handle));
     let app = state.app.clone();
     tauri::async_runtime::spawn(async move {
-        app.process_user_message_stream(input, forced_pup, event_sink)
+        app.process_user_message_stream(input, forced_pup, scenario_mode, event_sink)
             .await;
     });
     Ok(())

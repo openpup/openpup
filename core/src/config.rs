@@ -26,6 +26,108 @@ pub struct AppConfig {
     pub bridge: Option<crate::bridge::types::BridgeConfig>,
     #[serde(default)]
     pub xmtp: XmtpConfig,
+    #[serde(default)]
+    pub scenario: ScenarioConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScenarioConfig {
+    #[serde(default)]
+    pub finance: FinanceScenarioConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceScenarioConfig {
+    #[serde(default = "default_finance_role_bindings")]
+    pub role_bindings: Vec<FinanceRoleBinding>,
+    #[serde(default = "default_finance_skill_bindings")]
+    pub skill_bindings: Vec<FinanceSkillBinding>,
+    #[serde(default = "default_finance_connector_bindings")]
+    pub connector_bindings: Vec<FinanceConnectorBinding>,
+    #[serde(default)]
+    pub risk_preset: FinanceRiskPreset,
+}
+
+impl Default for FinanceScenarioConfig {
+    fn default() -> Self {
+        Self {
+            role_bindings: default_finance_role_bindings(),
+            skill_bindings: default_finance_skill_bindings(),
+            connector_bindings: default_finance_connector_bindings(),
+            risk_preset: FinanceRiskPreset::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceRoleBinding {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub pup_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceSkillBinding {
+    #[serde(default)]
+    pub skill: String,
+    #[serde(default = "default_finance_skill_binding_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub skill_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceConnectorBinding {
+    #[serde(default)]
+    pub connector: String,
+    #[serde(default = "default_finance_connector_binding_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub server_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceRiskPreset {
+    #[serde(default = "default_true")]
+    pub force_leashed: bool,
+    #[serde(default = "default_true")]
+    pub require_manual_approval: bool,
+    #[serde(default = "default_single_position_limit_pct")]
+    pub single_position_limit_pct: u32,
+    #[serde(default = "default_single_sector_limit_pct")]
+    pub single_sector_limit_pct: u32,
+    #[serde(default = "default_daily_loss_circuit_breaker_pct")]
+    pub daily_loss_circuit_breaker_pct: u32,
+    #[serde(default = "default_board_lot_size")]
+    pub board_lot_size: u32,
+    #[serde(default = "default_true")]
+    pub block_st_suspended_delisting: bool,
+    #[serde(default = "default_true")]
+    pub enforce_trading_window: bool,
+    #[serde(default = "default_true")]
+    pub enforce_t1: bool,
+}
+
+impl Default for FinanceRiskPreset {
+    fn default() -> Self {
+        Self {
+            force_leashed: true,
+            require_manual_approval: true,
+            single_position_limit_pct: default_single_position_limit_pct(),
+            single_sector_limit_pct: default_single_sector_limit_pct(),
+            daily_loss_circuit_breaker_pct: default_daily_loss_circuit_breaker_pct(),
+            board_lot_size: default_board_lot_size(),
+            block_st_suspended_delisting: true,
+            enforce_trading_window: true,
+            enforce_t1: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,11 +314,57 @@ fn default_enabled_pups() -> Vec<String> {
         .map(String::from)
         .collect()
 }
+fn default_true() -> bool {
+    true
+}
 fn default_kb_auto_ingest() -> bool {
     true
 }
 fn default_kb_summary_frequency() -> String {
     "standard".into()
+}
+fn default_finance_skill_binding_mode() -> String {
+    "scenario_preset".into()
+}
+fn default_finance_connector_binding_mode() -> String {
+    "mcp_server".into()
+}
+fn default_single_position_limit_pct() -> u32 {
+    20
+}
+fn default_single_sector_limit_pct() -> u32 {
+    40
+}
+fn default_daily_loss_circuit_breaker_pct() -> u32 {
+    3
+}
+fn default_board_lot_size() -> u32 {
+    100
+}
+fn default_finance_role_bindings() -> Vec<FinanceRoleBinding> {
+    vec![
+        FinanceRoleBinding { role: "researcher".into(), pup_key: Some("research".into()) },
+        FinanceRoleBinding { role: "strategist".into(), pup_key: Some("strategist".into()) },
+        FinanceRoleBinding { role: "risk_officer".into(), pup_key: Some("risk_officer".into()) },
+        FinanceRoleBinding { role: "executor".into(), pup_key: Some("executor".into()) },
+        FinanceRoleBinding { role: "reviewer".into(), pup_key: Some("reviewer".into()) },
+    ]
+}
+fn default_finance_skill_bindings() -> Vec<FinanceSkillBinding> {
+    vec![
+        FinanceSkillBinding { skill: "premarket_scan".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+        FinanceSkillBinding { skill: "intraday_check".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+        FinanceSkillBinding { skill: "postmarket_review".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+        FinanceSkillBinding { skill: "watchlist_cleanup".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+        FinanceSkillBinding { skill: "emergency_stop".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+    ]
+}
+fn default_finance_connector_bindings() -> Vec<FinanceConnectorBinding> {
+    vec![
+        FinanceConnectorBinding { connector: "intel".into(), mode: default_finance_connector_binding_mode(), server_name: Some("intel".into()) },
+        FinanceConnectorBinding { connector: "risk".into(), mode: default_finance_connector_binding_mode(), server_name: Some("risk".into()) },
+        FinanceConnectorBinding { connector: "exec".into(), mode: default_finance_connector_binding_mode(), server_name: Some("exec".into()) },
+    ]
 }
 
 pub fn default_api_base_for_provider(kind: &str, provider: &str) -> String {

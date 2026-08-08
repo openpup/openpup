@@ -7,6 +7,33 @@ export interface ChatMessage {
   pup_key?: string;
   pup_name?: string;
   timestamp?: number;
+  finance_artifact?: FinanceArtifactPayload;
+}
+
+export interface FinanceArtifactPayload {
+  scenarioPreset?: string;
+  sourcePupKey?: string;
+  sourcePupName?: string;
+  stageLabels: string[];
+  intents: FinanceIntentPayload[];
+  rawLines: string[];
+}
+
+export interface FinanceIntentPayload {
+  symbol?: string;
+  market?: string;
+  direction?: string;
+  thesis?: string;
+  confidence?: string;
+  entryRule?: string;
+  exitRule?: string;
+  maxPositionPct?: string;
+  timeHorizon?: string;
+  validUntil?: string;
+  riskNotes?: string;
+  approvalStatus?: string;
+  adjustedPositionPct?: string;
+  rawLines: string[];
 }
 
 export interface StreamingPupState {

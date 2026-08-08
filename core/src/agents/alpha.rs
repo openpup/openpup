@@ -97,6 +97,8 @@ fn default_true() -> bool {
     true
 }
 
+const FINANCE_SCENARIO_PREFIX: &str = "scenario:finance:";
+
 fn default_pup_configs() -> HashMap<String, PupConfig> {
     [
         ("dev", "Dev Pup", "代码、调试、Git、项目脚手架"),
@@ -131,6 +133,54 @@ struct StreamDonePayload {
     pup_name: String,
     /// Authoritative final content from the backend (empty when aborted).
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finance_artifact: Option<FinanceArtifact>,
+}
+
+#[derive(serde::Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct FinanceArtifact {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scenario_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_pup_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_pup_name: Option<String>,
+    stage_labels: Vec<String>,
+    intents: Vec<FinanceTradeIntent>,
+    raw_lines: Vec<String>,
+}
+
+#[derive(serde::Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct FinanceTradeIntent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    market: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thesis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry_rule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_rule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_position_pct: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_horizon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    valid_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    risk_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    adjusted_position_pct: Option<String>,
+    raw_lines: Vec<String>,
 }
 
 /// Emitted at key execution steps so the UI can show a live activity trace.
@@ -798,6 +848,407 @@ impl AlphaPup {
         self.pup_configs.read().await.get(key).cloned()
     }
 
+    fn finance_scenario_config(&self) -> crate::config::FinanceScenarioConfig {
+        crate::config::load_fast().scenario.finance
+    }
+
+    fn finance_role_binding(
+        finance: &crate::config::FinanceScenarioConfig,
+        role: &str,
+    ) -> Option<String> {
+        finance
+            .role_bindings
+            .iter()
+            .find(|binding| binding.role == role)
+            .and_then(|binding| binding.pup_key.clone())
+    }
+
+    fn finance_skill_binding<'a>(
+        finance: &'a crate::config::FinanceScenarioConfig,
+        skill: &str,
+    ) -> Option<&'a crate::config::FinanceSkillBinding> {
+        finance
+            .skill_bindings
+            .iter()
+            .find(|binding| binding.skill == skill)
+    }
+
+    fn detect_finance_skill_trigger(msg: &str) -> Option<&'static str> {
+        let normalized = msg.trim().to_lowercase();
+        let triggers: [(&str, [&str; 3]); 5] = [
+            ("premarket_scan", ["盘前扫描", "premarket scan", "pre-market scan"]),
+            ("intraday_check", ["盘中检查", "盘中评估", "intraday check"]),
+            ("postmarket_review", ["收盘复盘", "postmarket review", "post-market review"]),
+            ("watchlist_cleanup", ["自选清理", "自选维护", "watchlist cleanup"]),
+            ("emergency_stop", ["紧急止损", "emergency stop", "panic stop"]),
+        ];
+        triggers.into_iter().find_map(|(skill, skill_triggers)| {
+            skill_triggers
+                .iter()
+                .any(|trigger| normalized.contains(&trigger.to_lowercase()))
+                .then_some(skill)
+        })
+    }
+
+    fn resolve_finance_skill_dispatch(
+        &self,
+        msg: &str,
+        finance: Option<&crate::config::FinanceScenarioConfig>,
+    ) -> Option<String> {
+        let finance = finance?;
+        let matched = Self::detect_finance_skill_trigger(msg)?;
+        let binding = Self::finance_skill_binding(finance, matched)?;
+        if binding.mode == "installed_skill" {
+            binding
+                .skill_name
+                .as_ref()
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| format!("skill:{name}"))
+        } else {
+            Some(format!("{FINANCE_SCENARIO_PREFIX}{matched}"))
+        }
+    }
+
+    fn finance_hard_rules(finance: &crate::config::FinanceScenarioConfig) -> String {
+        format!(
+            "- 所有下单需人工确认（leashed）\n\
+             - 未经风控 approved 的 intent 不可执行\n\
+             - 单票仓位 <= {}%\n\
+             - 单行业仓位 <= {}%\n\
+             - 日亏 >= {}% 触发熔断\n\
+             - 委托数量必须为 {} 的整数倍\n\
+             - T+1、涨跌停不追/不抄、ST/停牌/退市/非交易时段禁止交易\n\
+             - 任何角色不可将 rejected 改为 approved",
+            finance.risk_preset.single_position_limit_pct,
+            finance.risk_preset.single_sector_limit_pct,
+            finance.risk_preset.daily_loss_circuit_breaker_pct,
+            finance.risk_preset.board_lot_size,
+        )
+    }
+
+    fn normalize_finance_artifact_key(raw: &str) -> String {
+        raw.trim()
+            .to_ascii_lowercase()
+            .replace(['（', '）', '(', ')'], "")
+            .replace([' ', '-'], "_")
+    }
+
+    fn apply_finance_intent_field(intent: &mut FinanceTradeIntent, raw_key: &str, value: &str) {
+        match Self::normalize_finance_artifact_key(raw_key).as_str() {
+            "symbol" => intent.symbol = Some(value.to_string()),
+            "market" => intent.market = Some(value.to_string()),
+            "direction" => intent.direction = Some(value.to_string()),
+            "thesis" => intent.thesis = Some(value.to_string()),
+            "confidence" => intent.confidence = Some(value.to_string()),
+            "entry_rule" => intent.entry_rule = Some(value.to_string()),
+            "exit_rule" => intent.exit_rule = Some(value.to_string()),
+            "max_position_pct" => intent.max_position_pct = Some(value.to_string()),
+            "time_horizon" => intent.time_horizon = Some(value.to_string()),
+            "valid_until" => intent.valid_until = Some(value.to_string()),
+            "risk_notes" => intent.risk_notes = Some(value.to_string()),
+            "approval_status" => intent.approval_status = Some(value.to_string()),
+            "adjusted_position_pct" => intent.adjusted_position_pct = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    fn intent_has_content(intent: &FinanceTradeIntent) -> bool {
+        intent.symbol.is_some()
+            || intent.market.is_some()
+            || intent.direction.is_some()
+            || intent.thesis.is_some()
+            || intent.confidence.is_some()
+            || intent.entry_rule.is_some()
+            || intent.exit_rule.is_some()
+            || intent.max_position_pct.is_some()
+            || intent.time_horizon.is_some()
+            || intent.valid_until.is_some()
+            || intent.risk_notes.is_some()
+            || intent.approval_status.is_some()
+            || intent.adjusted_position_pct.is_some()
+    }
+
+    fn extract_finance_stage_labels(content: &str) -> Vec<String> {
+        content
+            .lines()
+            .map(|line| line.trim())
+            .filter_map(|line| line.strip_prefix("## ").map(|v| v.trim().to_string()))
+            .filter(|line| !line.is_empty() && !line.eq_ignore_ascii_case("TradeIntent"))
+            .take(12)
+            .collect()
+    }
+
+    fn extract_finance_artifact(
+        content: &str,
+        pup_key: &str,
+        pup_name: &str,
+    ) -> Option<FinanceArtifact> {
+        let raw_lines: Vec<String> = content
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower.contains("tradeintent")
+                    || lower.contains("symbol")
+                    || lower.contains("direction")
+                    || lower.contains("entry_rule")
+                    || lower.contains("exit_rule")
+                    || lower.contains("approval_status")
+                    || lower.contains("max_position_pct")
+            })
+            .map(|line| line.to_string())
+            .collect();
+        if raw_lines.is_empty() {
+            return None;
+        }
+
+        let mut intents: Vec<FinanceTradeIntent> = Vec::new();
+        let mut current = FinanceTradeIntent::default();
+        for line in &raw_lines {
+            let Some((raw_key, raw_value)) = line
+                .trim_start_matches(['-', '*', ' '])
+                .split_once(':')
+                .or_else(|| line.trim_start_matches(['-', '*', ' ']).split_once('：'))
+            else {
+                continue;
+            };
+            let value = raw_value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            let normalized = Self::normalize_finance_artifact_key(raw_key);
+            if normalized == "symbol" && Self::intent_has_content(&current) {
+                intents.push(current);
+                current = FinanceTradeIntent::default();
+            }
+            Self::apply_finance_intent_field(&mut current, raw_key, value);
+            current.raw_lines.push(line.clone());
+        }
+        if Self::intent_has_content(&current) {
+            intents.push(current);
+        }
+        if intents.is_empty() {
+            return None;
+        }
+
+        Some(FinanceArtifact {
+            scenario_preset: pup_key
+                .strip_prefix(FINANCE_SCENARIO_PREFIX)
+                .map(|preset| preset.to_string()),
+            source_pup_key: Some(pup_key.to_string()),
+            source_pup_name: Some(pup_name.to_string()),
+            stage_labels: Self::extract_finance_stage_labels(content),
+            intents,
+            raw_lines,
+        })
+    }
+
+    fn finance_mode_system_block(
+        &self,
+        finance: &crate::config::FinanceScenarioConfig,
+    ) -> String {
+        let role_bindings = finance
+            .role_bindings
+            .iter()
+            .map(|binding| {
+                format!(
+                    "- {} => {}",
+                    binding.role,
+                    binding.pup_key.as_deref().unwrap_or("未绑定")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let connector_bindings = finance
+            .connector_bindings
+            .iter()
+            .map(|binding| {
+                format!(
+                    "- {} => {}；运行时只调用 mcp__{}__*",
+                    binding.connector,
+                    binding.server_name.as_deref().unwrap_or("未绑定"),
+                    binding.connector
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "## 金融交易场景模式\n\
+             当前请求处于 Finance mode。请将角色、技能预设与连接器实现解耦。\n\n\
+             ## 角色绑定\n\
+             {}\n\n\
+             ## 连接器绑定\n\
+             {}\n\n\
+             ## TradeIntent 契约\n\
+             所有角色之间只通过 TradeIntent 传递。\n\
+             字段：symbol / market / direction(buy|sell) / thesis / confidence / entry_rule / exit_rule / max_position_pct / time_horizon / valid_until / risk_notes / approval_status / adjusted_position_pct\n\
+             只有风控员可以写 approval_status 与 adjusted_position_pct。\n\n\
+             ## 硬规则\n\
+             {}\n\n\
+             若当前请求与研究、策略、风控、执行或复盘相关，优先遵守上述边界；\
+             连接器 prompt 只引用 mcp__intel__* / mcp__risk__* / mcp__exec__*。\n\
+             如果你形成了交易意图，最终请追加一个 `## TradeIntent` 小节，并使用标准 `field: value` 行输出字段。",
+            role_bindings,
+            connector_bindings,
+            Self::finance_hard_rules(finance),
+        )
+    }
+
+    fn finance_stage_instructions(preset: &str, role: &str) -> &'static str {
+        match (preset, role) {
+            ("premarket_scan", "researcher") => {
+                "你负责盘前扫描的第一步：发现候选标的，输出 TradeIntent 列表。"
+            }
+            ("premarket_scan", "strategist") => {
+                "你负责盘前扫描的第二步：校正 TradeIntent 的入场、出场、仓位和时效。"
+            }
+            ("premarket_scan", "risk_officer") => {
+                "你负责盘前扫描的第三步：审批每笔 TradeIntent，仅可写 approval_status / adjusted_position_pct。"
+            }
+            ("premarket_scan", "executor") => {
+                "你负责盘前扫描的最后一步：只执行 approved 或 reduced 的交易意图。"
+            }
+            ("intraday_check", "researcher") => {
+                "你负责盘中检查的第一步：确认是否出现新的盘中信号，没有信号要明确写出。"
+            }
+            ("intraday_check", "strategist") => {
+                "你负责盘中检查的第二步：校正盘中信号对应的 TradeIntent。"
+            }
+            ("intraday_check", "risk_officer") => {
+                "你负责盘中检查的第三步：审批盘中 TradeIntent，没有 approved 时不得继续执行。"
+            }
+            ("intraday_check", "executor") => {
+                "你负责盘中检查的最后一步：只执行已经 approved / reduced 的盘中意图。"
+            }
+            ("postmarket_review", "reviewer") => {
+                "你负责收盘复盘：只读总结当天交易、归因并提出改进建议。"
+            }
+            ("watchlist_cleanup", "researcher") => {
+                "你负责自选清理：做周度深度审查并输出自选变更建议与理由。"
+            }
+            ("emergency_stop", "executor") => {
+                "你负责紧急止损第一步：优先撤销未成交委托，并汇报当前账户和持仓状态。"
+            }
+            ("emergency_stop", "risk_officer") => {
+                "你负责紧急止损第二步：评估是否需要减仓，给出风控结论与后续建议。"
+            }
+            _ => "请严格遵守当前金融场景阶段职责执行。",
+        }
+    }
+
+    async fn run_finance_scenario_preset(
+        &self,
+        original_msg: &str,
+        preset: &str,
+        events: SharedEventSink,
+    ) -> Result<String> {
+        let finance = self.finance_scenario_config();
+        let role_order: Vec<&str> = match preset {
+            "premarket_scan" => vec!["researcher", "strategist", "risk_officer", "executor"],
+            "intraday_check" => vec!["researcher", "strategist", "risk_officer", "executor"],
+            "postmarket_review" => vec!["reviewer"],
+            "watchlist_cleanup" => vec!["researcher"],
+            "emergency_stop" => vec!["executor", "risk_officer"],
+            other => return Ok(format!("未知的金融场景预设：{other}")),
+        };
+
+        let mut stages: Vec<(String, String)> = Vec::new();
+        for role in role_order {
+            let Some(bound_pup) = Self::finance_role_binding(&finance, role) else {
+                return Ok(format!("金融场景角色 `{role}` 尚未绑定具体专家，无法执行 `{preset}`。"));
+            };
+            stages.push((role.to_string(), bound_pup));
+        }
+
+        let owner_summary = self
+            .context_builder
+            .get_owner_summary(&self.file_layer.read_owner_profile().unwrap_or_default())
+            .await;
+        let pup_ctx = PupContext {
+            history: self.context_builder.build_history().await,
+            active_rules: self
+                .context_builder
+                .memory_injector
+                .fetch_active_rules(&MemoryBudget::default())
+                .await
+                .unwrap_or_default(),
+        };
+
+        let mut upstream_outputs: Vec<(String, String, String)> = Vec::new();
+        for (index, (role, pup_key)) in stages.iter().enumerate() {
+            emit_event(
+                events.as_ref(),
+                "stream_activity",
+                ActivityEvent {
+                    kind: "routing".into(),
+                    label: format!("finance:{preset}:{}", pup_display_name(pup_key)),
+                },
+            );
+
+            let upstream_block = if upstream_outputs.is_empty() {
+                "无上游输出，本阶段直接基于用户请求开始。".to_string()
+            } else {
+                upstream_outputs
+                    .iter()
+                    .map(|(prev_role, prev_pup, output)| {
+                        format!("### 上游阶段 {prev_role} ({prev_pup})\n{output}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            };
+
+            let stage_msg = format!(
+                "你正在执行金融场景系统编排。\n\
+                 预设链路：{preset}\n\
+                 当前阶段：{}/{} - {} ({})\n\n\
+                 ## 用户原始请求\n{}\n\n\
+                 ## 当前阶段职责\n{}\n\n\
+                 ## 数据契约\n\
+                 所有角色之间只通过 TradeIntent 传递。\n\
+                 字段：symbol / market / direction / thesis / confidence / entry_rule / exit_rule / max_position_pct / time_horizon / valid_until / risk_notes / approval_status / adjusted_position_pct\n\
+                 只有风控员可以写 approval_status 与 adjusted_position_pct。\n\n\
+                 ## 连接器接口\n\
+                 只使用 mcp__intel__* / mcp__risk__* / mcp__exec__* 别名，不依赖具体实现名。\n\n\
+                 ## 硬规则\n{}\n\n\
+                 ## 上游输出\n{}\n\n\
+                 ## 执行要求\n\
+                 严格履行本阶段职责，不得越权；若上游结果不足，请明确指出缺失点。\n\
+                 如果本阶段产出了 TradeIntent，请在回答末尾追加 `## TradeIntent` 小节，并按 `field: value` 逐行输出标准字段。",
+                index + 1,
+                stages.len(),
+                role,
+                pup_display_name(pup_key),
+                original_msg,
+                Self::finance_stage_instructions(preset, role),
+                Self::finance_hard_rules(&finance),
+                upstream_block,
+            );
+
+            let result = self
+                .run_pup_for_channel(
+                    pup_key,
+                    &stage_msg,
+                    &owner_summary,
+                    &|_, _| {},
+                    Some(pup_ctx.clone()),
+                )
+                .await
+                .unwrap_or_else(|e| format!("Error: {e}"));
+
+            upstream_outputs.push((role.clone(), pup_key.clone(), result));
+        }
+
+        let combined = upstream_outputs
+            .into_iter()
+            .map(|(role, pup_key, output)| {
+                format!("## {} ({})\n\n{}", role, pup_display_name(&pup_key), output)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        Ok(combined)
+    }
+
     async fn resolve_pup(&self, key: &str) -> Result<Arc<dyn SpecialistPup>> {
         if let Some(cfg) = self.configured_pup(key).await {
             if !cfg.enabled {
@@ -1095,15 +1546,18 @@ impl AlphaPup {
         &self,
         msg: String,
         forced_pup: Option<String>,
+        scenario_mode: Option<String>,
         events: SharedEventSink,
     ) {
         debug!(
-            "[alpha] process_user_message_stream: msg_len={} forced_pup={forced_pup:?}",
-            msg.len()
+            "[alpha] process_user_message_stream: msg_len={} forced_pup={forced_pup:?} scenario_mode={scenario_mode:?}",
+            msg.len(),
         );
         self.abort_flag.store(false, Ordering::Relaxed);
 
-        let result = self.do_stream(&msg, forced_pup, events.clone()).await;
+        let result = self
+            .do_stream(&msg, forced_pup, scenario_mode.clone(), events.clone())
+            .await;
         match result {
             Ok((reply, pup_key)) => {
                 debug!(
@@ -1117,6 +1571,13 @@ impl AlphaPup {
                     "[alpha] emitting stream_done pup={} aborted={aborted}",
                     pup_display_name(&pup_key)
                 );
+                let finance_artifact = if scenario_mode.as_deref() == Some("finance")
+                    || pup_key.starts_with(FINANCE_SCENARIO_PREFIX)
+                {
+                    Self::extract_finance_artifact(&reply, &pup_key, &pup_display_name(&pup_key))
+                } else {
+                    None
+                };
                 emit_event(
                     events.as_ref(),
                     "stream_done",
@@ -1128,6 +1589,7 @@ impl AlphaPup {
                         } else {
                             reply.clone()
                         },
+                        finance_artifact: if aborted { None } else { finance_artifact },
                     },
                 );
 
@@ -1160,8 +1622,11 @@ impl AlphaPup {
         &self,
         msg: &str,
         forced_pup: Option<String>,
+        scenario_mode: Option<String>,
         events: SharedEventSink,
     ) -> Result<(String, String)> {
+        let finance_mode = scenario_mode.as_deref() == Some("finance");
+        let finance = finance_mode.then(|| self.finance_scenario_config());
         let owner_md = self.file_layer.read_owner_profile().unwrap_or_default();
         let owner_summary = self.context_builder.get_owner_summary(&owner_md).await;
         // v0.1.12: hybrid retrieval with rule force-injection + Weibull decay
@@ -1192,7 +1657,12 @@ impl AlphaPup {
             .filter(|t| t.status == "pending" || t.status == "in_progress")
             .collect();
 
-        let pup_key = if let Some(forced) = forced_pup {
+        let finance_routed_pup = if finance_mode && forced_pup.is_none() {
+            self.resolve_finance_skill_dispatch(msg, finance.as_ref())
+        } else {
+            None
+        };
+        let pup_key = if let Some(forced) = finance_routed_pup.or(forced_pup) {
             forced
         } else if let Some(mention) = self.router.extract_at_mention(msg).await {
             mention
@@ -1230,6 +1700,13 @@ impl AlphaPup {
                 let output = self.run_dag(msg, required_pups, events.clone()).await?;
                 return Ok((output, pup_key));
             }
+        }
+
+        if let Some(preset) = pup_key.strip_prefix(FINANCE_SCENARIO_PREFIX) {
+            let output = self
+                .run_finance_scenario_preset(msg, preset, events.clone())
+                .await?;
+            return Ok((output, pup_key));
         }
 
         if let Some(skill_name) = pup_key.strip_prefix("skill:") {
@@ -1340,6 +1817,7 @@ impl AlphaPup {
                     &pup_history,
                     &relevant_memories,
                     &pending_tasks,
+                    finance.as_ref(),
                     events.clone(),
                 )
                 .await?;
@@ -1354,6 +1832,9 @@ impl AlphaPup {
             .map(|c| c.system_prompt_override);
         if let Ok(pup) = self.resolve_pup(&pup_key).await {
             let mut enriched_memories = relevant_memories.clone();
+            if let Some(finance) = finance.as_ref() {
+                enriched_memories.push(self.finance_mode_system_block(finance));
+            }
             if !pending_tasks.is_empty() {
                 let task_lines: String = pending_tasks
                     .iter()
@@ -1441,6 +1922,7 @@ impl AlphaPup {
                 &fallback_history,
                 &relevant_memories,
                 &pending_tasks,
+                finance.as_ref(),
                 events.clone(),
             )
             .await?;
@@ -1455,6 +1937,7 @@ impl AlphaPup {
         history: &[LlmMessage],
         memories: &[String],
         pending_tasks: &[TaskRecord],
+        finance: Option<&crate::config::FinanceScenarioConfig>,
         events: SharedEventSink,
     ) -> Result<String> {
         let mut system_content = if owner_summary.contains("## Boundaries") {
@@ -1493,6 +1976,13 @@ impl AlphaPup {
                 .join("\n");
             system_content.push_str(&format!(
                 "\n\n## 当前任务\n{tasks_str}\n\n使用 task_update 工具更新任务状态（开始时设为 in_progress，完成时设为 done）。"
+            ));
+        }
+
+        if let Some(finance) = finance {
+            system_content.push_str(&format!(
+                "\n\n{}",
+                self.finance_mode_system_block(finance)
             ));
         }
 
@@ -3093,6 +3583,7 @@ impl AlphaPup {
                 &pup_history,
                 &relevant_memories,
                 &pending_tasks,
+                None,
                 null_events,
             )
             .await?;
@@ -3965,6 +4456,16 @@ fn format_activity_entry(kind: &str, label: &str) -> String {
 }
 
 pub fn pup_display_name(key: &str) -> String {
+    if let Some(preset) = key.strip_prefix(FINANCE_SCENARIO_PREFIX) {
+        return match preset {
+            "premarket_scan" => "Finance Scenario · Premarket Scan".to_string(),
+            "intraday_check" => "Finance Scenario · Intraday Check".to_string(),
+            "postmarket_review" => "Finance Scenario · Postmarket Review".to_string(),
+            "watchlist_cleanup" => "Finance Scenario · Watchlist Cleanup".to_string(),
+            "emergency_stop" => "Finance Scenario · Emergency Stop".to_string(),
+            _ => format!("Finance Scenario · {preset}"),
+        };
+    }
     if let Some(skill_name) = key.strip_prefix("skill:") {
         return format!("⚡ {skill_name}");
     }

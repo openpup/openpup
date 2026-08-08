@@ -1285,6 +1285,11 @@ impl MCPOrchestrator {
         self.catalog_snapshot().await.openai_specs.clone()
     }
 
+    pub async fn refresh_catalog_aliases(&self) {
+        self.rebuild_catalog_snapshot().await;
+        self.spawn_warm_tool_embeddings_from_cache().await;
+    }
+
     /// Resolve a sanitized fn_name (as returned by the LLM) back to the original
     /// (server, tool_name) pair needed to call the remote MCP server.
     pub async fn resolve_fn_name(&self, fn_name: &str) -> Option<(String, String)> {
@@ -1373,6 +1378,7 @@ impl MCPOrchestrator {
     }
 
     fn build_catalog_snapshot(cache: &HashMap<String, Vec<McpToolInfo>>) -> McpCatalogSnapshot {
+        let finance_aliases = Self::finance_connector_alias_targets();
         let mut tools: Vec<McpToolInfo> = cache
             .values()
             .flat_map(|tool_list| tool_list.iter().cloned())
@@ -1385,14 +1391,33 @@ impl MCPOrchestrator {
         let mut openai_specs = Vec::with_capacity(tools.len());
 
         for tool in tools {
-            let entry = Arc::new(Self::catalog_entry_from_tool(tool));
-            openai_specs.push(entry.openai_spec.clone());
+            let actual_server = tool.server.clone();
+            let original_entry = Arc::new(Self::catalog_entry_from_tool(tool.clone(), &actual_server));
+            openai_specs.push(original_entry.openai_spec.clone());
             fn_name_map.insert(
-                entry.fn_name.clone(),
-                (entry.raw.server.clone(), entry.raw.name.clone()),
+                original_entry.fn_name.clone(),
+                (actual_server.clone(), original_entry.raw.name.clone()),
             );
-            by_fn_name.insert(entry.fn_name.clone(), entry.clone());
-            entries.push(entry);
+            by_fn_name.insert(original_entry.fn_name.clone(), original_entry.clone());
+            entries.push(original_entry);
+
+            for alias in finance_aliases
+                .iter()
+                .filter(|(_, target_server)| target_server == &actual_server)
+                .map(|(alias, _)| alias)
+            {
+                let alias_entry = Arc::new(Self::catalog_entry_from_tool(tool.clone(), alias));
+                if by_fn_name.contains_key(&alias_entry.fn_name) {
+                    continue;
+                }
+                openai_specs.push(alias_entry.openai_spec.clone());
+                fn_name_map.insert(
+                    alias_entry.fn_name.clone(),
+                    (actual_server.clone(), alias_entry.raw.name.clone()),
+                );
+                by_fn_name.insert(alias_entry.fn_name.clone(), alias_entry.clone());
+                entries.push(alias_entry);
+            }
         }
 
         McpCatalogSnapshot {
@@ -1403,18 +1428,23 @@ impl MCPOrchestrator {
         }
     }
 
-    fn catalog_entry_from_tool(tool: McpToolInfo) -> CachedMcpTool {
+    fn catalog_entry_from_tool(tool: McpToolInfo, exposed_server: &str) -> CachedMcpTool {
         let fn_name = format!(
             "mcp__{}__{}",
-            sanitize_tool_name(&tool.server),
+            sanitize_tool_name(exposed_server),
             sanitize_tool_name(&tool.name)
         );
         let schema = Self::normalize_input_schema(&tool.input_schema);
+        let description = if exposed_server == tool.server {
+            format!("[{}] {}", tool.server, tool.description)
+        } else {
+            format!("[{}→{}] {}", exposed_server, tool.server, tool.description)
+        };
         let openai_spec = serde_json::json!({
           "type": "function",
           "function": {
             "name": fn_name,
-            "description": format!("[{}] {}", tool.server, tool.description),
+            "description": description,
             "parameters": schema,
           }
         });
@@ -1439,6 +1469,16 @@ impl MCPOrchestrator {
             parameter_descriptions,
             doc_hash,
         }
+    }
+
+    fn finance_connector_alias_targets() -> Vec<(String, String)> {
+        crate::config::load_fast()
+            .scenario
+            .finance
+            .connector_bindings
+            .into_iter()
+            .filter_map(|binding| binding.server_name.map(|server_name| (binding.connector, server_name)))
+            .collect()
     }
 
     fn normalize_input_schema(schema: &serde_json::Value) -> serde_json::Value {

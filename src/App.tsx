@@ -19,12 +19,16 @@ import { KnowledgeBase } from './components/KnowledgeBase';
 import { KnowledgeSettings } from './components/KnowledgeSettings';
 import { DesktopSettings } from './components/DesktopSettings';
 import { GroupChat } from './components/GroupChat';
+import { FinanceConfigSheet } from './components/FinanceConfigSheet';
+import { FinancePreviewSidebar } from './components/FinancePreviewSidebar';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
+import { prepareFinanceScenarioInput } from './utils/financeScenario';
 import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
 import { useChatStore } from './stores/chatStore';
 import { useUIStore } from './stores/uiStore';
 import { useAppStore } from './stores/appStore';
+import { useScenarioStore } from './stores/scenarioStore';
 import type { ChatMessage, StreamingPupState, ActivityStep, TokenUsage } from './stores/chatStore';
 import type { NavItem } from './stores/uiStore';
 import type { PupConfig, MemoryChip, ContextStats } from './stores/appStore';
@@ -34,6 +38,7 @@ interface StreamDonePayload {
   pup_key: string;
   pup_name: string;
   content: string;
+  finance_artifact?: import('./stores/chatStore').FinanceArtifactPayload;
 }
 
 const ACTIVITY_ICON: Record<string, string> = {
@@ -921,6 +926,7 @@ const AppInner: React.FC = () => {
   const isMobile = isMobilePlatform(platform);
   const showDesktopControls = platform === 'windows' || platform === 'linux';
   const showDesktopTitlebar = !isMobile;
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [groupChatFullEnabled] = useState(isGroupChatFullEnabled);
 
   // ── Zustand stores ──────────────────────────────────────────────────────────
@@ -936,6 +942,7 @@ const AppInner: React.FC = () => {
     theme, setTheme, activeNav, setActiveNav, channelDetailMode, setChannelDetailMode,
     sidebarCollapsed, setSidebarCollapsed, membersExpanded, setMembersExpanded,
     toolsExpanded, setToolsExpanded, configExpanded, setConfigExpanded,
+    financeConfigOpen, setFinanceConfigOpen,
     isMaximized, setIsMaximized, selectedPupKey, setSelectedPupKey,
     memoriesTab, setMemoriesTab,
   } = useUIStore();
@@ -949,6 +956,7 @@ const AppInner: React.FC = () => {
     importPath, setImportPath, settingsMsg, setSettingsMsg,
     settingsErr, setSettingsErr,
   } = useAppStore();
+  const { mode: scenarioMode, finance: financeScenario, setMode: setScenarioMode } = useScenarioStore();
   const activeNavRef = useRef<string>('chat');
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
   // Auto-expand sidebar section when an item inside it becomes active
@@ -1028,6 +1036,19 @@ const AppInner: React.FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (scenarioMode !== 'finance' || execMode === 'leashed') return;
+    void invoke('set_execution_mode', { mode: 'leashed' })
+      .then(() => setExecMode('leashed'))
+      .catch(() => {});
+  }, [scenarioMode, execMode, setExecMode]);
+
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Track window maximized state for custom titlebar button icon (Windows & Linux)
   useEffect(() => {
     if (!showDesktopControls) return;
@@ -1090,7 +1111,7 @@ const AppInner: React.FC = () => {
         setStreamingReasoningContent((p) => p + e.payload);
       }),
       listen<StreamDonePayload>('stream_done', (e) => {
-        const { pup_key, pup_name, content } = e.payload;
+        const { pup_key, pup_name, content, finance_artifact } = e.payload;
         // Use backend authoritative content — immune to token ordering issues.
         streamingContentRef.current = '';
         setStreamingContent('');
@@ -1101,7 +1122,7 @@ const AppInner: React.FC = () => {
         if (content) {
           setMessages((msgs) => [
             ...msgs,
-            { id: crypto.randomUUID(), role: 'assistant', content, pup_key, pup_name },
+            { id: crypto.randomUUID(), role: 'assistant', content, pup_key, pup_name, finance_artifact },
           ]);
           void loadMemoryChips();
           // Load context stats after message completes
@@ -1214,8 +1235,14 @@ const AppInner: React.FC = () => {
     setStreamingSteps([]);
     setStreamingPupName({ key: 'alpha', name: 'Alpha' });
     setSending(true);
-    const forcedPup = selectedPupKey !== 'alpha' ? selectedPupKey : null;
-    await invoke('send_message', { input: trimmed, forcedPup }).catch((e: unknown) => {
+    const prepared = scenarioMode === 'finance'
+      ? prepareFinanceScenarioInput(trimmed, selectedPupKey)
+      : { input: trimmed, forcedPup: selectedPupKey !== 'alpha' ? selectedPupKey : null };
+    await invoke('send_message', {
+      input: prepared.input,
+      forcedPup: prepared.forcedPup,
+      scenarioMode: scenarioMode === 'finance' ? 'finance' : null,
+    }).catch((e: unknown) => {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: `⚠️ ${String(e)}`, pup_key: 'alpha', pup_name: 'Alpha' }]);
       setStreamingContent('');
       setStreamingReasoningContent('');
@@ -1410,6 +1437,25 @@ const AppInner: React.FC = () => {
     </svg>
   );
 
+  const FinanceModeIcon = ({ active }: { active: boolean }) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? '#0E6A4C' : 'currentColor' }}>
+      <path d="M4 19h16" />
+      <path d="M6 16l3-5 3 2 4-7 2 3" />
+      <circle cx="6" cy="16" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="11" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="13" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="16" cy="6" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="18" cy="9" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+
+  const GearIcon = ({ active }: { active: boolean }) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? '#0E6A4C' : 'currentColor' }}>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.9 1.9 0 0 1 0 2.7 1.9 1.9 0 0 1-2.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.9 1.9 0 0 1-1.9 1.9 1.9 1.9 0 0 1-1.9-1.9v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.9 1.9 0 0 1-2.7 0 1.9 1.9 0 0 1 0-2.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.9 1.9 0 0 1-1.9-1.9A1.9 1.9 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.9 1.9 0 0 1 0-2.7 1.9 1.9 0 0 1 2.7 0l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a1.9 1.9 0 0 1 1.9-1.9A1.9 1.9 0 0 1 13.2 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.9 1.9 0 0 1 2.7 0 1.9 1.9 0 0 1 0 2.7l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6h.2A1.9 1.9 0 0 1 22 12a1.9 1.9 0 0 1-1.9 1.9h-.2a1 1 0 0 0-.9.6z" />
+    </svg>
+  );
+
   const isPrimaryView = activeNav === 'chat' || activeNav === 'channel' || activeNav === 'groups';
   const isChatActive = activeNav === 'chat';
   const getPupAccent = (pupKey: string) => pupAccentColor(pupKey);
@@ -1420,6 +1466,7 @@ const AppInner: React.FC = () => {
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
     : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
     : String(n);
+  const showFinancePreviewSidebar = scenarioMode === 'finance' && !isMobile && windowWidth >= 1280;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
@@ -1584,6 +1631,47 @@ const AppInner: React.FC = () => {
             ))}
           </div>
           <div className="flex-1" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: '10px' }}>
+            <button
+              onClick={() => setScenarioMode(scenarioMode === 'finance' ? 'default' : 'finance')}
+              title={lang === 'zh' ? '切换金融交易场景模式' : 'Toggle finance trading scenario'}
+              style={{
+                width: '18px',
+                height: '34px',
+                borderRadius: '9px',
+                border: scenarioMode === 'finance' ? '0.5px solid rgba(16,59,47,0.18)' : '0.5px solid transparent',
+                boxShadow: scenarioMode === 'finance' ? '0 8px 20px rgba(16,59,47,0.16)' : 'none',
+                background: scenarioMode === 'finance' ? 'linear-gradient(180deg, rgba(16,59,47,0.18), rgba(16,59,47,0.08))' : 'var(--color-background-secondary)',
+                color: scenarioMode === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                alignSelf: 'center',
+              }}
+            >
+              <FinanceModeIcon active={scenarioMode === 'finance'} />
+            </button>
+            <button
+              onClick={() => setFinanceConfigOpen(true)}
+              title={lang === 'zh' ? '打开金融场景配置' : 'Open finance configuration'}
+              style={{
+                width: '18px',
+                height: '34px',
+                borderRadius: '9px',
+                border: financeConfigOpen ? '0.5px solid rgba(16,59,47,0.18)' : '0.5px solid transparent',
+                background: financeConfigOpen ? 'rgba(16,59,47,0.08)' : 'var(--color-background-secondary)',
+                color: financeConfigOpen ? '#0E6A4C' : 'var(--color-text-tertiary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                alignSelf: 'center',
+              }}
+            >
+              <GearIcon active={financeConfigOpen} />
+            </button>
+          </div>
           <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: '4px' }}>
             <button
               onClick={() => setSidebarCollapsed(false)}
@@ -1743,6 +1831,69 @@ const AppInner: React.FC = () => {
           {/* Footer utilities */}
           <div className="px-2 pb-3 pt-2">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                alignItems: 'center',
+                gap: '6px',
+              }}>
+                <button
+                  onClick={() => setScenarioMode(scenarioMode === 'finance' ? 'default' : 'finance')}
+                  title={lang === 'zh' ? '切换金融交易场景模式' : 'Toggle finance trading scenario'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    width: '100%',
+                    minHeight: '30px',
+                    padding: '5px 8px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    fontWeight: scenarioMode === 'finance' ? 600 : 500,
+                    color: scenarioMode === 'finance' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                    background: scenarioMode === 'finance' ? 'rgba(16,59,47,0.08)' : 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    minWidth: 0,
+                  }}
+                >
+                  <span style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '5px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: scenarioMode === 'finance' ? 'rgba(16,59,47,0.12)' : 'transparent',
+                    color: scenarioMode === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
+                    flexShrink: 0,
+                  }}>
+                    <FinanceModeIcon active={scenarioMode === 'finance'} />
+                  </span>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {lang === 'zh' ? '金融模式' : 'Finance Mode'}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setFinanceConfigOpen(true)}
+                  title={lang === 'zh' ? '打开金融场景配置' : 'Open finance configuration'}
+                  style={{
+                    width: '30px',
+                    height: '30px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: financeConfigOpen ? 'rgba(16,59,47,0.08)' : 'transparent',
+                    color: financeConfigOpen ? '#0E6A4C' : 'var(--color-text-tertiary)',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <GearIcon active={financeConfigOpen} />
+                </button>
+              </div>
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -1958,7 +2109,9 @@ const AppInner: React.FC = () => {
                 <textarea
                   ref={inputRef}
                   rows={1}
-                  placeholder={t('chat_placeholder_alpha', lang)}
+                  placeholder={scenarioMode === 'finance'
+                    ? (lang === 'zh' ? '试试输入：盘前扫描 / 盘中检查 / 收盘复盘 / 自选清理 / 紧急止损' : 'Try: premarket scan / intraday check / postmarket review / watchlist cleanup / emergency stop')
+                    : t('chat_placeholder_alpha', lang)}
                   value={input}
                   onChange={(e) => {
                     setInput(e.target.value);
@@ -2142,11 +2295,21 @@ const AppInner: React.FC = () => {
           )}
         </div>
 
+        {showFinancePreviewSidebar && (
+          <FinancePreviewSidebar
+            finance={financeScenario}
+            messages={messages}
+            streamingSteps={streamingSteps}
+            streamingPup={streamingPupName}
+          />
+        )}
+
       {permissionRequest && (
         <PermissionDialog request={permissionRequest}
           onApprove={(remember) => void handleApprove(remember)}
           onDeny={() => void handleDeny()} />
       )}
+      <FinanceConfigSheet open={financeConfigOpen} onClose={() => setFinanceConfigOpen(false)} />
       </div>{/* close flex-1 wrapper */}
     </div>
   );

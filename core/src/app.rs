@@ -169,10 +169,11 @@ impl OpenPupApp {
         &self,
         input: String,
         forced_pup: Option<String>,
+        scenario_mode: Option<String>,
         event_sink: SharedEventSink,
     ) {
         self.alpha
-            .process_user_message_stream(input, forced_pup, event_sink)
+            .process_user_message_stream(input, forced_pup, scenario_mode, event_sink)
             .await;
     }
 
@@ -344,6 +345,21 @@ impl OpenPupApp {
         }
         self.persist_knowledge_config()?;
         Ok(self.knowledge_config_snapshot())
+    }
+
+    pub fn finance_scenario_config(&self) -> crate::config::FinanceScenarioConfig {
+        crate::config::load_fast().scenario.finance
+    }
+
+    pub async fn save_finance_scenario_config(
+        &self,
+        finance: crate::config::FinanceScenarioConfig,
+    ) -> Result<crate::config::FinanceScenarioConfig> {
+        let mut cfg = crate::config::load();
+        cfg.scenario.finance = finance.clone();
+        crate::config::save(&cfg)?;
+        self.mcp_orchestrator.refresh_catalog_aliases().await;
+        Ok(finance)
     }
 
     pub async fn list_kg_entities(
