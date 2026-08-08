@@ -19,7 +19,6 @@ import { KnowledgeBase } from './components/KnowledgeBase';
 import { KnowledgeSettings } from './components/KnowledgeSettings';
 import { DesktopSettings } from './components/DesktopSettings';
 import { GroupChat } from './components/GroupChat';
-import { FinanceWorkbench } from './components/FinanceWorkbench';
 import { usePackChannel } from './hooks/usePackChannel';
 import { LangProvider, useLang, t } from './i18n';
 import { buildPupMetaByKey, pupAccentColor, pupTagStyle } from './utils/pupVisuals';
@@ -954,7 +953,7 @@ const AppInner: React.FC = () => {
   useEffect(() => { activeNavRef.current = activeNav; }, [activeNav]);
   // Auto-expand sidebar section when an item inside it becomes active
   useEffect(() => {
-    const toolsItems: NavItem[] = ['finance', 'memories', 'timeline', 'tasks', 'skills', 'knowledge'];
+    const toolsItems: NavItem[] = ['memories', 'timeline', 'tasks', 'skills', 'knowledge'];
     const configItems: NavItem[] = ['pups', 'mcp', 'bridge', 'settings'];
     if (toolsItems.includes(activeNav)) setToolsExpanded(true);
     if (configItems.includes(activeNav)) setConfigExpanded(true);
@@ -1411,18 +1410,6 @@ const AppInner: React.FC = () => {
     </svg>
   );
 
-  const FinanceEntryIcon = ({ active }: { active: boolean }) => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? '#0E6A4C' : 'currentColor' }}>
-      <path d="M4 19h16" />
-      <path d="M6 16l3-5 3 2 4-7 2 3" />
-      <circle cx="6" cy="16" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="9" cy="11" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="13" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="16" cy="6" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="18" cy="9" r="1.2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-
   const isPrimaryView = activeNav === 'chat' || activeNav === 'channel' || activeNav === 'groups';
   const isChatActive = activeNav === 'chat';
   const getPupAccent = (pupKey: string) => pupAccentColor(pupKey);
@@ -1597,27 +1584,6 @@ const AppInner: React.FC = () => {
             ))}
           </div>
           <div className="flex-1" />
-          <button
-            onClick={() => setActiveNav('finance')}
-            title={t('nav_finance', lang)}
-            style={{
-              width: '34px',
-              height: '34px',
-              marginBottom: '10px',
-              borderRadius: '11px',
-              border: activeNav === 'finance' ? '0.5px solid rgba(16,59,47,0.18)' : '0.5px solid transparent',
-              boxShadow: activeNav === 'finance' ? '0 8px 20px rgba(16,59,47,0.16)' : 'none',
-              background: activeNav === 'finance' ? 'linear-gradient(180deg, rgba(16,59,47,0.18), rgba(16,59,47,0.08))' : 'var(--color-background-secondary)',
-              color: activeNav === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              alignSelf: 'center',
-            }}
-          >
-            <FinanceEntryIcon active={activeNav === 'finance'} />
-          </button>
           <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: '4px' }}>
             <button
               onClick={() => setSidebarCollapsed(false)}
@@ -1696,7 +1662,7 @@ const AppInner: React.FC = () => {
           </div>
 
           <div className="flex flex-col flex-1 overflow-y-auto px-2 pt-3 pb-3 gap-4">
-            {/* 狗群 section */}
+            {/* Expert pack section */}
             <div style={{ display: isPrimaryView ? 'block' : 'none' }}>
               <div className="px-2 pb-1.5" style={{ fontSize: "10px", fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {t('pup_section', lang)}
@@ -1774,49 +1740,9 @@ const AppInner: React.FC = () => {
 
           </div>
 
-          {/* Secondary destination + footer utilities */}
+          {/* Footer utilities */}
           <div className="px-2 pb-3 pt-2">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <button
-                onClick={() => setActiveNav('finance')}
-                title={t('nav_finance', lang)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  width: '100%',
-                  minHeight: '28px',
-                  padding: '4px 8px',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  fontWeight: activeNav === 'finance' ? 600 : 500,
-                  color: activeNav === 'finance' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                  background: activeNav === 'finance' ? 'rgba(16,59,47,0.08)' : 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                <span style={{
-                  width: '18px',
-                  height: '18px',
-                  borderRadius: '5px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: activeNav === 'finance' ? 'rgba(16,59,47,0.12)' : 'transparent',
-                  color: activeNav === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
-                  flexShrink: 0,
-                }}>
-                  <FinanceEntryIcon active={activeNav === 'finance'} />
-                </span>
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {t('nav_finance', lang)}
-                </span>
-                <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: '10px', fontWeight: 650, color: '#0E6A4C', background: 'rgba(29,158,117,0.10)', borderRadius: '999px', padding: '1px 6px' }}>
-                  Market
-                </span>
-              </button>
-
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -2082,9 +2008,6 @@ const AppInner: React.FC = () => {
 
           {/* ── Group Chat Preview / Experimental UI ── */}
           {activeNav === 'groups' && (groupChatFullEnabled ? <GroupChat /> : <GroupChatPreview />)}
-
-          {/* ── Finance ── */}
-          {activeNav === 'finance' && <FinanceWorkbench />}
 
           {/* ── Memories ── */}
           {activeNav === 'memories' && (
