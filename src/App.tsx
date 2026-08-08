@@ -445,9 +445,9 @@ const LlmConfigPanel: React.FC = () => {
         {t('llm_config_title', lang)}
       </h2>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.1fr)]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(260px,0.85fr)_minmax(0,1.15fr)]">
         <div className="space-y-2">
-            <div className="flex items-start gap-2">
+            <div className="flex flex-wrap items-start gap-2">
               <div className="flex min-w-0 flex-1 flex-wrap gap-2">
               {providers.length === 0 && (
                 <div style={{ color: 'var(--color-text-tertiary)', fontSize: '12px', padding: '6px 0' }}>
@@ -514,11 +514,11 @@ const LlmConfigPanel: React.FC = () => {
               return (
                 <div
                   key={key}
-                  className="grid gap-2 md:grid-cols-[112px_minmax(0,1fr)] md:items-center"
+                  className="grid gap-2 lg:grid-cols-[112px_minmax(0,1fr)] lg:items-center"
                 >
                   <div style={{ fontSize: '12px', fontWeight: 400, color: 'var(--color-text-tertiary)' }}>{routeLabel(key)}</div>
                   <div
-                    className="flex flex-col md:flex-row"
+                    className="flex flex-col lg:flex-row"
                     style={{
                       border: '0.5px solid var(--color-border-secondary)',
                       borderRadius: '18px',
@@ -527,13 +527,10 @@ const LlmConfigPanel: React.FC = () => {
                     }}
                     >
                       <div
-                        className="relative"
+                        className="relative w-full rounded-t-[18px] border-b lg:w-[188px] lg:rounded-l-[18px] lg:rounded-tr-none lg:rounded-br-none lg:border-b-0 lg:border-r"
                         style={{
-                          width: '188px',
-                          borderRight: '0.5px solid var(--color-border-secondary)',
+                          borderColor: 'var(--color-border-secondary)',
                           background: 'var(--color-background-primary)',
-                          borderTopLeftRadius: '18px',
-                          borderBottomLeftRadius: '18px',
                           overflow: 'visible',
                         }}
                       >
@@ -618,11 +615,9 @@ const LlmConfigPanel: React.FC = () => {
                         )}
                       </div>
                     <div
-                      className="min-w-0 flex-1"
+                      className="min-w-0 flex-1 rounded-b-[18px] lg:rounded-r-[18px] lg:rounded-bl-none"
                       style={{
                         background: 'var(--color-background-secondary)',
-                        borderTopRightRadius: '18px',
-                        borderBottomRightRadius: '18px',
                         overflow: 'visible',
                       }}
                     >
@@ -645,7 +640,7 @@ const LlmConfigPanel: React.FC = () => {
                               setOpenModelMenuKey((current) => current === key ? null : current);
                             }, 120);
                           }}
-                          style={{ fontSize: '12px', padding: '0 12px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)' }}
+                          style={{ fontSize: '12px', padding: '0 12px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)', minHeight: '40px' }}
                         />
                         {openModelMenuKey === key && (selectedProvider?.models?.length ?? 0) > 0 && (
                           <div
