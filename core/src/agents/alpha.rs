@@ -921,20 +921,42 @@ impl AlphaPup {
     }
 
     fn finance_hard_rules(finance: &crate::config::FinanceScenarioConfig) -> String {
-        format!(
-            "- 所有下单需人工确认（leashed）\n\
-             - 未经风控 approved 的 intent 不可执行\n\
-             - 单票仓位 <= {}%\n\
-             - 单行业仓位 <= {}%\n\
-             - 日亏 >= {}% 触发熔断\n\
-             - 委托数量必须为 {} 的整数倍\n\
-             - T+1、涨跌停不追/不抄、ST/停牌/退市/非交易时段禁止交易\n\
-             - 任何角色不可将 rejected 改为 approved",
-            finance.risk_preset.single_position_limit_pct,
-            finance.risk_preset.single_sector_limit_pct,
-            finance.risk_preset.daily_loss_circuit_breaker_pct,
-            finance.risk_preset.board_lot_size,
-        )
+        let mut rules = vec![];
+        if finance.risk_preset.force_leashed {
+            rules.push("- 执行模式必须保持 leashed".to_string());
+        }
+        if finance.risk_preset.require_manual_approval {
+            rules.push("- 所有下单需人工确认".to_string());
+        }
+        rules.push("- 未经风控 approved 的 intent 不可执行".to_string());
+        rules.push(format!(
+            "- 单票仓位 <= {}%",
+            finance.risk_preset.single_position_limit_pct
+        ));
+        rules.push(format!(
+            "- 单行业仓位 <= {}%",
+            finance.risk_preset.single_sector_limit_pct
+        ));
+        rules.push(format!(
+            "- 日亏 >= {}% 触发熔断",
+            finance.risk_preset.daily_loss_circuit_breaker_pct
+        ));
+        rules.push(format!(
+            "- 委托数量必须为 {} 的整数倍",
+            finance.risk_preset.board_lot_size
+        ));
+        if finance.risk_preset.enforce_t1 {
+            rules.push("- 强制遵守 T+1 规则".to_string());
+        }
+        if finance.risk_preset.block_st_suspended_delisting {
+            rules.push("- ST / 停牌 / 退市标的禁止交易".to_string());
+        }
+        if finance.risk_preset.enforce_trading_window {
+            rules.push("- 非交易时段禁止交易".to_string());
+        }
+        rules.push("- 涨跌停不追/不抄".to_string());
+        rules.push("- 任何角色不可将 rejected 改为 approved".to_string());
+        rules.join("\n")
     }
 
     fn normalize_finance_artifact_key(raw: &str) -> String {

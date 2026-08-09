@@ -1044,11 +1044,11 @@ const AppInner: React.FC = () => {
   }, [theme]);
 
   useEffect(() => {
-    if (scenarioMode !== 'finance' || execMode === 'leashed') return;
+    if (scenarioMode !== 'finance' || !financeScenario.riskPreset.forceLeashed || execMode === 'leashed') return;
     void invoke('set_execution_mode', { mode: 'leashed' })
       .then(() => setExecMode('leashed'))
       .catch(() => {});
-  }, [scenarioMode, execMode, setExecMode]);
+  }, [scenarioMode, financeScenario.riskPreset.forceLeashed, execMode, setExecMode]);
 
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -2025,13 +2025,16 @@ const AppInner: React.FC = () => {
               }}>
                 <button
                   onClick={async () => {
+                    if (scenarioMode === 'finance' && financeScenario.riskPreset.forceLeashed) return;
                     const next = execMode === 'leashed' ? 'free_run' : 'leashed';
                     await invoke('set_execution_mode', { mode: next }).catch(() => {});
                     setExecMode(next);
                   }}
-                  title={execMode === 'leashed'
-                    ? t('mode_tooltip_leashed', lang)
-                    : t('mode_tooltip_free', lang)
+                  title={scenarioMode === 'finance' && financeScenario.riskPreset.forceLeashed
+                    ? (lang === 'zh' ? 'Finance 风险规则已强制 leashed 模式' : 'Finance risk rules currently enforce leashed mode.')
+                    : execMode === 'leashed'
+                      ? t('mode_tooltip_leashed', lang)
+                      : t('mode_tooltip_free', lang)
                   }
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2039,8 +2042,14 @@ const AppInner: React.FC = () => {
                     height: '24px',
                     borderRadius: '6px',
                     fontSize: '12px',
-                    color: 'var(--color-text-tertiary)',
-                    cursor: 'pointer', background: 'none', border: 'none', padding: '0 3px'
+                    color: scenarioMode === 'finance' && financeScenario.riskPreset.forceLeashed
+                      ? 'rgba(14,106,76,0.72)'
+                      : 'var(--color-text-tertiary)',
+                    cursor: scenarioMode === 'finance' && financeScenario.riskPreset.forceLeashed ? 'not-allowed' : 'pointer',
+                    background: 'none',
+                    border: 'none',
+                    padding: '0 3px',
+                    opacity: scenarioMode === 'finance' && financeScenario.riskPreset.forceLeashed ? 0.8 : 1,
                   }}
                 >
                   {execMode === 'leashed' ? '🔒' : '🐕'}
