@@ -1401,7 +1401,8 @@ impl MCPOrchestrator {
 
         for tool in tools {
             let actual_server = tool.server.clone();
-            let original_entry = Arc::new(Self::catalog_entry_from_tool(tool.clone(), &actual_server));
+            let original_entry =
+                Arc::new(Self::catalog_entry_from_tool(tool.clone(), &actual_server));
             openai_specs.push(original_entry.openai_spec.clone());
             fn_name_map.insert(
                 original_entry.fn_name.clone(),
@@ -1410,10 +1411,9 @@ impl MCPOrchestrator {
             by_fn_name.insert(original_entry.fn_name.clone(), original_entry.clone());
             entries.push(original_entry);
 
-            for alias in finance_aliases
-                .iter()
-                .filter(|alias| alias.actual_server == actual_server && alias.actual_tool == tool.name)
-            {
+            for alias in finance_aliases.iter().filter(|alias| {
+                alias.actual_server == actual_server && alias.actual_tool == tool.name
+            }) {
                 let alias_entry = Arc::new(Self::catalog_entry_from_alias(tool.clone(), alias));
                 if by_fn_name.contains_key(&alias_entry.fn_name) {
                     continue;
@@ -1441,7 +1441,10 @@ impl MCPOrchestrator {
         Self::catalog_entry_from_parts(tool, exposed_server, &exposed_tool_name, None)
     }
 
-    fn catalog_entry_from_alias(tool: McpToolInfo, alias: &FinanceCapabilityAlias) -> CachedMcpTool {
+    fn catalog_entry_from_alias(
+        tool: McpToolInfo,
+        alias: &FinanceCapabilityAlias,
+    ) -> CachedMcpTool {
         Self::catalog_entry_from_parts(
             tool,
             &alias.alias_server,
@@ -1530,7 +1533,9 @@ impl MCPOrchestrator {
                                 &binding.connector,
                                 &capability.capability,
                             )
-                            .unwrap_or_else(|| format!("Finance capability alias for {}", capability.capability)),
+                            .unwrap_or_else(|| {
+                                format!("Finance capability alias for {}", capability.capability)
+                            }),
                         })
                     })
                     .collect::<Vec<_>>()
@@ -1542,16 +1547,30 @@ impl MCPOrchestrator {
         let description = match (connector, capability) {
             ("intel", "search_news") => "Research news, filings, and catalyst flow".to_string(),
             ("intel", "get_quote") => "Fetch the latest quote and top-of-book snapshot".to_string(),
-            ("intel", "get_candles") => "Load recent candles or bars for validation and review".to_string(),
-            ("intel", "screen_symbols") => "Screen symbols by market conditions or filters".to_string(),
+            ("intel", "get_candles") => {
+                "Load recent candles or bars for validation and review".to_string()
+            }
+            ("intel", "screen_symbols") => {
+                "Screen symbols by market conditions or filters".to_string()
+            }
             ("intel", "list_watchlist") => "Read the current watchlist".to_string(),
             ("intel", "add_watchlist") => "Add symbols to the watchlist".to_string(),
             ("intel", "remove_watchlist") => "Remove symbols from the watchlist".to_string(),
-            ("risk", "review_trade_intent") => "Approve, reject, or reduce a TradeIntent".to_string(),
-            ("risk", "validate_order") => "Validate order-level constraints before execution".to_string(),
-            ("risk", "validate_positions") => "Inspect current positions for risk checks".to_string(),
-            ("risk", "validate_market_status") => "Check market status, trading window, and venue constraints".to_string(),
-            ("risk", "validate_exposure") => "Check aggregate exposure such as single-name and sector caps".to_string(),
+            ("risk", "review_trade_intent") => {
+                "Approve, reject, or reduce a TradeIntent".to_string()
+            }
+            ("risk", "validate_order") => {
+                "Validate order-level constraints before execution".to_string()
+            }
+            ("risk", "validate_positions") => {
+                "Inspect current positions for risk checks".to_string()
+            }
+            ("risk", "validate_market_status") => {
+                "Check market status, trading window, and venue constraints".to_string()
+            }
+            ("risk", "validate_exposure") => {
+                "Check aggregate exposure such as single-name and sector caps".to_string()
+            }
             ("exec", "get_account") => "Read account summary and buying power".to_string(),
             ("exec", "get_positions") => "Read current holdings and exposure".to_string(),
             ("exec", "list_orders") => "Read live and recent orders".to_string(),

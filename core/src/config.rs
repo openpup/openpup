@@ -359,20 +359,55 @@ fn default_board_lot_size() -> u32 {
 }
 fn default_finance_role_bindings() -> Vec<FinanceRoleBinding> {
     vec![
-        FinanceRoleBinding { role: "researcher".into(), pup_key: Some("research".into()) },
-        FinanceRoleBinding { role: "strategist".into(), pup_key: Some("strategist".into()) },
-        FinanceRoleBinding { role: "risk_officer".into(), pup_key: Some("risk_officer".into()) },
-        FinanceRoleBinding { role: "executor".into(), pup_key: Some("executor".into()) },
-        FinanceRoleBinding { role: "reviewer".into(), pup_key: Some("reviewer".into()) },
+        FinanceRoleBinding {
+            role: "researcher".into(),
+            pup_key: Some("research".into()),
+        },
+        FinanceRoleBinding {
+            role: "strategist".into(),
+            pup_key: Some("strategist".into()),
+        },
+        FinanceRoleBinding {
+            role: "risk_officer".into(),
+            pup_key: Some("risk_officer".into()),
+        },
+        FinanceRoleBinding {
+            role: "executor".into(),
+            pup_key: Some("executor".into()),
+        },
+        FinanceRoleBinding {
+            role: "reviewer".into(),
+            pup_key: Some("reviewer".into()),
+        },
     ]
 }
 fn default_finance_skill_bindings() -> Vec<FinanceSkillBinding> {
     vec![
-        FinanceSkillBinding { skill: "premarket_scan".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
-        FinanceSkillBinding { skill: "intraday_check".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
-        FinanceSkillBinding { skill: "postmarket_review".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
-        FinanceSkillBinding { skill: "watchlist_cleanup".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
-        FinanceSkillBinding { skill: "emergency_stop".into(), mode: default_finance_skill_binding_mode(), skill_name: None },
+        FinanceSkillBinding {
+            skill: "premarket_scan".into(),
+            mode: default_finance_skill_binding_mode(),
+            skill_name: None,
+        },
+        FinanceSkillBinding {
+            skill: "intraday_check".into(),
+            mode: default_finance_skill_binding_mode(),
+            skill_name: None,
+        },
+        FinanceSkillBinding {
+            skill: "postmarket_review".into(),
+            mode: default_finance_skill_binding_mode(),
+            skill_name: None,
+        },
+        FinanceSkillBinding {
+            skill: "watchlist_cleanup".into(),
+            mode: default_finance_skill_binding_mode(),
+            skill_name: None,
+        },
+        FinanceSkillBinding {
+            skill: "emergency_stop".into(),
+            mode: default_finance_skill_binding_mode(),
+            skill_name: None,
+        },
     ]
 }
 fn default_finance_connector_bindings() -> Vec<FinanceConnectorBinding> {
@@ -402,7 +437,9 @@ fn default_finance_capability_bindings() -> Vec<FinanceCapabilityBinding> {
     vec![]
 }
 
-fn default_finance_capability_bindings_for_connector(connector: &str) -> Vec<FinanceCapabilityBinding> {
+fn default_finance_capability_bindings_for_connector(
+    connector: &str,
+) -> Vec<FinanceCapabilityBinding> {
     let items: &[(&str, Option<&str>)] = match connector {
         "intel" => &[
             ("search_news", Some("search_news")),

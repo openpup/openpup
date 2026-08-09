@@ -883,11 +883,23 @@ impl AlphaPup {
     fn detect_finance_skill_trigger(msg: &str) -> Option<&'static str> {
         let normalized = msg.trim().to_lowercase();
         let triggers: [(&str, [&str; 3]); 5] = [
-            ("premarket_scan", ["盘前扫描", "premarket scan", "pre-market scan"]),
+            (
+                "premarket_scan",
+                ["盘前扫描", "premarket scan", "pre-market scan"],
+            ),
             ("intraday_check", ["盘中检查", "盘中评估", "intraday check"]),
-            ("postmarket_review", ["收盘复盘", "postmarket review", "post-market review"]),
-            ("watchlist_cleanup", ["自选清理", "自选维护", "watchlist cleanup"]),
-            ("emergency_stop", ["紧急止损", "emergency stop", "panic stop"]),
+            (
+                "postmarket_review",
+                ["收盘复盘", "postmarket review", "post-market review"],
+            ),
+            (
+                "watchlist_cleanup",
+                ["自选清理", "自选维护", "watchlist cleanup"],
+            ),
+            (
+                "emergency_stop",
+                ["紧急止损", "emergency stop", "panic stop"],
+            ),
         ];
         triggers.into_iter().find_map(|(skill, skill_triggers)| {
             skill_triggers
@@ -980,10 +992,10 @@ impl AlphaPup {
                         capability.tool_name.as_ref().map(|tool_name| {
                             format!(
                                 "  - mcp__{}__{} => {}.{}",
-                                binding.connector, capability.capability, binding
-                                    .server_name
-                                    .as_deref()
-                                    .unwrap_or("unbound"), tool_name
+                                binding.connector,
+                                capability.capability,
+                                binding.server_name.as_deref().unwrap_or("unbound"),
+                                tool_name
                             )
                         })
                     })
@@ -1151,10 +1163,7 @@ impl AlphaPup {
         })
     }
 
-    fn finance_mode_system_block(
-        &self,
-        finance: &crate::config::FinanceScenarioConfig,
-    ) -> String {
+    fn finance_mode_system_block(&self, finance: &crate::config::FinanceScenarioConfig) -> String {
         let role_bindings = finance
             .role_bindings
             .iter()
@@ -1251,7 +1260,9 @@ impl AlphaPup {
         let mut stages: Vec<(String, String)> = Vec::new();
         for role in role_order {
             let Some(bound_pup) = Self::finance_role_binding(&finance, role) else {
-                return Ok(format!("金融场景角色 `{role}` 尚未绑定具体专家，无法执行 `{preset}`。"));
+                return Ok(format!(
+                    "金融场景角色 `{role}` 尚未绑定具体专家，无法执行 `{preset}`。"
+                ));
             };
             stages.push((role.to_string(), bound_pup));
         }
@@ -1820,8 +1831,8 @@ impl AlphaPup {
             Self::suppress_channel_route_for_finance(
                 finance_mode,
                 self.router
-                .classify_intent(msg, &owner_summary, &classify_history)
-                .await,
+                    .classify_intent(msg, &owner_summary, &classify_history)
+                    .await,
                 "alpha",
             )
         };
@@ -2136,10 +2147,7 @@ impl AlphaPup {
         }
 
         if let Some(finance) = finance {
-            system_content.push_str(&format!(
-                "\n\n{}",
-                self.finance_mode_system_block(finance)
-            ));
+            system_content.push_str(&format!("\n\n{}", self.finance_mode_system_block(finance)));
         }
 
         // Build messages as JSON values for the unified tool-call loop
@@ -3722,14 +3730,7 @@ impl AlphaPup {
         // Single pup path
         if self.resolve_pup(&pup_key).await.is_ok() {
             let reply = self
-                .run_pup_for_channel(
-                    &pup_key,
-                    &msg,
-                    &owner_summary,
-                    None,
-                    &|_, _| {},
-                    None,
-                )
+                .run_pup_for_channel(&pup_key, &msg, &owner_summary, None, &|_, _| {}, None)
                 .await?;
             self.record_pup_context_tokens_async(&pup_key).await;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
