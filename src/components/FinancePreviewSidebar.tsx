@@ -171,6 +171,19 @@ export const FinancePreviewSidebar: React.FC<{
       pup: finance.roleBindings[role].pupKey ?? 'unbound',
     }))
   ), [finance]);
+  const riskSummary = useMemo(() => ([
+    [lang === 'zh' ? '单票上限' : 'Single name', `${finance.riskPreset.singlePositionLimitPct}%`],
+    [lang === 'zh' ? '行业上限' : 'Sector cap', `${finance.riskPreset.singleSectorLimitPct}%`],
+    [lang === 'zh' ? '日亏熔断' : 'Daily stop', `${finance.riskPreset.dailyLossCircuitBreakerPct}%`],
+    [lang === 'zh' ? '整手限制' : 'Lot size', `${finance.riskPreset.boardLotSize}`],
+  ]), [finance, lang]);
+  const riskGuards = useMemo(() => ([
+    finance.riskPreset.forceLeashed ? (lang === 'zh' ? '强制 leashed' : 'Leashed enforced') : null,
+    finance.riskPreset.requireManualApproval ? (lang === 'zh' ? '人工确认下单' : 'Manual confirm') : null,
+    finance.riskPreset.blockStSuspendedDelisting ? (lang === 'zh' ? '禁 ST / 停牌 / 退市' : 'Block ST / suspended / delisting') : null,
+    finance.riskPreset.enforceTradingWindow ? (lang === 'zh' ? '限制交易时段' : 'Trading window enforced') : null,
+    finance.riskPreset.enforceT1 ? (lang === 'zh' ? '强制 T+1' : 'T+1 enforced') : null,
+  ].filter(Boolean)), [finance, lang]);
   useEffect(() => {
     if (financeArtifacts.length === 0) {
       if (selectedArtifactId !== null) setSelectedArtifactId(null);
@@ -300,9 +313,46 @@ export const FinancePreviewSidebar: React.FC<{
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
               <span style={{ color: 'var(--color-text-tertiary)' }}>{lang === 'zh' ? '人工确认' : 'Manual confirm'}</span>
-              <strong style={{ color: '#0E6A4C' }}>{lang === 'zh' ? '必需' : 'Required'}</strong>
+              <strong style={{ color: finance.riskPreset.requireManualApproval ? '#0E6A4C' : 'var(--color-text-secondary)' }}>
+                {finance.riskPreset.requireManualApproval ? (lang === 'zh' ? '必需' : 'Required') : (lang === 'zh' ? '可选' : 'Optional')}
+              </strong>
             </div>
           </div>
+        </section>
+
+        <section style={cardStyle}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+            {lang === 'zh' ? '生效中的风控' : 'Active Risk Preset'}
+          </div>
+          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+            {riskSummary.map(([label, value]) => (
+              <div key={label} style={{
+                borderRadius: 12,
+                padding: '10px 11px',
+                background: 'var(--color-background-primary)',
+                border: '0.5px solid var(--color-border-tertiary)',
+              }}>
+                <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                <div style={{ marginTop: 5, fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {riskGuards.length > 0 && (
+            <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {riskGuards.map((item) => (
+                <span key={item} style={{
+                  padding: '4px 8px',
+                  borderRadius: 999,
+                  fontSize: 10,
+                  color: '#0E6A4C',
+                  background: 'rgba(16,59,47,0.08)',
+                  border: '0.5px solid rgba(16,59,47,0.14)',
+                }}>
+                  {item}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
 
         <section style={cardStyle}>
