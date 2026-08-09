@@ -988,10 +988,11 @@ const AppInner: React.FC = () => {
 
   useEffect(() => {
     if (channelPlan?.channel_id) {
+      if (scenarioMode === 'finance') return;
       setActiveNav('channel');
       setChannelDetailMode(true);
     }
-  }, [channelPlan]);
+  }, [channelPlan, scenarioMode]);
 
   useEffect(() => {
     if (activeNav === 'channel' && activeChannelId && channelMessages.length > 0) {
@@ -1005,6 +1006,12 @@ const AppInner: React.FC = () => {
     setChannelDetailMode(false);
     setActiveNav('chat');
   }, [completionEventCount]);
+
+  useEffect(() => {
+    if (scenarioMode !== 'finance' || activeNav !== 'channel') return;
+    setChannelDetailMode(false);
+    setActiveNav('chat');
+  }, [scenarioMode, activeNav]);
   // contextStats, tokenUsage, settings state, layout state → stores
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -1663,7 +1670,7 @@ const AppInner: React.FC = () => {
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
     : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
     : String(n);
-  const showFinancePreviewSidebar = scenarioMode === 'finance' && !isMobile && windowWidth >= 1280;
+  const showFinancePreviewSidebar = scenarioMode === 'finance' && activeNav === 'chat' && !isMobile && windowWidth >= 1280;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)' }}>
@@ -1871,16 +1878,33 @@ const AppInner: React.FC = () => {
                 {t('nav_chat', lang)}
               </button>
               <button
-                onClick={() => { setActiveNav('channel'); setChannelDetailMode(false); }}
+                onClick={() => {
+                  if (scenarioMode === 'finance') return;
+                  setActiveNav('channel');
+                  setChannelDetailMode(false);
+                }}
+                disabled={scenarioMode === 'finance'}
+                title={scenarioMode === 'finance'
+                  ? (lang === 'zh' ? 'Finance 场景使用专属工作流，频道协作已禁用' : 'Finance uses a dedicated workflow, so channel collaboration is disabled.')
+                  : undefined}
                 style={{
                   border: 'none',
                   borderRadius: '9px',
                   padding: '8px 10px',
                   fontSize: '12px',
                   fontWeight: activeNav === 'channel' ? 600 : 500,
-                  color: activeNav === 'channel' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                  background: activeNav === 'channel' ? 'var(--color-background-primary)' : 'transparent',
-                  cursor: 'pointer',
+                  color: scenarioMode === 'finance'
+                    ? 'var(--color-text-tertiary)'
+                    : activeNav === 'channel'
+                      ? 'var(--color-text-primary)'
+                      : 'var(--color-text-secondary)',
+                  background: scenarioMode === 'finance'
+                    ? 'transparent'
+                    : activeNav === 'channel'
+                      ? 'var(--color-background-primary)'
+                      : 'transparent',
+                  cursor: scenarioMode === 'finance' ? 'not-allowed' : 'pointer',
+                  opacity: scenarioMode === 'finance' ? 0.45 : 1,
                   position: 'relative',
                 }}
               >

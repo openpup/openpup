@@ -909,6 +909,17 @@ impl AlphaPup {
         }
     }
 
+    fn suppress_channel_route_for_finance(
+        finance_mode: bool,
+        routed_key: String,
+        fallback_key: &str,
+    ) -> String {
+        if finance_mode && routed_key.starts_with("channel:") {
+            return fallback_key.to_string();
+        }
+        routed_key
+    }
+
     fn finance_hard_rules(finance: &crate::config::FinanceScenarioConfig) -> String {
         format!(
             "- 所有下单需人工确认（leashed）\n\
@@ -1663,13 +1674,17 @@ impl AlphaPup {
             None
         };
         let pup_key = if let Some(forced) = finance_routed_pup.or(forced_pup) {
-            forced
+            Self::suppress_channel_route_for_finance(finance_mode, forced, "alpha")
         } else if let Some(mention) = self.router.extract_at_mention(msg).await {
-            mention
+            Self::suppress_channel_route_for_finance(finance_mode, mention, "alpha")
         } else {
-            self.router
+            Self::suppress_channel_route_for_finance(
+                finance_mode,
+                self.router
                 .classify_intent(msg, &owner_summary, &classify_history)
-                .await
+                .await,
+                "alpha",
+            )
         };
         debug!("[alpha] do_stream: pup_key={pup_key:?}");
 
