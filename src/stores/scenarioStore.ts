@@ -5,6 +5,40 @@ export type ScenarioMode = 'default' | 'finance';
 export type FinanceRoleKey = 'researcher' | 'strategist' | 'risk_officer' | 'executor' | 'reviewer';
 export type FinanceSkillKey = 'premarket_scan' | 'intraday_check' | 'postmarket_review' | 'watchlist_cleanup' | 'emergency_stop';
 export type FinanceConnectorKey = 'intel' | 'risk' | 'exec';
+export type FinanceIntelCapabilityKey =
+  | 'search_news'
+  | 'get_quote'
+  | 'get_candles'
+  | 'screen_symbols'
+  | 'list_watchlist'
+  | 'add_watchlist'
+  | 'remove_watchlist';
+export type FinanceRiskCapabilityKey =
+  | 'review_trade_intent'
+  | 'validate_order'
+  | 'validate_positions'
+  | 'validate_market_status'
+  | 'validate_exposure';
+export type FinanceExecCapabilityKey =
+  | 'get_account'
+  | 'get_positions'
+  | 'list_orders'
+  | 'get_order_status'
+  | 'place_order'
+  | 'cancel_order';
+export type FinanceCapabilityKey =
+  | FinanceIntelCapabilityKey
+  | FinanceRiskCapabilityKey
+  | FinanceExecCapabilityKey;
+
+export const FINANCE_ROLE_KEYS: FinanceRoleKey[] = ['researcher', 'strategist', 'risk_officer', 'executor', 'reviewer'];
+export const FINANCE_SKILL_KEYS: FinanceSkillKey[] = ['premarket_scan', 'intraday_check', 'postmarket_review', 'watchlist_cleanup', 'emergency_stop'];
+export const FINANCE_CONNECTOR_KEYS: FinanceConnectorKey[] = ['intel', 'risk', 'exec'];
+export const FINANCE_CONNECTOR_CAPABILITY_KEYS: Record<FinanceConnectorKey, FinanceCapabilityKey[]> = {
+  intel: ['search_news', 'get_quote', 'get_candles', 'screen_symbols', 'list_watchlist', 'add_watchlist', 'remove_watchlist'],
+  risk: ['review_trade_intent', 'validate_order', 'validate_positions', 'validate_market_status', 'validate_exposure'],
+  exec: ['get_account', 'get_positions', 'list_orders', 'get_order_status', 'place_order', 'cancel_order'],
+};
 
 export interface FinanceRoleBinding {
   pupKey: string | null;
@@ -18,6 +52,12 @@ export interface FinanceSkillBinding {
 export interface FinanceConnectorBinding {
   mode: 'mcp_server';
   serverName: string | null;
+  capabilityBindings: Record<FinanceCapabilityKey, FinanceCapabilityBinding>;
+}
+
+export interface FinanceCapabilityBinding {
+  mode: 'mcp_tool';
+  toolName: string | null;
 }
 
 export interface FinanceRiskPreset {
@@ -42,7 +82,12 @@ export interface FinanceScenarioConfig {
 export interface FinanceScenarioConfigPayload {
   roleBindings?: Array<{ role?: string; pupKey?: string | null }>;
   skillBindings?: Array<{ skill?: string; mode?: string; skillName?: string | null }>;
-  connectorBindings?: Array<{ connector?: string; mode?: string; serverName?: string | null }>;
+  connectorBindings?: Array<{
+    connector?: string;
+    mode?: string;
+    serverName?: string | null;
+    capabilityBindings?: Array<{ capability?: string; mode?: string; toolName?: string | null }>;
+  }>;
   riskPreset?: Partial<FinanceRiskPreset>;
 }
 
@@ -74,9 +119,78 @@ const DEFAULT_FINANCE_CONFIG: FinanceScenarioConfig = {
     emergency_stop: { mode: 'scenario_preset', skillName: null },
   },
   connectorBindings: {
-    intel: { mode: 'mcp_server', serverName: 'intel' },
-    risk: { mode: 'mcp_server', serverName: 'risk' },
-    exec: { mode: 'mcp_server', serverName: 'exec' },
+    intel: {
+      mode: 'mcp_server',
+      serverName: 'intel',
+      capabilityBindings: {
+        search_news: { mode: 'mcp_tool', toolName: 'search_news' },
+        get_quote: { mode: 'mcp_tool', toolName: 'get_quote' },
+        get_candles: { mode: 'mcp_tool', toolName: 'get_candles' },
+        screen_symbols: { mode: 'mcp_tool', toolName: 'screen_symbols' },
+        list_watchlist: { mode: 'mcp_tool', toolName: 'list_watchlist' },
+        add_watchlist: { mode: 'mcp_tool', toolName: 'add_watchlist' },
+        remove_watchlist: { mode: 'mcp_tool', toolName: 'remove_watchlist' },
+        review_trade_intent: { mode: 'mcp_tool', toolName: null },
+        validate_order: { mode: 'mcp_tool', toolName: null },
+        validate_positions: { mode: 'mcp_tool', toolName: null },
+        validate_market_status: { mode: 'mcp_tool', toolName: null },
+        validate_exposure: { mode: 'mcp_tool', toolName: null },
+        get_account: { mode: 'mcp_tool', toolName: null },
+        get_positions: { mode: 'mcp_tool', toolName: null },
+        list_orders: { mode: 'mcp_tool', toolName: null },
+        get_order_status: { mode: 'mcp_tool', toolName: null },
+        place_order: { mode: 'mcp_tool', toolName: null },
+        cancel_order: { mode: 'mcp_tool', toolName: null },
+      },
+    },
+    risk: {
+      mode: 'mcp_server',
+      serverName: 'risk',
+      capabilityBindings: {
+        search_news: { mode: 'mcp_tool', toolName: null },
+        get_quote: { mode: 'mcp_tool', toolName: null },
+        get_candles: { mode: 'mcp_tool', toolName: null },
+        screen_symbols: { mode: 'mcp_tool', toolName: null },
+        list_watchlist: { mode: 'mcp_tool', toolName: null },
+        add_watchlist: { mode: 'mcp_tool', toolName: null },
+        remove_watchlist: { mode: 'mcp_tool', toolName: null },
+        review_trade_intent: { mode: 'mcp_tool', toolName: 'review_trade_intent' },
+        validate_order: { mode: 'mcp_tool', toolName: 'validate_order' },
+        validate_positions: { mode: 'mcp_tool', toolName: 'validate_positions' },
+        validate_market_status: { mode: 'mcp_tool', toolName: 'validate_market_status' },
+        validate_exposure: { mode: 'mcp_tool', toolName: 'validate_exposure' },
+        get_account: { mode: 'mcp_tool', toolName: null },
+        get_positions: { mode: 'mcp_tool', toolName: null },
+        list_orders: { mode: 'mcp_tool', toolName: null },
+        get_order_status: { mode: 'mcp_tool', toolName: null },
+        place_order: { mode: 'mcp_tool', toolName: null },
+        cancel_order: { mode: 'mcp_tool', toolName: null },
+      },
+    },
+    exec: {
+      mode: 'mcp_server',
+      serverName: 'exec',
+      capabilityBindings: {
+        search_news: { mode: 'mcp_tool', toolName: null },
+        get_quote: { mode: 'mcp_tool', toolName: null },
+        get_candles: { mode: 'mcp_tool', toolName: null },
+        screen_symbols: { mode: 'mcp_tool', toolName: null },
+        list_watchlist: { mode: 'mcp_tool', toolName: null },
+        add_watchlist: { mode: 'mcp_tool', toolName: null },
+        remove_watchlist: { mode: 'mcp_tool', toolName: null },
+        review_trade_intent: { mode: 'mcp_tool', toolName: null },
+        validate_order: { mode: 'mcp_tool', toolName: null },
+        validate_positions: { mode: 'mcp_tool', toolName: null },
+        validate_market_status: { mode: 'mcp_tool', toolName: null },
+        validate_exposure: { mode: 'mcp_tool', toolName: null },
+        get_account: { mode: 'mcp_tool', toolName: 'get_account' },
+        get_positions: { mode: 'mcp_tool', toolName: 'get_positions' },
+        list_orders: { mode: 'mcp_tool', toolName: 'list_orders' },
+        get_order_status: { mode: 'mcp_tool', toolName: 'get_order_status' },
+        place_order: { mode: 'mcp_tool', toolName: 'place_order' },
+        cancel_order: { mode: 'mcp_tool', toolName: 'cancel_order' },
+      },
+    },
   },
   riskPreset: {
     forceLeashed: true,
@@ -91,10 +205,6 @@ const DEFAULT_FINANCE_CONFIG: FinanceScenarioConfig = {
   },
 };
 
-const FINANCE_ROLE_KEYS: FinanceRoleKey[] = ['researcher', 'strategist', 'risk_officer', 'executor', 'reviewer'];
-const FINANCE_SKILL_KEYS: FinanceSkillKey[] = ['premarket_scan', 'intraday_check', 'postmarket_review', 'watchlist_cleanup', 'emergency_stop'];
-const FINANCE_CONNECTOR_KEYS: FinanceConnectorKey[] = ['intel', 'risk', 'exec'];
-
 function isFinanceRoleKey(value: string): value is FinanceRoleKey {
   return FINANCE_ROLE_KEYS.includes(value as FinanceRoleKey);
 }
@@ -105,6 +215,19 @@ function isFinanceSkillKey(value: string): value is FinanceSkillKey {
 
 function isFinanceConnectorKey(value: string): value is FinanceConnectorKey {
   return FINANCE_CONNECTOR_KEYS.includes(value as FinanceConnectorKey);
+}
+
+function isFinanceCapabilityKey(value: string): value is FinanceCapabilityKey {
+  return Object.values(FINANCE_CONNECTOR_CAPABILITY_KEYS).some((keys) => keys.includes(value as FinanceCapabilityKey));
+}
+
+function defaultCapabilityBindings(): Record<FinanceCapabilityKey, FinanceCapabilityBinding> {
+  const defaults = structuredClone(DEFAULT_FINANCE_CONFIG.connectorBindings);
+  return {
+    ...defaults.intel.capabilityBindings,
+    ...defaults.risk.capabilityBindings,
+    ...defaults.exec.capabilityBindings,
+  };
 }
 
 export function normalizeFinanceScenarioConfig(raw: unknown): FinanceScenarioConfig {
@@ -153,16 +276,45 @@ export function normalizeFinanceScenarioConfig(raw: unknown): FinanceScenarioCon
   if (Array.isArray((input as FinanceScenarioConfigPayload).connectorBindings)) {
     for (const item of (input as FinanceScenarioConfigPayload).connectorBindings ?? []) {
       if (item?.connector && isFinanceConnectorKey(item.connector)) {
+        const capabilityBindings = {
+          ...defaultCapabilityBindings(),
+          ...connectorBindings[item.connector].capabilityBindings,
+        };
+        for (const capabilityItem of item.capabilityBindings ?? []) {
+          if (capabilityItem?.capability && isFinanceCapabilityKey(capabilityItem.capability)) {
+            capabilityBindings[capabilityItem.capability] = {
+              mode: 'mcp_tool',
+              toolName: capabilityItem.toolName ?? null,
+            };
+          }
+        }
         connectorBindings[item.connector] = {
           mode: 'mcp_server',
           serverName: item.serverName ?? null,
+          capabilityBindings,
         };
       }
     }
   } else if ((input as FinanceScenarioConfig).connectorBindings) {
     for (const key of FINANCE_CONNECTOR_KEYS) {
       const item = (input as FinanceScenarioConfig).connectorBindings[key];
-      if (item) connectorBindings[key] = { mode: 'mcp_server', serverName: item.serverName ?? null };
+      if (item) {
+        const capabilityBindings = {
+          ...defaultCapabilityBindings(),
+          ...(item.capabilityBindings ?? {}),
+        };
+        for (const capability of Object.keys(capabilityBindings)) {
+          capabilityBindings[capability as FinanceCapabilityKey] = {
+            mode: 'mcp_tool',
+            toolName: item.capabilityBindings?.[capability as FinanceCapabilityKey]?.toolName ?? capabilityBindings[capability as FinanceCapabilityKey].toolName ?? null,
+          };
+        }
+        connectorBindings[key] = {
+          mode: 'mcp_server',
+          serverName: item.serverName ?? null,
+          capabilityBindings,
+        };
+      }
     }
   }
 
@@ -195,6 +347,11 @@ export function toFinanceScenarioPayload(finance: FinanceScenarioConfig): Financ
       connector,
       mode: 'mcp_server',
       serverName: finance.connectorBindings[connector]?.serverName ?? null,
+      capabilityBindings: FINANCE_CONNECTOR_CAPABILITY_KEYS[connector].map((capability) => ({
+        capability,
+        mode: 'mcp_tool',
+        toolName: finance.connectorBindings[connector]?.capabilityBindings?.[capability]?.toolName ?? null,
+      })),
     })),
     riskPreset: { ...finance.riskPreset },
   };
@@ -275,7 +432,11 @@ export const useScenarioStore = create<ScenarioState>((set) => ({
         ...state.finance,
         connectorBindings: {
           ...state.finance.connectorBindings,
-          [connector]: { mode: 'mcp_server', serverName },
+          [connector]: {
+            mode: 'mcp_server',
+            serverName,
+            capabilityBindings: state.finance.connectorBindings[connector].capabilityBindings,
+          },
         },
       };
       persist({ mode: state.mode, finance });

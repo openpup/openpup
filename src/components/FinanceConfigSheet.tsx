@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  FINANCE_CONNECTOR_CAPABILITY_KEYS,
+  FINANCE_CONNECTOR_KEYS,
+  FINANCE_ROLE_KEYS,
+  FINANCE_SKILL_KEYS,
   normalizeFinanceScenarioConfig,
   toFinanceScenarioPayload,
   useScenarioStore,
+  type FinanceCapabilityKey,
   type FinanceScenarioConfig,
   type FinanceScenarioConfigPayload,
   type FinanceConnectorKey,
@@ -31,6 +36,12 @@ interface McpServer {
   enabled: boolean;
 }
 
+interface McpToolInfo {
+  server: string;
+  name: string;
+  description: string;
+}
+
 interface ScenarioSettingsSnapshot {
   finance: FinanceScenarioConfigPayload;
 }
@@ -52,9 +63,30 @@ const skillMeta: Record<FinanceSkillKey, { zh: string; en: string; triggerZh: st
 };
 
 const connectorMeta: Record<FinanceConnectorKey, { zh: string; en: string; alias: string }> = {
-  intel: { zh: '资讯 / 行情 / 选股', en: 'Intel / Market / Screening', alias: 'mcp__intel__*' },
-  risk: { zh: '风控审批', en: 'Risk Approval', alias: 'mcp__risk__*' },
-  exec: { zh: '账户 / 持仓 / 下单', en: 'Account / Positions / Execution', alias: 'mcp__exec__*' },
+  intel: { zh: '资讯 / 行情 / 选股', en: 'Intel / Market / Screening', alias: 'mcp__intel__{capability}' },
+  risk: { zh: '风控审批', en: 'Risk Approval', alias: 'mcp__risk__{capability}' },
+  exec: { zh: '账户 / 持仓 / 下单', en: 'Account / Positions / Execution', alias: 'mcp__exec__{capability}' },
+};
+
+const capabilityMeta: Record<FinanceCapabilityKey, { zh: string; en: string; hintZh: string; hintEn: string }> = {
+  search_news: { zh: '资讯检索', en: 'News Search', hintZh: '研究资讯、公告与催化', hintEn: 'Research news, filings, and catalysts' },
+  get_quote: { zh: '实时行情', en: 'Quote', hintZh: '获取最新价格与盘口', hintEn: 'Fetch the latest quote and top of book' },
+  get_candles: { zh: 'K线 / Bar', en: 'Candles', hintZh: '获取近期 K 线用于校验', hintEn: 'Load recent candles for validation' },
+  screen_symbols: { zh: '条件选股', en: 'Screen Symbols', hintZh: '按条件筛选标的', hintEn: 'Screen symbols by market filters' },
+  list_watchlist: { zh: '读取自选', en: 'List Watchlist', hintZh: '查看当前自选', hintEn: 'Read the current watchlist' },
+  add_watchlist: { zh: '加入自选', en: 'Add Watchlist', hintZh: '加入新的观察标的', hintEn: 'Add symbols to the watchlist' },
+  remove_watchlist: { zh: '移除自选', en: 'Remove Watchlist', hintZh: '清理观察标的', hintEn: 'Remove symbols from the watchlist' },
+  review_trade_intent: { zh: '审批 Intent', en: 'Review Intent', hintZh: '批准、拒绝或降级 TradeIntent', hintEn: 'Approve, reject, or reduce TradeIntent' },
+  validate_order: { zh: '订单校验', en: 'Validate Order', hintZh: '检查委托级约束', hintEn: 'Validate order-level constraints' },
+  validate_positions: { zh: '持仓校验', en: 'Validate Positions', hintZh: '检查当前持仓风险', hintEn: 'Inspect current positions for risk checks' },
+  validate_market_status: { zh: '市场状态校验', en: 'Validate Market Status', hintZh: '检查交易时段与市场状态', hintEn: 'Check market status and venue constraints' },
+  validate_exposure: { zh: '敞口校验', en: 'Validate Exposure', hintZh: '检查单票与行业暴露', hintEn: 'Check single-name and sector exposure' },
+  get_account: { zh: '账户总览', en: 'Account Summary', hintZh: '读取资产与购买力', hintEn: 'Read account summary and buying power' },
+  get_positions: { zh: '持仓查询', en: 'Get Positions', hintZh: '读取当前持仓', hintEn: 'Read current holdings and exposure' },
+  list_orders: { zh: '委托列表', en: 'List Orders', hintZh: '读取活动与近期委托', hintEn: 'Read live and recent orders' },
+  get_order_status: { zh: '委托状态', en: 'Order Status', hintZh: '读取单笔委托状态', hintEn: 'Inspect a specific order status' },
+  place_order: { zh: '下单', en: 'Place Order', hintZh: '提交真实委托', hintEn: 'Submit a broker order' },
+  cancel_order: { zh: '撤单', en: 'Cancel Order', hintZh: '撤销已有委托', hintEn: 'Cancel an existing order' },
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -138,10 +170,6 @@ const pillStyle: React.CSSProperties = {
   lineHeight: 1.1,
 };
 
-const ROLE_KEYS: FinanceRoleKey[] = ['researcher', 'strategist', 'risk_officer', 'executor', 'reviewer'];
-const SKILL_KEYS: FinanceSkillKey[] = ['premarket_scan', 'intraday_check', 'postmarket_review', 'watchlist_cleanup', 'emergency_stop'];
-const CONNECTOR_KEYS: FinanceConnectorKey[] = ['intel', 'risk', 'exec'];
-
 const ToggleRow: React.FC<{
   label: string;
   checked: boolean;
@@ -192,6 +220,7 @@ export const FinanceConfigSheet: React.FC<{
   const [pups, setPups] = useState<PupSummary[]>([]);
   const [skills, setSkills] = useState<InstalledSkill[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [tools, setTools] = useState<McpToolInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<'risk' | 'workflow' | 'roles' | 'connectors'>(() => readExpandedSection());
 
@@ -200,16 +229,18 @@ export const FinanceConfigSheet: React.FC<{
     const load = async () => {
       setError(null);
       try {
-        const [scenarioSnapshot, pupList, skillList, serverList] = await Promise.all([
+        const [scenarioSnapshot, pupList, skillList, serverList, toolList] = await Promise.all([
           invoke<ScenarioSettingsSnapshot>('get_scenario_settings_snapshot'),
           invoke<PupSummary[]>('list_pups'),
           invoke<InstalledSkill[]>('list_skills'),
           invoke<McpServer[]>('list_mcp_servers'),
+          invoke<McpToolInfo[]>('list_mcp_tools'),
         ]);
         setFinanceConfig(normalizeFinanceScenarioConfig(scenarioSnapshot.finance));
         setPups(pupList.filter((item) => item.enabled));
         setSkills(skillList.filter((item) => item.enabled));
         setServers(serverList);
+        setTools(toolList);
       } catch (e) {
         setError(String(e));
       }
@@ -231,8 +262,13 @@ export const FinanceConfigSheet: React.FC<{
   };
 
   const connectorSummary = useMemo(() => (
-    (['intel', 'risk', 'exec'] as const)
-      .map((connector) => `${connector}→${finance.connectorBindings[connector].serverName ?? 'unbound'}`)
+    FINANCE_CONNECTOR_KEYS
+      .map((connector) => {
+        const boundCount = FINANCE_CONNECTOR_CAPABILITY_KEYS[connector]
+          .filter((capability) => !!finance.connectorBindings[connector].capabilityBindings[capability]?.toolName)
+          .length;
+        return `${connector}→${finance.connectorBindings[connector].serverName ?? 'unbound'} (${boundCount}/${FINANCE_CONNECTOR_CAPABILITY_KEYS[connector].length})`;
+      })
       .join(' · ')
   ), [finance]);
   const boundRoleCount = useMemo(
@@ -268,7 +304,7 @@ export const FinanceConfigSheet: React.FC<{
     [lang === 'zh' ? '手数' : 'Lot size', `${finance.riskPreset.boardLotSize}`],
   ]), [finance, lang]);
   const workflowSummary = useMemo(() => (
-    SKILL_KEYS.map((skill) => ({
+    FINANCE_SKILL_KEYS.map((skill) => ({
       skill,
       label: lang === 'zh' ? skillMeta[skill].zh : skillMeta[skill].en,
       value: finance.skillBindings[skill].mode === 'installed_skill'
@@ -277,14 +313,14 @@ export const FinanceConfigSheet: React.FC<{
     }))
   ), [finance, lang]);
   const roleSummary = useMemo(() => (
-    ROLE_KEYS.map((role) => ({
+    FINANCE_ROLE_KEYS.map((role) => ({
       role,
       label: lang === 'zh' ? roleMeta[role].zh : roleMeta[role].en,
       value: finance.roleBindings[role].pupKey ?? (lang === 'zh' ? '未绑定' : 'Unbound'),
     }))
   ), [finance, lang]);
   const connectorSummaryRows = useMemo(() => (
-    CONNECTOR_KEYS.map((connector) => ({
+    FINANCE_CONNECTOR_KEYS.map((connector) => ({
       connector,
       label: lang === 'zh' ? connectorMeta[connector].zh : connectorMeta[connector].en,
       value: finance.connectorBindings[connector].serverName ?? (lang === 'zh' ? '未绑定' : 'Unbound'),
@@ -478,7 +514,7 @@ export const FinanceConfigSheet: React.FC<{
               </button>
               {expanded === 'workflow' && (
                 <div style={{ padding: '0 13px 13px', display: 'grid', gap: 9 }}>
-                  {SKILL_KEYS.map((skill) => (
+                  {FINANCE_SKILL_KEYS.map((skill) => (
                     <div key={skill} style={{ ...miniCardStyle, display: 'grid', gap: 9, borderRadius: 10, padding: '11px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                         <div>
@@ -538,7 +574,7 @@ export const FinanceConfigSheet: React.FC<{
               </button>
               {expanded === 'roles' && (
                 <div style={{ padding: '0 13px 13px', display: 'grid', gap: 9 }}>
-                  {ROLE_KEYS.map((role) => (
+                  {FINANCE_ROLE_KEYS.map((role) => (
                     <div key={role} style={{ ...miniCardStyle, display: 'grid', gap: 9, borderRadius: 10, padding: '11px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                         <div>
@@ -595,7 +631,16 @@ export const FinanceConfigSheet: React.FC<{
               </button>
               {expanded === 'connectors' && (
                 <div style={{ padding: '0 13px 13px', display: 'grid', gap: 9 }}>
-                  {CONNECTOR_KEYS.map((connector) => (
+                  {FINANCE_CONNECTOR_KEYS.map((connector) => {
+                    const boundServer = finance.connectorBindings[connector].serverName;
+                    const serverTools = tools
+                      .filter((tool) => tool.server === boundServer)
+                      .sort((a, b) => a.name.localeCompare(b.name));
+                    const capabilityKeys = FINANCE_CONNECTOR_CAPABILITY_KEYS[connector];
+                    const capabilityBoundCount = capabilityKeys
+                      .filter((capability) => !!finance.connectorBindings[connector].capabilityBindings[capability]?.toolName)
+                      .length;
+                    return (
                     <div key={connector} style={{ ...miniCardStyle, display: 'grid', gap: 9, borderRadius: 10, padding: '11px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                         <div>
@@ -617,11 +662,24 @@ export const FinanceConfigSheet: React.FC<{
                       <select
                         value={finance.connectorBindings[connector].serverName ?? ''}
                         onChange={(e) => {
+                          const nextServerName = e.target.value || null;
                           commitFinance({
                             ...finance,
                             connectorBindings: {
                               ...finance.connectorBindings,
-                              [connector]: { mode: 'mcp_server', serverName: e.target.value || null },
+                              [connector]: {
+                                mode: 'mcp_server',
+                                serverName: nextServerName,
+                                capabilityBindings: Object.fromEntries(
+                                  Object.entries(finance.connectorBindings[connector].capabilityBindings).map(([capability, binding]) => [
+                                    capability,
+                                    {
+                                      ...binding,
+                                      toolName: nextServerName ? binding.toolName : null,
+                                    },
+                                  ]),
+                                ) as FinanceScenarioConfig['connectorBindings'][FinanceConnectorKey]['capabilityBindings'],
+                              },
                             },
                           });
                         }}
@@ -634,8 +692,93 @@ export const FinanceConfigSheet: React.FC<{
                           </option>
                         ))}
                       </select>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '8px 10px',
+                        borderRadius: 10,
+                        background: 'var(--color-background-secondary)',
+                        border: '0.5px solid var(--color-border-tertiary)',
+                      }}>
+                        <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                          {lang === 'zh' ? '能力覆盖' : 'Capability Coverage'}
+                        </span>
+                        <strong style={{ fontSize: 11, color: capabilityBoundCount === capabilityKeys.length ? '#0E6A4C' : 'var(--color-text-primary)' }}>
+                          {capabilityBoundCount}/{capabilityKeys.length}
+                        </strong>
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {capabilityKeys.map((capability) => {
+                          const binding = finance.connectorBindings[connector].capabilityBindings[capability];
+                          return (
+                            <div key={capability} style={{
+                              display: 'grid',
+                              gap: 6,
+                              padding: '10px',
+                              borderRadius: 10,
+                              background: 'var(--color-background-secondary)',
+                              border: '0.5px solid var(--color-border-tertiary)',
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                                <div>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                                    {lang === 'zh' ? capabilityMeta[capability].zh : capabilityMeta[capability].en}
+                                  </div>
+                                  <div style={{ marginTop: 3, fontSize: 10, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
+                                    {lang === 'zh' ? capabilityMeta[capability].hintZh : capabilityMeta[capability].hintEn}
+                                  </div>
+                                </div>
+                                <span style={{
+                                  ...pillStyle,
+                                  fontFamily: 'var(--font-mono)',
+                                  color: binding.toolName ? '#0E6A4C' : 'var(--color-text-tertiary)',
+                                  background: binding.toolName ? 'rgba(29,158,117,0.10)' : 'var(--color-background-primary)',
+                                  border: '0.5px solid var(--color-border-tertiary)',
+                                }}>
+                                  {`mcp__${connector}__${capability}`}
+                                </span>
+                              </div>
+                              <select
+                                value={binding.toolName ?? ''}
+                                onChange={(e) => {
+                                  commitFinance({
+                                    ...finance,
+                                    connectorBindings: {
+                                      ...finance.connectorBindings,
+                                      [connector]: {
+                                        ...finance.connectorBindings[connector],
+                                        capabilityBindings: {
+                                          ...finance.connectorBindings[connector].capabilityBindings,
+                                          [capability]: { mode: 'mcp_tool', toolName: e.target.value || null },
+                                        },
+                                      },
+                                    },
+                                  });
+                                }}
+                                style={selectStyle}
+                                disabled={!boundServer}
+                              >
+                                <option value="">{boundServer ? (lang === 'zh' ? '未绑定能力' : 'Unbound capability') : (lang === 'zh' ? '请先绑定 server' : 'Bind a server first')}</option>
+                                {serverTools.map((tool) => (
+                                  <option key={`${tool.server}:${tool.name}`} value={tool.name}>
+                                    {tool.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {!!binding.toolName && serverTools.find((tool) => tool.name === binding.toolName)?.description && (
+                                <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                                  {serverTools.find((tool) => tool.name === binding.toolName)?.description}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

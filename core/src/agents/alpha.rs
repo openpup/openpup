@@ -468,7 +468,14 @@ impl ToolLoopDelegate for AlphaToolLoopState<'_> {
                     self.pup.delegation_depth.fetch_add(1, Ordering::Relaxed);
                     let result = self
                         .pup
-                        .run_pup_for_channel(&target, &sub_task, &owner_ctx, self.on_activity, None)
+                        .run_pup_for_channel(
+                            &target,
+                            &sub_task,
+                            &owner_ctx,
+                            None,
+                            self.on_activity,
+                            None,
+                        )
                         .await;
                     self.pup.delegation_depth.fetch_sub(1, Ordering::Relaxed);
                     match result {
@@ -959,6 +966,74 @@ impl AlphaPup {
         rules.join("\n")
     }
 
+    fn finance_connector_capability_summary(
+        finance: &crate::config::FinanceScenarioConfig,
+    ) -> String {
+        finance
+            .connector_bindings
+            .iter()
+            .map(|binding| {
+                let capability_lines = binding
+                    .capability_bindings
+                    .iter()
+                    .filter_map(|capability| {
+                        capability.tool_name.as_ref().map(|tool_name| {
+                            format!(
+                                "  - mcp__{}__{} => {}.{}",
+                                binding.connector, capability.capability, binding
+                                    .server_name
+                                    .as_deref()
+                                    .unwrap_or("unbound"), tool_name
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if capability_lines.is_empty() {
+                    format!(
+                        "- {} => {}；未配置能力映射",
+                        binding.connector,
+                        binding.server_name.as_deref().unwrap_or("未绑定")
+                    )
+                } else {
+                    format!(
+                        "- {} => {}\n{}",
+                        binding.connector,
+                        binding.server_name.as_deref().unwrap_or("未绑定"),
+                        capability_lines.join("\n")
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn finance_allowed_mcp_aliases(
+        finance: &crate::config::FinanceScenarioConfig,
+    ) -> std::collections::HashSet<String> {
+        finance
+            .connector_bindings
+            .iter()
+            .flat_map(|binding| {
+                binding.capability_bindings.iter().filter_map(|capability| {
+                    if binding.server_name.is_some()
+                        && capability
+                            .tool_name
+                            .as_ref()
+                            .is_some_and(|name| !name.trim().is_empty())
+                    {
+                        Some(format!(
+                            "mcp__{}__{}",
+                            crate::mcp::orchestrator::sanitize_tool_name(&binding.connector),
+                            crate::mcp::orchestrator::sanitize_tool_name(&capability.capability),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     fn normalize_finance_artifact_key(raw: &str) -> String {
         raw.trim()
             .to_ascii_lowercase()
@@ -1092,19 +1167,7 @@ impl AlphaPup {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let connector_bindings = finance
-            .connector_bindings
-            .iter()
-            .map(|binding| {
-                format!(
-                    "- {} => {}；运行时只调用 mcp__{}__*",
-                    binding.connector,
-                    binding.server_name.as_deref().unwrap_or("未绑定"),
-                    binding.connector
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let connector_bindings = Self::finance_connector_capability_summary(finance);
         format!(
             "## 金融交易场景模式\n\
              当前请求处于 Finance mode。请将角色、技能预设与连接器实现解耦。\n\n\
@@ -1119,7 +1182,7 @@ impl AlphaPup {
              ## 硬规则\n\
              {}\n\n\
              若当前请求与研究、策略、风控、执行或复盘相关，优先遵守上述边界；\
-             连接器 prompt 只引用 mcp__intel__* / mcp__risk__* / mcp__exec__*。\n\
+             连接器 prompt 只引用配置中列出的 capability alias，不依赖具体实现名。\n\
              如果你形成了交易意图，最终请追加一个 `## TradeIntent` 小节，并使用标准 `field: value` 行输出字段。",
             role_bindings,
             connector_bindings,
@@ -1265,7 +1328,7 @@ impl AlphaPup {
                  字段：symbol / market / direction / thesis / confidence / entry_rule / exit_rule / max_position_pct / time_horizon / valid_until / risk_notes / approval_status / adjusted_position_pct\n\
                  只有风控员可以写 approval_status 与 adjusted_position_pct。\n\n\
                  ## 连接器接口\n\
-                 只使用 mcp__intel__* / mcp__risk__* / mcp__exec__* 别名，不依赖具体实现名。\n\n\
+                 只使用下列 capability alias，不依赖具体实现名。\n{}\n\n\
                  ## 硬规则\n{}\n\n\
                  ## 上游输出\n{}\n\n\
                  ## 执行要求\n\
@@ -1277,6 +1340,7 @@ impl AlphaPup {
                 pup_display_name(pup_key),
                 original_msg,
                 Self::finance_stage_instructions(preset, role),
+                Self::finance_connector_capability_summary(&finance),
                 Self::finance_hard_rules(&finance),
                 upstream_block,
             );
@@ -1304,6 +1368,7 @@ impl AlphaPup {
                     pup_key,
                     &stage_msg,
                     &owner_summary,
+                    Some(&finance),
                     &stage_on_token,
                     &stage_on_activity,
                     Some(pup_ctx.clone()),
@@ -1855,6 +1920,7 @@ impl AlphaPup {
                     &format!("skill:{skill_name}"),
                     msgs,
                     &tool_perms,
+                    finance.as_ref(),
                     None,
                     move |tok| {
                         emit_event(handle.as_ref(), "stream_token", tok);
@@ -1978,6 +2044,7 @@ impl AlphaPup {
                     &pup_key,
                     msgs,
                     &tool_perms,
+                    finance.as_ref(),
                     None,
                     move |tok| {
                         emit_event(handle.as_ref(), "stream_token", tok);
@@ -2099,6 +2166,7 @@ impl AlphaPup {
             "alpha",
             messages,
             &tool_perms,
+            finance,
             None,
             move |tok| {
                 // Emit reasoning tokens separately if the LLM uses them.
@@ -2301,6 +2369,7 @@ impl AlphaPup {
         agent_name: &str,
         messages: Vec<serde_json::Value>,
         tool_perms: &PupToolPermissions,
+        finance: Option<&crate::config::FinanceScenarioConfig>,
         review_tool: Option<&ReviewToolContext>,
         on_token: impl Fn(String) + Send + Sync,
         on_activity: impl Fn(String, String) + Send + Sync,
@@ -2429,7 +2498,15 @@ impl AlphaPup {
             // Build a slightly richer hint from the recent user turns so short
             // follow-ups like "继续" or "用那个删掉" still have enough context.
             let task_hint = Self::build_mcp_task_hint(&messages);
-            let all_mcp = self.mcp_orchestrator.tools_as_openai_specs().await;
+            let mut all_mcp = self.mcp_orchestrator.tools_as_openai_specs().await;
+            if let Some(finance) = finance {
+                let allowed = Self::finance_allowed_mcp_aliases(finance);
+                all_mcp.retain(|spec| {
+                    spec["function"]["name"]
+                        .as_str()
+                        .is_some_and(|name| allowed.contains(name))
+                });
+            }
             if all_mcp.len() > Self::MAX_MCP_TOOLS {
                 // Deferred pattern: inject a lightweight catalog tool instead of all schemas.
                 // Saves ~100-200 tokens per tool × (total - MAX_MCP_TOOLS) tools.
@@ -2549,6 +2626,7 @@ impl AlphaPup {
                         &pup_key_owned,
                         &msg_owned,
                         &owner_ctx,
+                        None,
                         &|_, _| {},
                         Some(pup_ctx_clone),
                     )
@@ -2791,6 +2869,7 @@ impl AlphaPup {
                         &pup_key,
                         &full_msg,
                         &owner_ctx,
+                        None,
                         if deps.is_empty() {
                             None
                         } else {
@@ -3505,7 +3584,14 @@ impl AlphaPup {
                     };
 
                     let result = self_clone
-                        .run_pup_for_channel(&pup_key, &full_msg, &owner_ctx, &|_, _| {}, None)
+                        .run_pup_for_channel(
+                            &pup_key,
+                            &full_msg,
+                            &owner_ctx,
+                            None,
+                            &|_, _| {},
+                            None,
+                        )
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"));
 
@@ -3636,7 +3722,14 @@ impl AlphaPup {
         // Single pup path
         if self.resolve_pup(&pup_key).await.is_ok() {
             let reply = self
-                .run_pup_for_channel(&pup_key, &msg, &owner_summary, &|_, _| {}, None)
+                .run_pup_for_channel(
+                    &pup_key,
+                    &msg,
+                    &owner_summary,
+                    None,
+                    &|_, _| {},
+                    None,
+                )
                 .await?;
             self.record_pup_context_tokens_async(&pup_key).await;
             if !reply.is_empty() && !self.abort_flag.load(Ordering::Relaxed) {
@@ -3756,6 +3849,7 @@ impl AlphaPup {
             messages,
             &tool_perms,
             None,
+            None,
             |_| {},
             |_, _| {},
             null_flag,
@@ -3865,6 +3959,7 @@ impl AlphaPup {
         pup_key: &'a str,
         msg: &'a str,
         owner_summary: &'a str,
+        finance: Option<&'a crate::config::FinanceScenarioConfig>,
         on_activity: &'a (dyn Fn(String, String) + Send + Sync),
         pup_ctx: Option<PupContext>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
@@ -3872,6 +3967,7 @@ impl AlphaPup {
             pup_key,
             msg,
             owner_summary,
+            finance,
             &|_| {},
             on_activity,
             pup_ctx,
@@ -3883,6 +3979,7 @@ impl AlphaPup {
         pup_key: &'a str,
         msg: &'a str,
         owner_summary: &'a str,
+        finance: Option<&'a crate::config::FinanceScenarioConfig>,
         on_token: &'a (dyn Fn(String) + Send + Sync),
         on_activity: &'a (dyn Fn(String, String) + Send + Sync),
         pup_ctx: Option<PupContext>,
@@ -3893,6 +3990,7 @@ impl AlphaPup {
                     pup_key,
                     msg,
                     owner_summary,
+                    finance,
                     None,
                     on_token,
                     on_activity,
@@ -3913,6 +4011,7 @@ impl AlphaPup {
         pup_key: &str,
         msg: &str,
         owner_summary: &str,
+        finance: Option<&crate::config::FinanceScenarioConfig>,
         review_tool: Option<ReviewToolContext>,
         on_token: impl Fn(String) + Send + Sync,
         on_activity: impl Fn(String, String) + Send + Sync,
@@ -3997,6 +4096,7 @@ impl AlphaPup {
             pup_key,
             msgs,
             &tool_perms,
+            finance,
             review_tool.as_ref(),
             on_token,
             on_activity,

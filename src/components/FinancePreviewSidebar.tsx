@@ -7,10 +7,10 @@ import type {
   FinanceArtifactPayload,
   FinanceIntentPayload,
 } from '../stores/chatStore';
-import type { FinanceScenarioConfig } from '../stores/scenarioStore';
+import { FINANCE_CONNECTOR_CAPABILITY_KEYS, type FinanceCapabilityKey, type FinanceScenarioConfig } from '../stores/scenarioStore';
 
 const panelStyle: React.CSSProperties = {
-  width: 340,
+  width: 'clamp(400px, 28vw, 460px)',
   flexShrink: 0,
   borderLeft: '0.5px solid var(--color-border-tertiary)',
   background: 'var(--color-background-primary)',
@@ -39,6 +39,27 @@ const skillLabels: Record<string, { zh: string; en: string }> = {
   postmarket_review: { zh: '收盘复盘', en: 'Postmarket Review' },
   watchlist_cleanup: { zh: '自选维护', en: 'Watchlist Cleanup' },
   emergency_stop: { zh: '紧急止损', en: 'Emergency Stop' },
+};
+
+const capabilityLabels: Record<FinanceCapabilityKey, { zh: string; en: string }> = {
+  search_news: { zh: '资讯检索', en: 'News Search' },
+  get_quote: { zh: '实时行情', en: 'Quote' },
+  get_candles: { zh: 'K线 / Bar', en: 'Candles' },
+  screen_symbols: { zh: '条件选股', en: 'Screen Symbols' },
+  list_watchlist: { zh: '读取自选', en: 'List Watchlist' },
+  add_watchlist: { zh: '加入自选', en: 'Add Watchlist' },
+  remove_watchlist: { zh: '移除自选', en: 'Remove Watchlist' },
+  review_trade_intent: { zh: '审批 Intent', en: 'Review Intent' },
+  validate_order: { zh: '订单校验', en: 'Validate Order' },
+  validate_positions: { zh: '持仓校验', en: 'Validate Positions' },
+  validate_market_status: { zh: '市场状态校验', en: 'Validate Market Status' },
+  validate_exposure: { zh: '敞口校验', en: 'Validate Exposure' },
+  get_account: { zh: '账户总览', en: 'Account Summary' },
+  get_positions: { zh: '持仓查询', en: 'Get Positions' },
+  list_orders: { zh: '委托列表', en: 'List Orders' },
+  get_order_status: { zh: '委托状态', en: 'Order Status' },
+  place_order: { zh: '下单', en: 'Place Order' },
+  cancel_order: { zh: '撤单', en: 'Cancel Order' },
 };
 
 interface ParsedTradeIntent {
@@ -160,10 +181,19 @@ export const FinancePreviewSidebar: React.FC<{
   }, [streamingSteps]);
   const recentSteps = useMemo(() => streamingSteps.slice(-6), [streamingSteps]);
   const aliasSummary = useMemo(() => (
-    (['intel', 'risk', 'exec'] as const).map((connector) => ({
-      connector,
-      target: finance.connectorBindings[connector].serverName ?? 'unbound',
-    }))
+    (['intel', 'risk', 'exec'] as const).map((connector) => {
+      const capabilities = FINANCE_CONNECTOR_CAPABILITY_KEYS[connector].map((capability) => ({
+        capability,
+        toolName: finance.connectorBindings[connector].capabilityBindings[capability]?.toolName ?? null,
+      }));
+      return {
+        connector,
+        target: finance.connectorBindings[connector].serverName ?? 'unbound',
+        boundCount: capabilities.filter((item) => !!item.toolName).length,
+        totalCount: capabilities.length,
+        capabilities,
+      };
+    })
   ), [finance]);
   const roleSummary = useMemo(() => (
     (['researcher', 'strategist', 'risk_officer', 'executor', 'reviewer'] as const).map((role) => ({
@@ -360,10 +390,38 @@ export const FinancePreviewSidebar: React.FC<{
             {lang === 'zh' ? 'Alias 路由' : 'Alias Routing'}
           </div>
           <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-            {aliasSummary.map(({ connector, target }) => (
-              <div key={connector} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
-                <span style={{ color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>{connector}</span>
-                <span style={{ color: 'var(--color-text-primary)' }}>{target}</span>
+            {aliasSummary.map(({ connector, target, boundCount, totalCount, capabilities }) => (
+              <div key={connector} style={{
+                display: 'grid',
+                gap: 8,
+                padding: '10px 11px',
+                borderRadius: 12,
+                background: 'var(--color-background-primary)',
+                border: '0.5px solid var(--color-border-tertiary)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+                  <span style={{ color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>{connector}</span>
+                  <span style={{ color: 'var(--color-text-primary)' }}>{target}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
+                  <span style={{ color: 'var(--color-text-secondary)' }}>{lang === 'zh' ? '能力覆盖' : 'Coverage'}</span>
+                  <strong style={{ color: boundCount === totalCount ? '#0E6A4C' : 'var(--color-text-primary)' }}>{boundCount}/{totalCount}</strong>
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {capabilities.map(({ capability, toolName }) => (
+                    <div key={capability} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10 }}>
+                      <div style={{ display: 'grid', gap: 2 }}>
+                        <span style={{ color: 'var(--color-text-primary)' }}>
+                          {lang === 'zh' ? capabilityLabels[capability].zh : capabilityLabels[capability].en}
+                        </span>
+                        <span style={{ color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>{`mcp__${connector}__${capability}`}</span>
+                      </div>
+                      <span style={{ color: toolName ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)' }}>
+                        {toolName ?? (lang === 'zh' ? '未绑定' : 'Unbound')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>

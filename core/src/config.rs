@@ -89,6 +89,19 @@ pub struct FinanceConnectorBinding {
     pub mode: String,
     #[serde(default)]
     pub server_name: Option<String>,
+    #[serde(default = "default_finance_capability_bindings")]
+    pub capability_bindings: Vec<FinanceCapabilityBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinanceCapabilityBinding {
+    #[serde(default)]
+    pub capability: String,
+    #[serde(default = "default_finance_capability_binding_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +342,9 @@ fn default_finance_skill_binding_mode() -> String {
 fn default_finance_connector_binding_mode() -> String {
     "mcp_server".into()
 }
+fn default_finance_capability_binding_mode() -> String {
+    "mcp_tool".into()
+}
 fn default_single_position_limit_pct() -> u32 {
     20
 }
@@ -361,10 +377,67 @@ fn default_finance_skill_bindings() -> Vec<FinanceSkillBinding> {
 }
 fn default_finance_connector_bindings() -> Vec<FinanceConnectorBinding> {
     vec![
-        FinanceConnectorBinding { connector: "intel".into(), mode: default_finance_connector_binding_mode(), server_name: Some("intel".into()) },
-        FinanceConnectorBinding { connector: "risk".into(), mode: default_finance_connector_binding_mode(), server_name: Some("risk".into()) },
-        FinanceConnectorBinding { connector: "exec".into(), mode: default_finance_connector_binding_mode(), server_name: Some("exec".into()) },
+        FinanceConnectorBinding {
+            connector: "intel".into(),
+            mode: default_finance_connector_binding_mode(),
+            server_name: Some("intel".into()),
+            capability_bindings: default_finance_capability_bindings_for_connector("intel"),
+        },
+        FinanceConnectorBinding {
+            connector: "risk".into(),
+            mode: default_finance_connector_binding_mode(),
+            server_name: Some("risk".into()),
+            capability_bindings: default_finance_capability_bindings_for_connector("risk"),
+        },
+        FinanceConnectorBinding {
+            connector: "exec".into(),
+            mode: default_finance_connector_binding_mode(),
+            server_name: Some("exec".into()),
+            capability_bindings: default_finance_capability_bindings_for_connector("exec"),
+        },
     ]
+}
+
+fn default_finance_capability_bindings() -> Vec<FinanceCapabilityBinding> {
+    vec![]
+}
+
+fn default_finance_capability_bindings_for_connector(connector: &str) -> Vec<FinanceCapabilityBinding> {
+    let items: &[(&str, Option<&str>)] = match connector {
+        "intel" => &[
+            ("search_news", Some("search_news")),
+            ("get_quote", Some("get_quote")),
+            ("get_candles", Some("get_candles")),
+            ("screen_symbols", Some("screen_symbols")),
+            ("list_watchlist", Some("list_watchlist")),
+            ("add_watchlist", Some("add_watchlist")),
+            ("remove_watchlist", Some("remove_watchlist")),
+        ],
+        "risk" => &[
+            ("review_trade_intent", Some("review_trade_intent")),
+            ("validate_order", Some("validate_order")),
+            ("validate_positions", Some("validate_positions")),
+            ("validate_market_status", Some("validate_market_status")),
+            ("validate_exposure", Some("validate_exposure")),
+        ],
+        "exec" => &[
+            ("get_account", Some("get_account")),
+            ("get_positions", Some("get_positions")),
+            ("list_orders", Some("list_orders")),
+            ("get_order_status", Some("get_order_status")),
+            ("place_order", Some("place_order")),
+            ("cancel_order", Some("cancel_order")),
+        ],
+        _ => &[],
+    };
+    items
+        .iter()
+        .map(|(capability, tool_name)| FinanceCapabilityBinding {
+            capability: (*capability).into(),
+            mode: default_finance_capability_binding_mode(),
+            tool_name: tool_name.map(|name| name.into()),
+        })
+        .collect()
 }
 
 pub fn default_api_base_for_provider(kind: &str, provider: &str) -> String {

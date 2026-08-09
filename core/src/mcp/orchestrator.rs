@@ -90,6 +90,15 @@ struct CachedMcpTool {
     doc_hash: u64,
 }
 
+#[derive(Debug, Clone)]
+struct FinanceCapabilityAlias {
+    actual_server: String,
+    actual_tool: String,
+    alias_server: String,
+    alias_tool: String,
+    description: String,
+}
+
 #[derive(Debug, Default)]
 struct McpCatalogSnapshot {
     entries: Vec<Arc<CachedMcpTool>>,
@@ -1378,7 +1387,7 @@ impl MCPOrchestrator {
     }
 
     fn build_catalog_snapshot(cache: &HashMap<String, Vec<McpToolInfo>>) -> McpCatalogSnapshot {
-        let finance_aliases = Self::finance_connector_alias_targets();
+        let finance_aliases = Self::finance_capability_alias_targets();
         let mut tools: Vec<McpToolInfo> = cache
             .values()
             .flat_map(|tool_list| tool_list.iter().cloned())
@@ -1403,10 +1412,9 @@ impl MCPOrchestrator {
 
             for alias in finance_aliases
                 .iter()
-                .filter(|(_, target_server)| target_server == &actual_server)
-                .map(|(alias, _)| alias)
+                .filter(|alias| alias.actual_server == actual_server && alias.actual_tool == tool.name)
             {
-                let alias_entry = Arc::new(Self::catalog_entry_from_tool(tool.clone(), alias));
+                let alias_entry = Arc::new(Self::catalog_entry_from_alias(tool.clone(), alias));
                 if by_fn_name.contains_key(&alias_entry.fn_name) {
                     continue;
                 }
@@ -1429,13 +1437,37 @@ impl MCPOrchestrator {
     }
 
     fn catalog_entry_from_tool(tool: McpToolInfo, exposed_server: &str) -> CachedMcpTool {
+        let exposed_tool_name = tool.name.clone();
+        Self::catalog_entry_from_parts(tool, exposed_server, &exposed_tool_name, None)
+    }
+
+    fn catalog_entry_from_alias(tool: McpToolInfo, alias: &FinanceCapabilityAlias) -> CachedMcpTool {
+        Self::catalog_entry_from_parts(
+            tool,
+            &alias.alias_server,
+            &alias.alias_tool,
+            Some(alias.description.as_str()),
+        )
+    }
+
+    fn catalog_entry_from_parts(
+        tool: McpToolInfo,
+        exposed_server: &str,
+        exposed_tool_name: &str,
+        alias_description: Option<&str>,
+    ) -> CachedMcpTool {
         let fn_name = format!(
             "mcp__{}__{}",
             sanitize_tool_name(exposed_server),
-            sanitize_tool_name(&tool.name)
+            sanitize_tool_name(exposed_tool_name)
         );
         let schema = Self::normalize_input_schema(&tool.input_schema);
-        let description = if exposed_server == tool.server {
+        let description = if let Some(alias_description) = alias_description {
+            format!(
+                "[{}→{}.{}] {}",
+                exposed_server, tool.server, tool.name, alias_description
+            )
+        } else if exposed_server == tool.server {
             format!("[{}] {}", tool.server, tool.description)
         } else {
             format!("[{}→{}] {}", exposed_server, tool.server, tool.description)
@@ -1471,14 +1503,64 @@ impl MCPOrchestrator {
         }
     }
 
-    fn finance_connector_alias_targets() -> Vec<(String, String)> {
+    fn finance_capability_alias_targets() -> Vec<FinanceCapabilityAlias> {
         crate::config::load_fast()
             .scenario
             .finance
             .connector_bindings
             .into_iter()
-            .filter_map(|binding| binding.server_name.map(|server_name| (binding.connector, server_name)))
+            .flat_map(|binding| {
+                let Some(server_name) = binding.server_name else {
+                    return Vec::new();
+                };
+                binding
+                    .capability_bindings
+                    .into_iter()
+                    .filter_map(move |capability| {
+                        let tool_name = capability.tool_name?;
+                        if capability.capability.trim().is_empty() || tool_name.trim().is_empty() {
+                            return None;
+                        }
+                        Some(FinanceCapabilityAlias {
+                            actual_server: server_name.clone(),
+                            actual_tool: tool_name.clone(),
+                            alias_server: binding.connector.clone(),
+                            alias_tool: capability.capability.clone(),
+                            description: Self::finance_capability_description(
+                                &binding.connector,
+                                &capability.capability,
+                            )
+                            .unwrap_or_else(|| format!("Finance capability alias for {}", capability.capability)),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect()
+    }
+
+    fn finance_capability_description(connector: &str, capability: &str) -> Option<String> {
+        let description = match (connector, capability) {
+            ("intel", "search_news") => "Research news, filings, and catalyst flow".to_string(),
+            ("intel", "get_quote") => "Fetch the latest quote and top-of-book snapshot".to_string(),
+            ("intel", "get_candles") => "Load recent candles or bars for validation and review".to_string(),
+            ("intel", "screen_symbols") => "Screen symbols by market conditions or filters".to_string(),
+            ("intel", "list_watchlist") => "Read the current watchlist".to_string(),
+            ("intel", "add_watchlist") => "Add symbols to the watchlist".to_string(),
+            ("intel", "remove_watchlist") => "Remove symbols from the watchlist".to_string(),
+            ("risk", "review_trade_intent") => "Approve, reject, or reduce a TradeIntent".to_string(),
+            ("risk", "validate_order") => "Validate order-level constraints before execution".to_string(),
+            ("risk", "validate_positions") => "Inspect current positions for risk checks".to_string(),
+            ("risk", "validate_market_status") => "Check market status, trading window, and venue constraints".to_string(),
+            ("risk", "validate_exposure") => "Check aggregate exposure such as single-name and sector caps".to_string(),
+            ("exec", "get_account") => "Read account summary and buying power".to_string(),
+            ("exec", "get_positions") => "Read current holdings and exposure".to_string(),
+            ("exec", "list_orders") => "Read live and recent orders".to_string(),
+            ("exec", "get_order_status") => "Inspect a specific order status".to_string(),
+            ("exec", "place_order") => "Submit a broker order for execution".to_string(),
+            ("exec", "cancel_order") => "Cancel an existing broker order".to_string(),
+            _ => return None,
+        };
+        Some(description)
     }
 
     fn normalize_input_schema(schema: &serde_json::Value) -> serde_json::Value {
