@@ -1209,14 +1209,38 @@ impl AlphaPup {
 
         let mut upstream_outputs: Vec<(String, String, String)> = Vec::new();
         for (index, (role, pup_key)) in stages.iter().enumerate() {
+            let stage_label = format!(
+                "{}/{} · {} · {}",
+                index + 1,
+                stages.len(),
+                role,
+                pup_display_name(pup_key)
+            );
             emit_event(
                 events.as_ref(),
                 "stream_activity",
                 ActivityEvent {
                     kind: "routing".into(),
-                    label: format!("finance:{preset}:{}", pup_display_name(pup_key)),
+                    label: format!("finance:{preset}:{stage_label}"),
                 },
             );
+
+            emit_event(
+                events.as_ref(),
+                "stream_activity",
+                ActivityEvent {
+                    kind: "task".into(),
+                    label: format!("finance-stage-start:{stage_label}"),
+                },
+            );
+
+            let stage_heading = format!(
+                "{}## {} ({})\n\n",
+                if index == 0 { "" } else { "\n\n" },
+                role,
+                pup_display_name(pup_key)
+            );
+            emit_event(events.as_ref(), "stream_token", stage_heading.clone());
 
             let upstream_block = if upstream_outputs.is_empty() {
                 "无上游输出，本阶段直接基于用户请求开始。".to_string()
@@ -1257,16 +1281,44 @@ impl AlphaPup {
                 upstream_block,
             );
 
+            let stage_activity_label = stage_label.clone();
+            let activity_sink = events.clone();
+            let stage_on_activity = move |kind: String, label: String| {
+                emit_event(
+                    activity_sink.as_ref(),
+                    "stream_activity",
+                    ActivityEvent {
+                        kind,
+                        label: format!("{stage_activity_label} · {label}"),
+                    },
+                );
+            };
+
+            let token_sink = events.clone();
+            let stage_on_token = move |tok: String| {
+                emit_event(token_sink.as_ref(), "stream_token", tok);
+            };
+
             let result = self
-                .run_pup_for_channel(
+                .run_pup_for_channel_streaming(
                     pup_key,
                     &stage_msg,
                     &owner_summary,
-                    &|_, _| {},
+                    &stage_on_token,
+                    &stage_on_activity,
                     Some(pup_ctx.clone()),
                 )
                 .await
                 .unwrap_or_else(|e| format!("Error: {e}"));
+
+            emit_event(
+                events.as_ref(),
+                "stream_activity",
+                ActivityEvent {
+                    kind: "task".into(),
+                    label: format!("finance-stage-done:{stage_label}"),
+                },
+            );
 
             upstream_outputs.push((role.clone(), pup_key.clone(), result));
         }
@@ -2746,6 +2798,7 @@ impl AlphaPup {
                                 allowed_targets: deps.clone(),
                             })
                         },
+                        |_tok| {},
                         {
                             let cm_activity = cm_clone.clone();
                             let ch_activity = ch_id.clone();
@@ -3815,6 +3868,25 @@ impl AlphaPup {
         on_activity: &'a (dyn Fn(String, String) + Send + Sync),
         pup_ctx: Option<PupContext>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        self.run_pup_for_channel_streaming(
+            pup_key,
+            msg,
+            owner_summary,
+            &|_| {},
+            on_activity,
+            pup_ctx,
+        )
+    }
+
+    fn run_pup_for_channel_streaming<'a>(
+        &'a self,
+        pup_key: &'a str,
+        msg: &'a str,
+        owner_summary: &'a str,
+        on_token: &'a (dyn Fn(String) + Send + Sync),
+        on_activity: &'a (dyn Fn(String, String) + Send + Sync),
+        pup_ctx: Option<PupContext>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
         Box::pin(async move {
             match self
                 .run_pup_for_channel_with_activity(
@@ -3822,6 +3894,7 @@ impl AlphaPup {
                     msg,
                     owner_summary,
                     None,
+                    on_token,
                     on_activity,
                     pup_ctx,
                 )
@@ -3841,6 +3914,7 @@ impl AlphaPup {
         msg: &str,
         owner_summary: &str,
         review_tool: Option<ReviewToolContext>,
+        on_token: impl Fn(String) + Send + Sync,
         on_activity: impl Fn(String, String) + Send + Sync,
         pup_ctx: Option<PupContext>,
     ) -> Result<AgentRunResult> {
@@ -3924,7 +3998,7 @@ impl AlphaPup {
             msgs,
             &tool_perms,
             review_tool.as_ref(),
-            |_tok| {}, // channel pups don't stream to chat
+            on_token,
             on_activity,
             &self.abort_flag,
         )
