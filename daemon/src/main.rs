@@ -309,7 +309,7 @@ async fn handle_request(
                 .runtime
                 .alpha
                 .clone()
-                .process_user_message_stream(input, normalize_forced_pup(pup), sink)
+                .process_user_message_stream(input, normalize_forced_pup(pup), None, sink)
                 .await;
         }
         DaemonRequest::BridgeGetConfig => {

@@ -7,7 +7,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased](https://github.com/openpup/openpup/compare/v0.2.1...HEAD)
+## [Unreleased](https://github.com/openpup/openpup/compare/v0.2.2...HEAD)
+
+---
+
+## [0.2.2](https://github.com/openpup/openpup/compare/v0.2.1...v0.2.2) — 2026-08-09
+
+### Added
+- **Finance scenario mode** — added a dedicated Finance scene mode with role-based workflow presets for premarket scan, intraday check, postmarket review, watchlist maintenance, and emergency stop handling.
+- **Connector capability bindings** — Finance connectors now support full capability-level bindings, so `intel`, `risk`, and `exec` can map stable scene aliases onto heterogeneous MCP tool names at runtime.
+
+### Changed
+- **Finance runtime orchestration** — Finance mode now routes requests through scenario-specific role bindings, blocks channel collaboration triggers at the execution layer, and streams stage-by-stage progress into chat so long-running workflows stay visible while they run.
+- **Finance configuration experience** — rebuilt the Finance configuration sheet and preview sidebar around risk presets, workflow bindings, role bindings, capability coverage, and runtime alias inspection.
+- **Expert tone alignment** — updated the related “dog pack” expert wording to match the more professional WorkBuddy expert-mode voice.
+- **Settings model persistence** — fixed model-settings config wrapping so saved provider configuration snapshots round-trip more reliably.
+- **Release baseline** — desktop app metadata, npm package version, XMTP helper package version, workspace crates, and lockfiles are aligned to `0.2.2`.
+
+### Fixed
+- **Leashed enforcement toggling** — Finance mode no longer gets stuck when forced `leashed` is disabled, and execution-mode controls now respect the active risk preset.
+- **Finance config runtime stability** — fixed Finance config-sheet runtime errors caused by stale key constants and missing MCP tool snapshot wiring.
+- **Finance preview layout** — widened the Finance preview sidebar so capability and alias details no longer collapse in normal desktop layouts.
 
 ---
 

@@ -383,7 +383,7 @@ async fn run_single_prompt(
 
     let task = tokio::spawn(async move {
         alpha
-            .process_user_message_stream(input, forced_pup, sink)
+            .process_user_message_stream(input, forced_pup, None, sink)
             .await;
     });
 
