@@ -1456,8 +1456,205 @@ const AppInner: React.FC = () => {
     </svg>
   );
 
+  const FinanceSceneTrigger = ({ collapsed }: { collapsed: boolean }) => {
+    const active = scenarioMode === 'finance';
+    const configActive = financeConfigOpen;
+    const financeInk = '#154F45';
+    const financeAccent = '#B6872B';
+    const financeTint = 'rgba(21,79,69,0.08)';
+    const financeTintStrong = 'rgba(21,79,69,0.12)';
+    const shellStyle: React.CSSProperties = collapsed
+      ? {
+          width: '28px',
+          borderRadius: '8px',
+          border: 'none',
+          background: active || configActive ? financeTint : 'transparent',
+          overflow: 'hidden',
+        }
+      : {
+          display: 'grid',
+          gridTemplateColumns: '1fr auto',
+          alignItems: 'stretch',
+          gap: 0,
+          borderRadius: '8px',
+          border: 'none',
+          background: active || configActive ? financeTint : 'transparent',
+          overflow: 'hidden',
+        };
+
+    return (
+      <div style={shellStyle}>
+        <button
+          onClick={() => setScenarioMode(active ? 'default' : 'finance')}
+          title={lang === 'zh' ? '切换金融交易场景模式' : 'Toggle finance trading scenario'}
+          style={collapsed ? {
+            width: '100%',
+            height: '30px',
+            border: 'none',
+            background: 'transparent',
+            color: active ? financeInk : 'var(--color-text-tertiary)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          } : {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            width: '100%',
+            minHeight: '30px',
+            padding: '5px 8px',
+            border: 'none',
+            background: 'transparent',
+            color: active ? financeInk : 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            minWidth: 0,
+            textAlign: 'left',
+          }}
+        >
+          {collapsed ? (
+            <FinanceModeIcon active={active} />
+          ) : (
+            <>
+              <span style={{
+                width: '18px',
+                height: '18px',
+                borderRadius: '5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: active ? financeTintStrong : 'transparent',
+                color: active ? financeAccent : 'var(--color-text-tertiary)',
+                flexShrink: 0,
+              }}>
+                <FinanceModeIcon active={active} />
+              </span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12px', fontWeight: active ? 500 : 400, letterSpacing: '0.01em', lineHeight: 1.1 }}>
+                {lang === 'zh' ? 'Finance' : 'Finance'}
+              </span>
+            </>
+          )}
+        </button>
+        <button
+          onClick={() => setFinanceConfigOpen(true)}
+          title={lang === 'zh' ? '打开金融场景配置' : 'Open finance configuration'}
+          style={collapsed ? {
+            width: '100%',
+            height: '22px',
+            border: 'none',
+            background: 'transparent',
+            color: configActive ? financeInk : 'var(--color-text-tertiary)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          } : {
+            width: '28px',
+            border: 'none',
+            background: configActive ? 'rgba(182,135,43,0.08)' : 'transparent',
+            color: configActive ? financeAccent : 'var(--color-text-tertiary)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <GearIcon active={configActive} />
+        </button>
+      </div>
+    );
+  };
+
+  const FinanceIntentCard = ({ artifact }: { artifact: import('./stores/chatStore').FinanceArtifactPayload }) => {
+    const intent = artifact.intents[0];
+    if (!intent) return null;
+    const statusTone = (() => {
+      const status = intent.approvalStatus?.toLowerCase();
+      if (status === 'approved') return { bg: 'rgba(21,79,69,0.10)', fg: financeChatInk, border: 'rgba(21,79,69,0.16)' };
+      if (status === 'reduced') return { bg: 'rgba(182,135,43,0.12)', fg: '#8B6418', border: 'rgba(182,135,43,0.18)' };
+      if (status === 'rejected') return { bg: 'rgba(163,62,62,0.10)', fg: '#8A3A3A', border: 'rgba(163,62,62,0.16)' };
+      return { bg: financeChatTint, fg: financeChatInk, border: financeChatTintStrong };
+    })();
+    const facts = [
+      [lang === 'zh' ? '仓位上限' : 'Max position', intent.maxPositionPct],
+      [lang === 'zh' ? '置信度' : 'Confidence', intent.confidence],
+      [lang === 'zh' ? '时效' : 'Horizon', intent.timeHorizon],
+      [lang === 'zh' ? '有效期' : 'Valid until', intent.validUntil],
+    ].filter(([, value]) => Boolean(value));
+    const notes = [
+      [lang === 'zh' ? '入场' : 'Entry', intent.entryRule],
+      [lang === 'zh' ? '出场' : 'Exit', intent.exitRule],
+      [lang === 'zh' ? '逻辑' : 'Thesis', intent.thesis],
+      [lang === 'zh' ? '风险' : 'Risk', intent.riskNotes],
+    ].filter(([, value]) => Boolean(value));
+
+    return (
+      <div style={{
+        marginBottom: '10px',
+        padding: '11px 12px',
+        borderRadius: '10px',
+        border: `0.5px solid ${financeChatTintStrong}`,
+        background: 'linear-gradient(180deg, rgba(21,79,69,0.05), rgba(182,135,43,0.06))',
+        display: 'grid',
+        gap: '10px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: '8px' }}>
+          <div style={{ minWidth: 0, display: 'grid', gap: '3px' }}>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: financeChatInk, lineHeight: 1.1 }}>
+              {intent.symbol ?? (lang === 'zh' ? '未识别标的' : 'Unknown symbol')}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--color-text-secondary)', lineHeight: 1.2 }}>
+              {[intent.market, intent.direction].filter(Boolean).join(' · ') || (lang === 'zh' ? '等待结构化字段' : 'Waiting for structured fields')}
+            </div>
+          </div>
+          {intent.approvalStatus && (
+            <span style={{
+              flexShrink: 0,
+              padding: '3px 8px',
+              borderRadius: '999px',
+              fontSize: '10px',
+              fontWeight: 700,
+              color: statusTone.fg,
+              background: statusTone.bg,
+              border: `0.5px solid ${statusTone.border}`,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}>
+              {intent.approvalStatus}
+            </span>
+          )}
+        </div>
+        {facts.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px 10px' }}>
+            {facts.map(([label, value]) => (
+              <div key={label} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                <div style={{ marginTop: '2px', fontSize: '12px', color: 'var(--color-text-primary)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {notes.length > 0 && (
+          <div style={{ display: 'grid', gap: '6px' }}>
+            {notes.map(([label, value]) => (
+              <div key={label} style={{ display: 'grid', gap: '2px' }}>
+                <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)', lineHeight: 1.45 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const isPrimaryView = activeNav === 'chat' || activeNav === 'channel' || activeNav === 'groups';
   const isChatActive = activeNav === 'chat';
+  const financeChatInk = '#154F45';
+  const financeChatAccent = '#B6872B';
+  const financeChatTint = 'rgba(21,79,69,0.08)';
+  const financeChatTintStrong = 'rgba(21,79,69,0.14)';
   const getPupAccent = (pupKey: string) => pupAccentColor(pupKey);
   const getPupTagStyle = (pupKey: string) => pupTagStyle(pupKey);
   const pupMetaByKey = buildPupMetaByKey(pups);
@@ -1631,46 +1828,8 @@ const AppInner: React.FC = () => {
             ))}
           </div>
           <div className="flex-1" />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: '10px' }}>
-            <button
-              onClick={() => setScenarioMode(scenarioMode === 'finance' ? 'default' : 'finance')}
-              title={lang === 'zh' ? '切换金融交易场景模式' : 'Toggle finance trading scenario'}
-              style={{
-                width: '18px',
-                height: '34px',
-                borderRadius: '9px',
-                border: scenarioMode === 'finance' ? '0.5px solid rgba(16,59,47,0.18)' : '0.5px solid transparent',
-                boxShadow: scenarioMode === 'finance' ? '0 8px 20px rgba(16,59,47,0.16)' : 'none',
-                background: scenarioMode === 'finance' ? 'linear-gradient(180deg, rgba(16,59,47,0.18), rgba(16,59,47,0.08))' : 'var(--color-background-secondary)',
-                color: scenarioMode === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                alignSelf: 'center',
-              }}
-            >
-              <FinanceModeIcon active={scenarioMode === 'finance'} />
-            </button>
-            <button
-              onClick={() => setFinanceConfigOpen(true)}
-              title={lang === 'zh' ? '打开金融场景配置' : 'Open finance configuration'}
-              style={{
-                width: '18px',
-                height: '34px',
-                borderRadius: '9px',
-                border: financeConfigOpen ? '0.5px solid rgba(16,59,47,0.18)' : '0.5px solid transparent',
-                background: financeConfigOpen ? 'rgba(16,59,47,0.08)' : 'var(--color-background-secondary)',
-                color: financeConfigOpen ? '#0E6A4C' : 'var(--color-text-tertiary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                alignSelf: 'center',
-              }}
-            >
-              <GearIcon active={financeConfigOpen} />
-            </button>
+          <div style={{ marginBottom: '10px' }}>
+            <FinanceSceneTrigger collapsed />
           </div>
           <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: '4px' }}>
             <button
@@ -1831,69 +1990,7 @@ const AppInner: React.FC = () => {
           {/* Footer utilities */}
           <div className="px-2 pb-3 pt-2">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr auto',
-                alignItems: 'center',
-                gap: '6px',
-              }}>
-                <button
-                  onClick={() => setScenarioMode(scenarioMode === 'finance' ? 'default' : 'finance')}
-                  title={lang === 'zh' ? '切换金融交易场景模式' : 'Toggle finance trading scenario'}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    width: '100%',
-                    minHeight: '30px',
-                    padding: '5px 8px',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    fontWeight: scenarioMode === 'finance' ? 600 : 500,
-                    color: scenarioMode === 'finance' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                    background: scenarioMode === 'finance' ? 'rgba(16,59,47,0.08)' : 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    minWidth: 0,
-                  }}
-                >
-                  <span style={{
-                    width: '18px',
-                    height: '18px',
-                    borderRadius: '5px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: scenarioMode === 'finance' ? 'rgba(16,59,47,0.12)' : 'transparent',
-                    color: scenarioMode === 'finance' ? '#0E6A4C' : 'var(--color-text-tertiary)',
-                    flexShrink: 0,
-                  }}>
-                    <FinanceModeIcon active={scenarioMode === 'finance'} />
-                  </span>
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {lang === 'zh' ? '金融模式' : 'Finance Mode'}
-                  </span>
-                </button>
-                <button
-                  onClick={() => setFinanceConfigOpen(true)}
-                  title={lang === 'zh' ? '打开金融场景配置' : 'Open finance configuration'}
-                  style={{
-                    width: '30px',
-                    height: '30px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: financeConfigOpen ? 'rgba(16,59,47,0.08)' : 'transparent',
-                    color: financeConfigOpen ? '#0E6A4C' : 'var(--color-text-tertiary)',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
-                  <GearIcon active={financeConfigOpen} />
-                </button>
-              </div>
+              <FinanceSceneTrigger collapsed={false} />
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -2004,6 +2101,7 @@ const AppInner: React.FC = () => {
                     const isNew = !animatedMsgIds.current.has(m.id);
                     animatedMsgIds.current.add(m.id);
                     const accentColor = getPupAccent(m.pup_key ?? 'alpha');
+                    const isFinanceArtifact = scenarioMode === 'finance' && !!m.finance_artifact;
                     return m.role === 'user' ? (
                       <div key={m.id} className={isNew ? 'animate-msg-in' : ''} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <div style={{
@@ -2031,14 +2129,18 @@ const AppInner: React.FC = () => {
                         )}
                         <div style={{
                           background: 'var(--color-background-primary)',
-                          border: '0.5px solid var(--color-border-tertiary)',
+                          border: isFinanceArtifact ? `0.5px solid ${financeChatTintStrong}` : '0.5px solid var(--color-border-tertiary)',
                           borderRadius: '10px 10px 10px 4px',
-                          borderLeft: `2px solid ${accentColor}`,
+                          borderLeft: `2px solid ${isFinanceArtifact ? financeChatAccent : accentColor}`,
+                          boxShadow: isFinanceArtifact ? `0 0 0 1px ${financeChatTint}` : 'none',
                           padding: '9px 11px',
                           fontSize: "13px",
                           lineHeight: 1.6,
                           color: 'var(--color-text-primary)',
                         }}>
+                          {isFinanceArtifact && m.finance_artifact && (
+                            <FinanceIntentCard artifact={m.finance_artifact} />
+                          )}
                           <div className="prose prose-sm max-w-none" style={{ color: 'var(--color-text-primary)' }}>
                             <MarkdownRenderer>{m.content}</MarkdownRenderer>
                           </div>
@@ -2061,9 +2163,10 @@ const AppInner: React.FC = () => {
                       </span>
                       <div style={{
                         background: 'var(--color-background-primary)',
-                        border: '0.5px solid var(--color-border-tertiary)',
+                        border: scenarioMode === 'finance' ? `0.5px solid ${financeChatTintStrong}` : '0.5px solid var(--color-border-tertiary)',
                         borderRadius: '10px 10px 10px 4px',
-                        borderLeft: `2px solid ${getPupAccent(streamingPupName?.key ?? 'alpha')}`,
+                        borderLeft: `2px solid ${scenarioMode === 'finance' ? financeChatAccent : getPupAccent(streamingPupName?.key ?? 'alpha')}`,
+                        boxShadow: scenarioMode === 'finance' ? `0 0 0 1px ${financeChatTint}` : 'none',
                         padding: '9px 11px',
                         fontSize: "13px",
                         lineHeight: 1.6,
@@ -2104,7 +2207,14 @@ const AppInner: React.FC = () => {
               </div>
 
               {/* Input */}
-              <div style={{ flexShrink: 0, padding: '10px 14px', borderTop: '0.5px solid var(--color-border-tertiary)', background: 'var(--color-background-primary)' }}>
+              <div style={{
+                flexShrink: 0,
+                padding: '10px 14px',
+                borderTop: scenarioMode === 'finance' ? `0.5px solid ${financeChatTintStrong}` : '0.5px solid var(--color-border-tertiary)',
+                background: scenarioMode === 'finance'
+                  ? `linear-gradient(180deg, rgba(21,79,69,0.015), rgba(21,79,69,0.04))`
+                  : 'var(--color-background-primary)',
+              }}>
               <div style={{ display: 'flex', gap: '8px', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
                 <textarea
                   ref={inputRef}
@@ -2125,12 +2235,13 @@ const AppInner: React.FC = () => {
                   style={{
                     flex: 1, resize: 'none', outline: 'none',
                     fontSize: "13px", padding: '8px 10px', borderRadius: '8px',
-                    border: '0.5px solid var(--color-border-secondary)',
-                    background: 'var(--color-background-primary)',
+                    border: scenarioMode === 'finance' ? `0.5px solid ${financeChatTintStrong}` : '0.5px solid var(--color-border-secondary)',
+                    background: scenarioMode === 'finance' ? 'rgba(255,255,255,0.82)' : 'var(--color-background-primary)',
                     color: 'var(--color-text-primary)',
                     fontFamily: 'inherit',
                     lineHeight: '1.5',
                     overflowY: 'auto',
+                    boxShadow: scenarioMode === 'finance' ? `0 0 0 1px ${financeChatTint}` : 'none',
                   }}
                 />
                 {sending ? (
@@ -2138,7 +2249,8 @@ const AppInner: React.FC = () => {
                     onClick={() => void abort()}
                     style={{
                       alignSelf: 'flex-end', padding: '8px 14px', borderRadius: '8px', border: 'none',
-                      background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)',
+                      background: scenarioMode === 'finance' ? financeChatTint : 'var(--color-background-secondary)',
+                      color: scenarioMode === 'finance' ? financeChatInk : 'var(--color-text-secondary)',
                       cursor: 'pointer', fontSize: "13px",
                     }}
                   >■</button>
@@ -2148,9 +2260,11 @@ const AppInner: React.FC = () => {
                     disabled={!input.trim()}
                     style={{
                       alignSelf: 'flex-end', padding: '8px 14px', borderRadius: '8px', border: 'none',
-                      background: 'var(--color-text-primary)', color: 'var(--color-background-primary)',
+                      background: scenarioMode === 'finance' ? financeChatInk : 'var(--color-text-primary)',
+                      color: scenarioMode === 'finance' ? '#F7F3EA' : 'var(--color-background-primary)',
                       cursor: input.trim() ? 'pointer' : 'not-allowed', fontSize: "13px",
                       opacity: input.trim() ? 1 : 0.25,
+                      boxShadow: scenarioMode === 'finance' && input.trim() ? `0 8px 18px rgba(21,79,69,0.18)` : 'none',
                     }}
                   >↑</button>
                 )}
